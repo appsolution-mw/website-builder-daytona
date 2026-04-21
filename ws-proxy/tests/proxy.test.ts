@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import WebSocket, { WebSocketServer, type AddressInfo } from "ws";
-import { startProxy, type ProxyHandle } from "../src/index";
+import { startProxy, type ProxyHandle, extractProjectId } from "../src/index";
 
 // Minimal mock broker: accepts connections, echoes ping → pong.
 function startMockBroker(): Promise<{ port: number; close: () => Promise<void> }> {
@@ -59,5 +59,20 @@ describe("ws-proxy", () => {
 
     expect(JSON.parse(reply)).toEqual({ type: "pong", nonce: "proxy-test" });
     client.close();
+  });
+});
+
+describe("extractProjectId", () => {
+  it("extracts from /p/abc", () => {
+    expect(extractProjectId("/p/abc")).toBe("abc");
+  });
+  it("extracts with query string", () => {
+    expect(extractProjectId("/p/abc?foo=bar")).toBe("abc");
+  });
+  it("returns null for wrong path", () => {
+    expect(extractProjectId("/wrong/abc")).toBeNull();
+  });
+  it("decodes URL-encoded id", () => {
+    expect(extractProjectId("/p/abc%20def")).toBe("abc def");
   });
 });
