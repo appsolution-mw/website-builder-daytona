@@ -46,14 +46,20 @@ model Session {
 }
 
 model Message {
-  id        String   @id @default(cuid())
+  id        String      @id @default(cuid())
   projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sessionId String?
-  session   Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  role      String   // 'user' | 'agent' | 'system'
+  session   Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  role      MessageRole
   content   String
-  createdAt DateTime @default(now())
+  createdAt DateTime    @default(now())
 
   @@index([projectId, createdAt])
+}
+
+enum MessageRole {
+  USER
+  AGENT
+  SYSTEM
 }
