@@ -33,6 +33,9 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     port: address.port,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
         wss.close((err) => (err ? reject(err) : resolve()));
       }),
   };
