@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -n next,broker,proxy -c blue,green,yellow \"pnpm dev:next\" \"pnpm dev:broker\" \"pnpm dev:proxy\"",
+    "dev:next": "next dev",
+    "dev:broker": "pnpm -F @wbd/broker dev",
+    "dev:proxy": "pnpm -F @wbd/ws-proxy dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test": "pnpm -r test"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.7.0",
@@ -26,6 +30,7 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "prisma": "^7.7.0",
