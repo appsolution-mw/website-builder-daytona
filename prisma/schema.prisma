@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id
+  email     String   @unique
+  createdAt DateTime @default(now())
+  projects  Project[]
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id])
+  name        String
+  status      ProjectStatus @default(PROVISIONING)
+  createdAt   DateTime      @default(now())
+  lastActive  DateTime      @default(now())
+  sessions    Session[]
+  messages    Message[]
+
+  @@index([ownerId])
+}
+
+enum ProjectStatus {
+  PROVISIONING
+  RUNNING
+  PAUSED
+  ARCHIVED
+  DESTROYED
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title         String    @default("untitled")
+  createdAt     DateTime  @default(now())
+  lastMessageAt DateTime  @default(now())
+  messages      Message[]
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId String?
+  session   Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  role      String   // 'user' | 'agent' | 'system'
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
