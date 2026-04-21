@@ -30,4 +30,22 @@ describe("broker ws server", () => {
     ]);
     handle = undefined;
   });
+
+  it("echoes ping → pong over a real socket", async () => {
+    handle = await startBroker({ port: 0 });
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+
+    const reply = await new Promise<string>((resolve, reject) => {
+      client.once("message", (data) => resolve(data.toString()));
+      client.once("error", reject);
+      client.send(JSON.stringify({ type: "ping", nonce: "xyz" }));
+    });
+
+    expect(JSON.parse(reply)).toEqual({ type: "pong", nonce: "xyz" });
+    client.close();
+  });
 });
