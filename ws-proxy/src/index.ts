@@ -64,12 +64,15 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
         pendingFromBrowser.push(data);
       }
     });
-    browserSocket.on("close", () => {
-      if (brokerSocket.readyState === WebSocket.OPEN) brokerSocket.close();
-    });
-    browserSocket.on("error", () => {
-      if (brokerSocket.readyState === WebSocket.OPEN) brokerSocket.close();
-    });
+    const tearDownBroker = () => {
+      // Terminate regardless of readyState so a still-CONNECTING broker
+      // socket doesn't leak after the browser disconnects.
+      if (brokerSocket.readyState !== WebSocket.CLOSED) {
+        brokerSocket.terminate();
+      }
+    };
+    browserSocket.on("close", tearDownBroker);
+    browserSocket.on("error", tearDownBroker);
 
     brokerSocket.once("open", () => {
       // Flush buffered messages
