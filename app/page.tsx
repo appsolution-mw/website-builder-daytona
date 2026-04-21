@@ -17,9 +17,15 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
 
   async function refresh() {
-    const res = await fetch("/api/projects");
-    const data = (await res.json()) as { projects: Project[] };
-    setProjects(data.projects);
+    try {
+      const res = await fetch("/api/projects");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { projects: Project[] };
+      setProjects(data.projects);
+    } catch (err) {
+      setProjects([]);
+      setError(err instanceof Error ? err.message : "failed to load projects");
+    }
   }
 
   useEffect(() => {

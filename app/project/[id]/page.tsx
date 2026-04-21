@@ -23,7 +23,16 @@ export default function ProjectWorkspace({
     ws.onopen = () => setStatus("open");
     ws.onclose = () => setStatus("closed");
     ws.onmessage = (ev) => {
-      const parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
+      let parsed: ProxyToBrowser;
+      try {
+        parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
+      } catch {
+        setChat((c) => [
+          ...c,
+          { id: crypto.randomUUID(), from: "broker", text: `malformed message: ${String(ev.data).slice(0, 80)}` },
+        ]);
+        return;
+      }
       const text =
         parsed.type === "pong"
           ? `pong (${parsed.nonce})`
