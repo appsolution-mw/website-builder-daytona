@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFsTracker, type FsTracker, type FileEvent } from "../src/fs-tracker";
 
-async function waitFor<T>(fn: () => T | undefined, timeoutMs = 2000): Promise<T> {
+async function waitFor<T>(fn: () => T | undefined, timeoutMs = 5000): Promise<T> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const v = fn();

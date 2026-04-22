@@ -38,10 +38,6 @@ describe("fs-handlers", () => {
   });
 
   describe("handleFileRead", () => {
-    beforeEach(async () => {
-      tracker = await createFsTracker({ root, isAgentActive: () => false, onEvent: () => {} });
-    });
-
     it("returns content for a normal text file", async () => {
       await writeFile(join(root, "hello.txt"), "hi there");
       const r = await handleFileRead({ root, path: "hello.txt" });
@@ -81,10 +77,6 @@ describe("fs-handlers", () => {
   });
 
   describe("handleFileWrite", () => {
-    beforeEach(async () => {
-      tracker = await createFsTracker({ root, isAgentActive: () => false, onEvent: () => {} });
-    });
-
     it("writes content to the target path", async () => {
       const r = await handleFileWrite({
         root,
