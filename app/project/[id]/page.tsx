@@ -135,18 +135,15 @@ export default function ProjectWorkspace({
     const requestId = crypto.randomUUID();
     setFileListLoading(true);
     setFileListError(null);
-    console.log("[ws] sending file.list", requestId);
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.list.result" }>>(
         { type: "file.list", requestId },
         requestId,
       );
-      console.log("[ws] file.list reply", reply);
       setPaths(reply.paths.slice().sort());
     } catch (err) {
       const message = err instanceof Error ? err.message : "request failed";
       setFileListError(`File list failed: ${message}`);
-      console.error("[ws] file.list failed", err);
     } finally {
       setFileListLoading(false);
     }
@@ -334,7 +331,6 @@ export default function ProjectWorkspace({
       setFileListLoading(false);
     };
     ws.onclose = () => {
-      console.log("[ws] onclose");
       setWsStatus("closed");
       setFileListLoading(false);
       for (const [requestId, entry] of pendingRef.current) {
@@ -348,10 +344,8 @@ export default function ProjectWorkspace({
       try {
         parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
       } catch {
-        console.warn("[ws] non-json message", ev.data);
         return;
       }
-      console.log("[ws] message", parsed.type, parsed);
       handleEventRef.current(parsed);
     };
     return () => {
@@ -479,8 +473,6 @@ export default function ProjectWorkspace({
           <Link href="/" className="text-sm underline">← back</Link>
           <h1 className="text-lg font-semibold">{project.name}</h1>
           <span className="text-xs text-gray-500">WS: {wsStatus}</span>
-          <span className="text-xs text-gray-500">paths: {paths.length}</span>
-          <span className="text-xs text-gray-500">tab: {tab}</span>
         </div>
       </header>
 
