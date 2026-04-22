@@ -12,35 +12,49 @@ export interface RightPaneProps {
   onTabChange: (tab: RightPaneTab) => void;
   code: ReactNode;
   preview: ReactNode;
+  previewActions?: ReactNode;
+  codeActions?: ReactNode;
 }
 
+const TABS: { id: RightPaneTab; label: string; Icon: typeof Code2 }[] = [
+  { id: "code", label: "Code", Icon: Code2 },
+  { id: "preview", label: "Preview", Icon: Eye },
+];
+
 export function RightPane(props: RightPaneProps) {
-  const icons = {
-    code: Code2,
-    preview: Eye,
-  };
+  const activeActions = props.tab === "preview" ? props.previewActions : props.codeActions;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
-      <div className="flex min-h-12 items-center justify-between border-b border-border bg-card px-3">
-        <div className="flex items-center gap-1 rounded-md border border-border bg-background p-1">
-        {(["code", "preview"] as const).map((t) => (
-          <Button
-            key={t}
-            type="button"
-            onClick={() => props.onTabChange(t)}
-            variant={props.tab === t ? "secondary" : "ghost"}
-            size="sm"
-            className="h-8 capitalize"
-          >
-            {(() => {
-              const Icon = icons[t];
-              return <Icon />;
-            })()}
-            {t}
-          </Button>
-        ))}
+    <section className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-card px-3">
+        <div
+          role="tablist"
+          aria-label="Workspace view"
+          className="flex items-center gap-1 rounded-md border border-border bg-background p-1"
+        >
+          {TABS.map(({ id, label, Icon }) => {
+            const active = props.tab === id;
+            return (
+              <Button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => props.onTabChange(id)}
+                variant={active ? "secondary" : "ghost"}
+                size="xs"
+              >
+                <Icon />
+                {label}
+              </Button>
+            );
+          })}
         </div>
+        {activeActions ? (
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+            {activeActions}
+          </div>
+        ) : null}
       </div>
       <div className="flex min-h-0 flex-1">
         <div className={`min-w-0 flex-1 ${props.tab === "code" ? "flex" : "hidden"}`}>

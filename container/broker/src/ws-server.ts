@@ -1,5 +1,14 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import type { HostToBroker, BrokerToHost } from "@wbd/protocol";
+import { mkdir, writeFile } from "node:fs/promises";
+import { basename, extname, join, resolve } from "node:path";
+import type {
+  AgentUsageDetails,
+  AgentUsageEvent,
+  AgentUsageLabel,
+  HostToBroker,
+  BrokerToHost,
+  PromptImageAttachment,
+} from "@wbd/protocol";
 import { handleMessage } from "./handlers";
 import { runClaudeTurn, runReviewerPass, type SpawnFn } from "./claude-runner";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
@@ -23,6 +32,173 @@ export interface StartBrokerOptions {
 }
 
 const WRITE_TOOL_NAMES = new Set(["Write", "Edit", "NotebookEdit", "Create"]);
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const UPLOADS_DIR = ".agent-artifacts/chat-uploads";
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/gif": ".gif",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
+
+function safeFileName(name: string, mimeType: string, index: number): string {
+  const fallbackExt = IMAGE_EXTENSIONS[mimeType] ?? ".png";
+  const rawBase = basename(name || `image-${index}${fallbackExt}`);
+  const originalExt = extname(rawBase);
+  const ext = originalExt || fallbackExt;
+  const stem = (originalExt ? rawBase.slice(0, -originalExt.length) : rawBase)
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return `${index}-${stem || "image"}${ext.toLowerCase()}`;
+}
+
+function attachmentError(message: string, turnId: string): BrokerToHost {
+  return { type: "agent.error", turnId, message };
+}
+
+function logTokenUsage(
+  label: AgentUsageLabel,
+  projectId: string,
+  done: Extract<BrokerToHost, { type: "agent.done" }>,
+) {
+  const usage = done.usage;
+  console.log(
+    [
+      "[usage]",
+      `label=${label}`,
+      `project=${projectId}`,
+      `turn=${done.turnId}`,
+      `input_tokens=${done.tokensIn}`,
+      `output_tokens=${done.tokensOut}`,
+      `cache_creation_input_tokens=${usage?.cacheCreationInputTokens ?? 0}`,
+      `cache_read_input_tokens=${usage?.cacheReadInputTokens ?? 0}`,
+      `total_tokens=${usage?.totalTokens ?? done.tokensIn + done.tokensOut}`,
+      `web_search_requests=${usage?.webSearchRequests ?? 0}`,
+      `web_fetch_requests=${usage?.webFetchRequests ?? 0}`,
+      `cost_usd=${done.costUsd.toFixed(6)}`,
+      `duration_ms=${done.durationMs}`,
+      `exit_code=${done.exitCode}`,
+    ].join(" "),
+  );
+}
+
+function toUsageEvent(
+  label: AgentUsageLabel,
+  done: Extract<BrokerToHost, { type: "agent.done" }>,
+): AgentUsageEvent {
+  return {
+    type: "agent.usage",
+    turnId: done.turnId,
+    label,
+    durationMs: done.durationMs,
+    tokensIn: done.tokensIn,
+    tokensOut: done.tokensOut,
+    costUsd: done.costUsd,
+    exitCode: done.exitCode,
+    ...(done.usage ? { usage: done.usage } : {}),
+  };
+}
+
+function mergeUsageDetails(
+  coder: Extract<BrokerToHost, { type: "agent.done" }>,
+  reviewer: Extract<BrokerToHost, { type: "agent.done" }>,
+): AgentUsageDetails | undefined {
+  if (!coder.usage && !reviewer.usage) return undefined;
+  return {
+    inputTokens: coder.tokensIn + reviewer.tokensIn,
+    outputTokens: coder.tokensOut + reviewer.tokensOut,
+    cacheCreationInputTokens:
+      (coder.usage?.cacheCreationInputTokens ?? 0) +
+      (reviewer.usage?.cacheCreationInputTokens ?? 0),
+    cacheReadInputTokens:
+      (coder.usage?.cacheReadInputTokens ?? 0) +
+      (reviewer.usage?.cacheReadInputTokens ?? 0),
+    totalTokens:
+      (coder.usage?.totalTokens ?? coder.tokensIn + coder.tokensOut) +
+      (reviewer.usage?.totalTokens ?? reviewer.tokensIn + reviewer.tokensOut),
+    webSearchRequests:
+      (coder.usage?.webSearchRequests ?? 0) + (reviewer.usage?.webSearchRequests ?? 0),
+    webFetchRequests:
+      (coder.usage?.webFetchRequests ?? 0) + (reviewer.usage?.webFetchRequests ?? 0),
+    rawUsage: {
+      coder: coder.usage?.rawUsage ?? null,
+      reviewer: reviewer.usage?.rawUsage ?? null,
+    },
+    modelUsage: {
+      coder: coder.usage?.modelUsage ?? null,
+      reviewer: reviewer.usage?.modelUsage ?? null,
+    },
+  };
+}
+
+async function savePromptAttachments(args: {
+  projectRoot: string;
+  turnId: string;
+  attachments?: PromptImageAttachment[];
+}): Promise<{ promptLines: string[]; error?: BrokerToHost }> {
+  const attachments = args.attachments ?? [];
+  if (attachments.length === 0) return { promptLines: [] };
+  if (attachments.length > MAX_ATTACHMENTS) {
+    return {
+      promptLines: [],
+      error: attachmentError(`Too many images attached. Maximum is ${MAX_ATTACHMENTS}.`, args.turnId),
+    };
+  }
+
+  const uploadDir = resolve(args.projectRoot, UPLOADS_DIR, args.turnId);
+  await mkdir(uploadDir, { recursive: true });
+
+  const promptLines = ["", "Attached image files:"];
+  let totalBytes = 0;
+
+  for (const [idx, attachment] of attachments.entries()) {
+    if (!IMAGE_EXTENSIONS[attachment.mimeType]) {
+      return {
+        promptLines: [],
+        error: attachmentError(`Unsupported image type: ${attachment.mimeType || "unknown"}.`, args.turnId),
+      };
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(attachment.dataBase64, "base64");
+    } catch {
+      return {
+        promptLines: [],
+        error: attachmentError(`Image ${attachment.name || idx + 1} could not be decoded.`, args.turnId),
+      };
+    }
+    if (buffer.length === 0) {
+      return {
+        promptLines: [],
+        error: attachmentError(`Image ${attachment.name || idx + 1} is empty.`, args.turnId),
+      };
+    }
+    if (buffer.length > MAX_ATTACHMENT_BYTES) {
+      return {
+        promptLines: [],
+        error: attachmentError(`Image ${attachment.name || idx + 1} is larger than 8 MB.`, args.turnId),
+      };
+    }
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+      return {
+        promptLines: [],
+        error: attachmentError("Attached images are larger than 20 MB total.", args.turnId),
+      };
+    }
+
+    const fileName = safeFileName(attachment.name, attachment.mimeType, idx + 1);
+    const filePath = join(uploadDir, fileName);
+    await writeFile(filePath, buffer);
+    promptLines.push(`${idx + 1}. ${filePath}`);
+  }
+
+  promptLines.push("", "Use these image paths as visual context for the user's request.");
+  return { promptLines };
+}
 
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
   const projectRoot = opts.projectRoot ?? "/workspace/project";
@@ -86,8 +262,29 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       }
     };
 
+    // Keepalive: ping every 25s. Prevents intermediate proxies (Daytona's
+    // HTTPS reverse proxy) from idle-closing the WSS during long Claude turns
+    // where NDJSON events can pause for minutes. Browsers auto-reply to ping
+    // frames; for the ws→ws leg, the ws-proxy replies via `ws` lib defaults.
+    let isAlive = true;
+    socket.on("pong", () => {
+      isAlive = true;
+    });
+    const pingTimer = setInterval(() => {
+      if (!isAlive) {
+        socket.terminate();
+        return;
+      }
+      isAlive = false;
+      socket.ping();
+    }, 25_000);
+
     socket.on("error", (err) => {
       console.error("socket error:", err);
+    });
+
+    socket.on("close", () => {
+      clearInterval(pingTimer);
     });
 
     socket.on("message", (data) => {
@@ -102,6 +299,15 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       const msg = parsed as HostToBroker;
 
       if (msg.type === "agent.prompt") {
+        if (!msg.claudeSessionId) {
+          send({
+            type: "agent.error",
+            turnId: msg.turnId,
+            message: "missing claudeSessionId",
+          });
+          return;
+        }
+
         if (currentTurn) {
           send({
             type: "agent.error",
@@ -130,6 +336,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           }
           if (event.type === "agent.done") {
             coderDone = event;
+            logTokenUsage("coder", projectId, event);
+            send(toUsageEvent("coder", event));
             return;
           }
           if (event.type === "agent.error") {
@@ -140,20 +348,41 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           send(event);
         };
 
-        runClaudeTurn(
-          {
-            projectId,
-            prompt: msg.prompt,
+        (async () => {
+          const attachmentResult = await savePromptAttachments({
+            projectRoot,
             turnId,
-            onEvent: coderOnEvent,
-            signal: ctl.signal,
-          },
-          opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
-        )
+            attachments: msg.attachments,
+          });
+          if (attachmentResult.error) {
+            send(attachmentResult.error);
+            coderErrored = true;
+            return;
+          }
+
+          const prompt = attachmentResult.promptLines.length > 0
+            ? [msg.prompt, ...attachmentResult.promptLines].join("\n")
+            : msg.prompt;
+
+          await runClaudeTurn(
+            {
+              projectId,
+              claudeSessionId: msg.claudeSessionId,
+              resumeClaudeSession: msg.resumeClaudeSession,
+              prompt,
+              turnId,
+              onEvent: coderOnEvent,
+              signal: ctl.signal,
+            },
+            opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
+          );
+        })()
           .then(async () => {
             if (coderErrored) return;
             if (!coderDone) return;
             if (filesWrittenInTurn === 0) {
+              logTokenUsage("turn", projectId, coderDone);
+              send(toUsageEvent("turn", coderDone));
               send(coderDone);
               return;
             }
@@ -167,6 +396,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
             const reviewerOnEvent = (event: BrokerToHost) => {
               if (event.type === "agent.done") {
                 reviewerDone = event;
+                logTokenUsage("reviewer", projectId, event);
+                send(toUsageEvent("reviewer", event));
                 return;
               }
               send(event);
@@ -193,7 +424,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               costUsd: 0,
               exitCode: 0,
             };
-            send({
+            const done = {
               type: "agent.done",
               turnId,
               durationMs: coder.durationMs + reviewer.durationMs,
@@ -201,7 +432,17 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               tokensOut: coder.tokensOut + reviewer.tokensOut,
               costUsd: coder.costUsd + reviewer.costUsd,
               exitCode: Math.max(coder.exitCode, reviewer.exitCode),
-            });
+              ...(mergeUsageDetails(coder, reviewer)
+                ? { usage: mergeUsageDetails(coder, reviewer) }
+                : {}),
+            } satisfies Extract<BrokerToHost, { type: "agent.done" }>;
+            logTokenUsage("turn", projectId, done);
+            send(toUsageEvent("turn", done));
+            send(done);
+          })
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            send({ type: "agent.error", turnId, message: `image attachment failed: ${message}` });
           })
           .finally(() => {
             currentTurn = null;
@@ -211,6 +452,9 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       }
 
       if (msg.type === "agent.abort") {
+        console.log(
+          `[broker] agent.abort received turn=${msg.turnId} currentTurn=${currentTurn?.turnId ?? "null"}`,
+        );
         if (currentTurn?.turnId === msg.turnId) {
           currentTurn.ctl.abort();
           currentTurn.reviewerCtl.abort();

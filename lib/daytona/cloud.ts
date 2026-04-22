@@ -109,6 +109,9 @@ export function createCloudClient(): DaytonaClient {
         envVars: {
           PROJECT_ID: projectId,
           ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
+          CLAUDE_TURN_TIMEOUT_MS: process.env.CLAUDE_TURN_TIMEOUT_MS ?? "",
+          CLAUDE_REVIEWER_TIMEOUT_MS: process.env.CLAUDE_REVIEWER_TIMEOUT_MS ?? "",
         },
       });
 

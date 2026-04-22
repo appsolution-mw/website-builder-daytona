@@ -1,6 +1,16 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  use,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -9,16 +19,24 @@ import {
   Code2,
   ExternalLink,
   Globe2,
+  History,
+  ImagePlus,
   Loader2,
   MessageSquare,
+  Monitor,
+  Plus,
   RefreshCw,
   Send,
+  Smartphone,
   Square,
+  Tablet,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react";
-import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
-import { Message, type ChatMessageView } from "@/components/chat/Message";
+import { cn } from "@/lib/utils";
+import type { BrowserToProxy, PromptImageAttachment, ProxyToBrowser } from "@wbd/protocol";
+import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
@@ -27,13 +45,37 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 
+type ChatSession = {
+  id: string;
+  title: string;
+  claudeSessionId: string;
+  createdAt: string;
+  lastMessageAt: string;
+  _count: { messages: number };
+};
+
+type DbMessage = {
+  id: string;
+  role: "USER" | "AGENT" | "SYSTEM";
+  content: string;
+  turnId: string | null;
+  agentId: string | null;
+  createdAt: string;
+};
+
 type Project = {
   id: string;
   name: string;
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
   previewUrl: string | null;
   provisioningError: string | null;
+  chatSession: ChatSession;
+  chatSessions: ChatSession[];
 };
+
+type DeviceView = "desktop" | "tablet" | "mobile";
+
+type DraftImageAttachment = ChatImageAttachmentView & PromptImageAttachment;
 
 const POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CHAT_WIDTH_PCT = 28;
@@ -41,6 +83,25 @@ const MIN_CHAT_WIDTH_PCT = 22;
 const MAX_CHAT_WIDTH_PCT = 45;
 const BADGE_DURATION_MS = 3000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CHAT_IMAGES = 5;
+const MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+
+const DEVICE_FRAME: Record<DeviceView, { label: string; Icon: typeof Monitor }> = {
+  desktop: { label: "Desktop", Icon: Monitor },
+  tablet: { label: "Tablet", Icon: Tablet },
+  mobile: { label: "Mobile", Icon: Smartphone },
+};
+
+function toRelativePath(url: string | null): string {
+  if (!url) return "/";
+  try {
+    const u = new URL(url);
+    return `${u.pathname}${u.search}${u.hash}` || "/";
+  } catch {
+    return "/";
+  }
+}
 
 function formatDoneFooter(d: {
   durationMs: number;
@@ -48,25 +109,111 @@ function formatDoneFooter(d: {
   tokensOut: number;
   costUsd: number;
   exitCode: number;
+  usage?: {
+    cacheCreationInputTokens: number;
+    cacheReadInputTokens: number;
+    totalTokens: number;
+  };
 }): string {
-  if (d.exitCode === -1) return "aborted";
+  if (d.exitCode === -1) return "aborted by user";
   const secs = (d.durationMs / 1000).toFixed(1);
   const cost = d.costUsd.toFixed(3);
-  return `${secs}s · ${d.tokensIn} in / ${d.tokensOut} out · $${cost}`;
+  const cacheCreated = d.usage?.cacheCreationInputTokens ?? 0;
+  const cacheRead = d.usage?.cacheReadInputTokens ?? 0;
+  const total = d.usage?.totalTokens ?? d.tokensIn + d.tokensOut;
+  return `${secs}s · ${total} total (${d.tokensIn} input / ${cacheCreated} cache write / ${cacheRead} cache read / ${d.tokensOut} output) · $${cost}`;
 }
 
 function summariseTool(tool: string, input: unknown): string {
-  if (input && typeof input === "object") {
-    const o = input as Record<string, unknown>;
-    const path =
-      typeof o.file_path === "string"
-        ? o.file_path
-        : typeof o.path === "string"
-          ? o.path
-          : "";
-    return path ? `${tool} ${path}` : tool;
+  void input;
+  if (tool === "Read" || tool === "Grep" || tool === "Glob" || tool === "LS") return "Working on it";
+  if (tool === "Write" || tool === "Edit" || tool === "Create" || tool === "NotebookEdit") {
+    return "Updating project";
   }
-  return tool;
+  if (tool === "Bash") return "Checking progress";
+  if (tool === "Task") return "Working on it";
+  return "Working on it";
+}
+
+function appendAgentDelta(text: string, delta: string): string {
+  if (!text) return delta;
+  if (!delta) return text;
+  if (/\s$/.test(text) || /^\s/.test(delta)) return text + delta;
+  return `${text}\n\n${delta}`;
+}
+
+function hasImageDataTransferItems(items: DataTransferItemList): boolean {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.kind === "file" && ACCEPTED_IMAGE_TYPES.has(item.type)) return true;
+  }
+  return false;
+}
+
+function hasImageFiles(files: FileList): boolean {
+  for (let i = 0; i < files.length; i++) {
+    const file = files.item(i);
+    if (file && ACCEPTED_IMAGE_TYPES.has(file.type)) return true;
+  }
+  return false;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readImageFile(file: File): Promise<DraftImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name || "image"}`));
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      const comma = dataUrl.indexOf(",");
+      if (!dataUrl || comma < 0) {
+        reject(new Error(`Could not read ${file.name || "image"}`));
+        return;
+      }
+      resolve({
+        id: crypto.randomUUID(),
+        name: file.name || "image.png",
+        mimeType: file.type,
+        size: file.size,
+        dataUrl,
+        dataBase64: dataUrl.slice(comma + 1),
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageAttachmentsForPrompt(attachments: DraftImageAttachment[]): PromptImageAttachment[] {
+  return attachments.map(({ name, mimeType, dataBase64 }) => ({ name, mimeType, dataBase64 }));
+}
+
+function describePersistedImages(attachments: DraftImageAttachment[]): string {
+  if (attachments.length === 0) return "";
+  const names = attachments.map((a) => a.name).join(", ");
+  return `\n\n[Attached images: ${names}]`;
+}
+
+function messagesFromDb(rows: DbMessage[]): ChatMessageView[] {
+  return rows.map((m) => {
+    const turnId = m.turnId ?? m.id;
+    if (m.role === "USER") return { kind: "user", turnId, text: m.content };
+    if (m.role === "AGENT") {
+      return {
+        kind: "agent",
+        turnId,
+        agentId: m.agentId ?? undefined,
+        text: m.content,
+        streaming: false,
+        tools: [],
+        footer: null,
+      };
+    }
+    return { kind: "error", turnId, agentId: m.agentId ?? undefined, text: m.content };
+  });
 }
 
 export default function ProjectWorkspace({
@@ -78,11 +225,19 @@ export default function ProjectWorkspace({
   const [project, setProject] = useState<Project | null>(null);
   const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
   const [messages, setMessages] = useState<ChatMessageView[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const [reviewingActive, setReviewingActive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLUListElement | null>(null);
+  const stickToBottomRef = useRef(true);
   const [chatWidthPct, setChatWidthPct] = useState(DEFAULT_CHAT_WIDTH_PCT);
 
   const [paths, setPaths] = useState<string[]>([]);
@@ -95,18 +250,35 @@ export default function ProjectWorkspace({
   const [saveIndicator, setSaveIndicator] = useState<"idle" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
+  const [device, setDevice] = useState<DeviceView>("desktop");
 
   const pendingRef = useRef<
     Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
   >(new Map());
   const handleEventRef = useRef<(ev: ProxyToBrowser) => void>(() => {});
+  const messagesRef = useRef<ChatMessageView[]>([]);
+  const activeSessionRef = useRef<ChatSession | null>(null);
+  const draftAttachmentsRef = useRef<DraftImageAttachment[]>([]);
 
   const selectedPathRef = useRef<string | null>(null);
   const fileContentRef = useRef<string | null>(null);
   const fileContentBaseRef = useRef<string | null>(null);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
+  useEffect(() => { draftAttachmentsRef.current = draftAttachments; }, [draftAttachments]);
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
+
+  function updateMessages(
+    updater: ChatMessageView[] | ((prev: ChatMessageView[]) => ChatMessageView[]),
+  ) {
+    setMessages((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      messagesRef.current = next;
+      return next;
+    });
+  }
 
   function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
     const workspace = workspaceRef.current;
@@ -169,6 +341,112 @@ export default function ProjectWorkspace({
     }
   }, [sendRequest]);
 
+  const refreshChatSessions = useCallback(async () => {
+    const res = await fetch(`/api/projects/${id}/sessions`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { sessions: ChatSession[] };
+    setChatSessions(data.sessions);
+    const current = activeSessionRef.current;
+    if (current) {
+      const updated = data.sessions.find((s) => s.id === current.id);
+      if (updated) setActiveSession(updated);
+    }
+  }, [id]);
+
+  const loadChatSession = useCallback(async (sessionId: string) => {
+    if (turnInFlight) return;
+    setSessionLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${id}/sessions/${sessionId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { session: ChatSession & { messages: DbMessage[] } };
+      const { messages: dbMessages, ...session } = data.session;
+      setActiveSession(session);
+      setChatSessions((prev) => {
+        const next = prev.filter((s) => s.id !== session.id);
+        return [session, ...next].sort(
+          (a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime(),
+        );
+      });
+      updateMessages(messagesFromDb(dbMessages));
+      setDraftAttachments([]);
+      setAttachmentError(null);
+    } finally {
+      setSessionLoading(false);
+    }
+  }, [id, turnInFlight]);
+
+  async function createChatSession() {
+    if (turnInFlight) return;
+    const res = await fetch(`/api/projects/${id}/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "New chat" }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { session: ChatSession };
+    setActiveSession(data.session);
+    setChatSessions((prev) => [data.session, ...prev]);
+    updateMessages([]);
+    setPrompt("");
+    setDraftAttachments([]);
+    setAttachmentError(null);
+  }
+
+  async function persistChatMessage(args: {
+    sessionId: string;
+    role: "USER" | "AGENT" | "SYSTEM";
+    content: string;
+    turnId?: string | null;
+    agentId?: string | null;
+  }) {
+    await fetch(`/api/projects/${id}/sessions/${args.sessionId}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(args),
+    }).catch(() => undefined);
+    void refreshChatSessions();
+  }
+
+  async function syncClaudeSessionId(claudeSessionId: string) {
+    const session = activeSessionRef.current;
+    if (!session || session.claudeSessionId === claudeSessionId) return;
+
+    const nextSession = { ...session, claudeSessionId };
+    activeSessionRef.current = nextSession;
+    setActiveSession(nextSession);
+    setChatSessions((prev) =>
+      prev.map((s) => (s.id === session.id ? { ...s, claudeSessionId } : s)),
+    );
+
+    const res = await fetch(`/api/projects/${id}/sessions/${session.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ claudeSessionId }),
+    }).catch(() => null);
+    if (res?.ok) {
+      void refreshChatSessions();
+    }
+  }
+
+  function persistAgentMessages(turnId: string) {
+    const session = activeSessionRef.current;
+    if (!session) return;
+    const agentMessages = messagesRef.current.filter(
+      (m): m is Extract<ChatMessageView, { kind: "agent" }> =>
+        m.kind === "agent" && m.turnId === turnId && m.text.trim().length > 0,
+    );
+    for (const m of agentMessages) {
+      void persistChatMessage({
+        sessionId: session.id,
+        role: "AGENT",
+        content: m.text,
+        turnId,
+        agentId: m.agentId ?? null,
+      });
+    }
+  }
+
   function markChanged(path: string) {
     setRecentlyChanged((prev) => {
       const next = new Set(prev);
@@ -215,6 +493,11 @@ export default function ProjectWorkspace({
       return;
     }
 
+    if (ev.type === "agent.session") {
+      void syncClaudeSessionId(ev.claudeSessionId);
+      return;
+    }
+
     if (ev.type === "agent.status") {
       if (ev.phase === "reviewing") setReviewingActive(true);
       if (ev.phase === "done") {
@@ -225,14 +508,14 @@ export default function ProjectWorkspace({
     }
     if (ev.type === "agent.chunk") {
       const evAgentId = (ev as { agentId?: string }).agentId;
-      setMessages((msgs) => {
+      updateMessages((msgs) => {
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
           if (m.kind !== "agent") continue;
           if (m.turnId !== ev.turnId) break;
           if (m.agentId === evAgentId) {
             const next = msgs.slice();
-            next[i] = { ...m, text: m.text + ev.delta };
+            next[i] = { ...m, text: appendAgentDelta(m.text, ev.delta) };
             return next;
           }
           break;
@@ -254,7 +537,7 @@ export default function ProjectWorkspace({
     }
     if (ev.type === "agent.tool_use") {
       const evAgentId = (ev as { agentId?: string }).agentId;
-      setMessages((msgs) => {
+      updateMessages((msgs) => {
         const label = summariseTool(ev.tool, ev.input);
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
@@ -283,7 +566,7 @@ export default function ProjectWorkspace({
       return;
     }
     if (ev.type === "agent.done") {
-      setMessages((msgs) => {
+      updateMessages((msgs) => {
         const footer = formatDoneFooter(ev);
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
@@ -295,16 +578,27 @@ export default function ProjectWorkspace({
         }
         return msgs;
       });
+      persistAgentMessages(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
       return;
     }
     if (ev.type === "agent.error") {
       const evAgentId = (ev as { agentId?: string }).agentId;
-      setMessages((msgs) => [
+      updateMessages((msgs) => [
         ...msgs,
         { kind: "error", turnId: ev.turnId, agentId: evAgentId, text: ev.message },
       ]);
+      const session = activeSessionRef.current;
+      if (session) {
+        void persistChatMessage({
+          sessionId: session.id,
+          role: "SYSTEM",
+          content: ev.message,
+          turnId: ev.turnId,
+          agentId: evAgentId ?? null,
+        });
+      }
       setTurnInFlight(null);
       setReviewingActive(false);
       return;
@@ -330,6 +624,19 @@ export default function ProjectWorkspace({
   useEffect(() => { handleEventRef.current = handleEvent; });
 
   useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    if (!stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  function onChatScroll(e: React.UIEvent<HTMLUListElement>) {
+    const el = e.currentTarget;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 48;
+  }
+
+  useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
     async function loadOnce() {
@@ -338,6 +645,22 @@ export default function ProjectWorkspace({
       const data = (await res.json()) as { project: Project };
       if (cancelled) return;
       setProject(data.project);
+      setChatSessions(data.project.chatSessions);
+      const initialSession = data.project.chatSessions[0] ?? data.project.chatSession;
+      setActiveSession(initialSession);
+      if (initialSession && data.project.status !== "PROVISIONING") {
+        const sessionRes = await fetch(`/api/projects/${id}/sessions/${initialSession.id}`);
+        if (sessionRes.ok && !cancelled) {
+          const sessionData = (await sessionRes.json()) as {
+            session: ChatSession & { messages: DbMessage[] };
+          };
+          const { messages: dbMessages, ...session } = sessionData.session;
+          setActiveSession(session);
+          updateMessages(messagesFromDb(dbMessages));
+          setDraftAttachments([]);
+          setAttachmentError(null);
+        }
+      }
       if (data.project.status === "PROVISIONING") {
         timer = window.setTimeout(loadOnce, POLL_INTERVAL_MS);
       }
@@ -352,44 +675,57 @@ export default function ProjectWorkspace({
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
-    const ws = new WebSocket(`${base}/p/${id}`);
-    wsRef.current = ws;
-    const statusTimer = window.setTimeout(() => {
-      if (wsRef.current === ws && ws.readyState !== WebSocket.OPEN) {
-        setWsStatus("connecting");
-        setFileListLoading(true);
-        setFileListError(null);
-      }
-    }, 0);
-    ws.onopen = async () => {
-      setWsStatus("open");
-      void requestFileList();
+    let unmounted = false;
+    let reconnectAttempt = 0;
+    let reconnectTimer: number | null = null;
+    let currentWs: WebSocket | null = null;
+
+    const connect = () => {
+      if (unmounted) return;
+      setWsStatus("connecting");
+      const ws = new WebSocket(`${base}/p/${id}`);
+      currentWs = ws;
+      wsRef.current = ws;
+      ws.onopen = () => {
+        reconnectAttempt = 0;
+        setWsStatus("open");
+        void requestFileList();
+      };
+      ws.onerror = () => {
+        setFileListError((prev) => prev ?? "File list failed: websocket error");
+        setFileListLoading(false);
+      };
+      ws.onclose = () => {
+        setWsStatus("closed");
+        setFileListLoading(false);
+        for (const [requestId, entry] of pendingRef.current) {
+          clearTimeout(entry.timer);
+          entry.reject(new Error("ws closed"));
+          pendingRef.current.delete(requestId);
+        }
+        if (unmounted) return;
+        reconnectAttempt += 1;
+        const delay = Math.min(1000 * 2 ** Math.min(reconnectAttempt - 1, 4), 10_000);
+        console.log(`[ws] close — reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
+        reconnectTimer = window.setTimeout(connect, delay);
+      };
+      ws.onmessage = (ev) => {
+        let parsed: ProxyToBrowser;
+        try {
+          parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
+        } catch {
+          return;
+        }
+        handleEventRef.current(parsed);
+      };
     };
-    ws.onerror = () => {
-      setFileListError((prev) => prev ?? "File list failed: websocket error");
-      setFileListLoading(false);
-    };
-    ws.onclose = () => {
-      setWsStatus("closed");
-      setFileListLoading(false);
-      for (const [requestId, entry] of pendingRef.current) {
-        clearTimeout(entry.timer);
-        entry.reject(new Error("ws closed"));
-        pendingRef.current.delete(requestId);
-      }
-    };
-    ws.onmessage = (ev) => {
-      let parsed: ProxyToBrowser;
-      try {
-        parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
-      } catch {
-        return;
-      }
-      handleEventRef.current(parsed);
-    };
+
+    connect();
+
     return () => {
-      window.clearTimeout(statusTimer);
-      ws.close();
+      unmounted = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      currentWs?.close();
     };
   }, [project?.status, id, requestFileList]);
 
@@ -449,20 +785,114 @@ export default function ProjectWorkspace({
     }
   }, [sendRequest, turnInFlight]);
 
+  async function addImageFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    const rejected: string[] = [];
+    const current = draftAttachmentsRef.current;
+    const slots = Math.max(0, MAX_CHAT_IMAGES - current.length);
+    const candidates = files
+      .filter((file) => {
+        if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
+          rejected.push(`${file.name || "file"} is not a supported image`);
+          return false;
+        }
+        if (file.size > MAX_CHAT_IMAGE_BYTES) {
+          rejected.push(`${file.name || "image"} is larger than ${formatBytes(MAX_CHAT_IMAGE_BYTES)}`);
+          return false;
+        }
+        return true;
+      })
+      .slice(0, slots);
+
+    if (files.length > candidates.length + rejected.length || slots === 0) {
+      rejected.push(`You can attach up to ${MAX_CHAT_IMAGES} images`);
+    }
+
+    if (candidates.length === 0) {
+      setAttachmentError(rejected[0] ?? "No supported images found");
+      return;
+    }
+
+    try {
+      const next = await Promise.all(candidates.map(readImageFile));
+      setDraftAttachments((prev) => [...prev, ...next].slice(0, MAX_CHAT_IMAGES));
+      setAttachmentError(rejected[0] ?? null);
+    } catch (err) {
+      setAttachmentError(err instanceof Error ? err.message : "Image could not be read");
+    }
+  }
+
+  function onPromptPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    if (turnInFlight !== null) return;
+    const files = Array.from(e.clipboardData.files).filter((file) => ACCEPTED_IMAGE_TYPES.has(file.type));
+    if (files.length > 0) {
+      void addImageFiles(files);
+    }
+  }
+
+  function onChatDragOver(e: DragEvent<HTMLElement>) {
+    if (turnInFlight !== null) return;
+    if (!hasImageDataTransferItems(e.dataTransfer.items)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setDraggingImages(true);
+  }
+
+  function onChatDragLeave(e: DragEvent<HTMLElement>) {
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget.contains(next)) return;
+    setDraggingImages(false);
+  }
+
+  function onChatDrop(e: DragEvent<HTMLElement>) {
+    if (turnInFlight !== null) return;
+    if (!hasImageFiles(e.dataTransfer.files)) return;
+    e.preventDefault();
+    setDraggingImages(false);
+    void addImageFiles(e.dataTransfer.files);
+  }
+
+  function removeDraftAttachment(id: string) {
+    setDraftAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+    setAttachmentError(null);
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     const ws = wsRef.current;
-    const text = prompt.trim();
-    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight) return;
+    const attachments = draftAttachmentsRef.current;
+    const text = prompt.trim() || (attachments.length > 0 ? "Use the attached image as context." : "");
+    const session = activeSessionRef.current;
+    const claudeSessionId = session?.claudeSessionId;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight || !session || !claudeSessionId) return;
     const turnId = crypto.randomUUID();
-    setMessages((msgs) => [...msgs, { kind: "user", turnId, text }]);
-    const msg: BrowserToProxy = { type: "agent.prompt", prompt: text, turnId };
+    const resumeClaudeSession = messagesRef.current.length > 0;
+    updateMessages((msgs) => [...msgs, { kind: "user", turnId, text, attachments }]);
+    void persistChatMessage({
+      sessionId: session.id,
+      role: "USER",
+      content: `${text}${describePersistedImages(attachments)}`,
+      turnId,
+    });
+    const msg: BrowserToProxy = {
+      type: "agent.prompt",
+      prompt: text,
+      turnId,
+      claudeSessionId,
+      resumeClaudeSession,
+      attachments: imageAttachmentsForPrompt(attachments),
+    };
     ws.send(JSON.stringify(msg));
     setTurnInFlight(turnId);
     setPrompt("");
+    setDraftAttachments([]);
+    setAttachmentError(null);
   }
 
   function onAbort() {
+    console.log("[abort] onAbort invoked", { turnInFlight, wsState: wsRef.current?.readyState });
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !turnInFlight) return;
     const msg: BrowserToProxy = { type: "agent.abort", turnId: turnInFlight };
@@ -543,8 +973,8 @@ export default function ProjectWorkspace({
   const wsOpen = wsStatus === "open";
 
   return (
-    <main className="flex h-dvh min-h-dvh flex-1 flex-col overflow-hidden bg-background">
-      <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border bg-card px-3 sm:px-4">
+    <main className="fixed inset-0 flex h-dvh flex-col overflow-hidden bg-background">
+      <header className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <Button asChild variant="ghost" size="icon" aria-label="Back to projects">
             <Link href="/">
@@ -556,21 +986,17 @@ export default function ProjectWorkspace({
               <h1 className="truncate text-base font-semibold">{project.name}</h1>
               <Badge variant="success">running</Badge>
             </div>
-            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-              {wsOpen ? <Wifi className="size-3.5 text-emerald-300" /> : <WifiOff className="size-3.5" />}
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+              {wsOpen ? (
+                <Wifi className="size-3.5 text-emerald-300" aria-hidden="true" />
+              ) : (
+                <WifiOff className="size-3.5" aria-hidden="true" />
+              )}
               <span>WS: {wsStatus}</span>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {project.previewUrl && (
-            <Button asChild variant="outline" size="sm" className="hidden sm:inline-flex">
-              <a href={project.previewUrl} target="_blank" rel="noreferrer">
-                <ExternalLink />
-                Preview
-              </a>
-            </Button>
-          )}
           <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
             {turnInFlight ? "agent busy" : "ready"}
           </Badge>
@@ -579,21 +1005,70 @@ export default function ProjectWorkspace({
 
       <div ref={workspaceRef} className="flex min-h-0 flex-1 overflow-hidden">
         <section
-          className="flex min-w-[280px] flex-col overflow-hidden border-r border-border bg-card max-md:min-w-0 max-md:flex-[0_0_42%]"
+          className={cn(
+            "relative flex min-h-0 min-w-[280px] flex-col overflow-hidden border-r border-border bg-card max-md:min-w-0 max-md:flex-[0_0_42%]",
+            draggingImages && "ring-2 ring-inset ring-primary",
+          )}
           style={{ flexBasis: `${chatWidthPct}%` }}
+          onDragOver={onChatDragOver}
+          onDragLeave={onChatDragLeave}
+          onDrop={onChatDrop}
         >
-          <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="size-4 text-primary" />
-              <h2 className="text-sm font-semibold">Chat</h2>
+          {draggingImages && (
+            <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-lg border border-dashed border-primary bg-background/75 text-sm font-medium text-primary">
+              Drop images to attach
             </div>
-            {turnInFlight && <Badge variant="warning">streaming</Badge>}
+          )}
+          <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-border px-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="size-4 text-primary" aria-hidden="true" />
+              <h2 className="max-w-[12rem] truncate text-sm font-semibold">
+                {activeSession?.title ?? "Chat"}
+              </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              {turnInFlight && <Badge variant="warning">streaming</Badge>}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="New chat"
+                disabled={turnInFlight !== null}
+                onClick={createChatSession}
+              >
+                <Plus />
+              </Button>
+            </div>
           </div>
-          <ul className="flex flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
+          <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/45 px-3 py-2">
+            <History className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {chatSessions.map((s) => (
+              <Button
+                key={s.id}
+                type="button"
+                variant={activeSession?.id === s.id ? "secondary" : "ghost"}
+                size="sm"
+                disabled={turnInFlight !== null || sessionLoading}
+                onClick={() => void loadChatSession(s.id)}
+                className="max-w-44 shrink-0 justify-start"
+                title={s.title}
+              >
+                <span className="truncate">{s.title}</span>
+                {s._count.messages > 0 && (
+                  <span className="ml-1 text-xs text-muted-foreground">{s._count.messages}</span>
+                )}
+              </Button>
+            ))}
+          </div>
+          <ul
+            ref={chatScrollRef}
+            onScroll={onChatScroll}
+            className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 text-sm [scrollbar-gutter:stable]"
+          >
             {messages.length === 0 && (
               <li className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
                 <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
-                  <Bot className="size-4 text-primary" />
+                  <Bot className="size-4 text-primary" aria-hidden="true" />
                   Claude is ready
                 </div>
                 Ask for a change and watch files update in the editor.
@@ -603,17 +1078,54 @@ export default function ProjectWorkspace({
               <Message key={(m.turnId ?? "err") + ":" + idx} m={m} />
             ))}
           </ul>
-          <form onSubmit={onSubmit} className="flex flex-col gap-2 border-t border-border bg-background/55 p-3">
+          <form onSubmit={onSubmit} className="flex shrink-0 flex-col gap-2 border-t border-border bg-background/55 p-3">
             <label className="sr-only" htmlFor="agent-prompt">Prompt</label>
             <Textarea
               id="agent-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
+              onPaste={onPromptPaste}
               placeholder="Tell Claude what to change…"
               rows={3}
-              disabled={wsStatus !== "open" || turnInFlight !== null}
+              disabled={wsStatus !== "open" || turnInFlight !== null || !activeSession}
               className="min-h-28"
             />
+            {draftAttachments.length > 0 && (
+              <ul className="grid grid-cols-2 gap-2">
+                {draftAttachments.map((attachment) => (
+                  <li
+                    key={attachment.id}
+                    className="group relative overflow-hidden rounded-md border border-border bg-card"
+                  >
+                    <div
+                      role="img"
+                      aria-label={attachment.name}
+                      className="h-20 w-full bg-cover bg-center"
+                      style={{ backgroundImage: `url(${attachment.dataUrl})` }}
+                    />
+                    <div className="flex min-w-0 items-center gap-1.5 px-2 py-1">
+                      <ImagePlus className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                      <span className="truncate text-xs text-muted-foreground" title={attachment.name}>
+                        {attachment.name}
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon-xs"
+                      aria-label={`Remove ${attachment.name}`}
+                      className="absolute right-1 top-1 opacity-95"
+                      onClick={() => removeDraftAttachment(attachment.id)}
+                    >
+                      <X />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {attachmentError && (
+              <div className="text-xs text-red-200">{attachmentError}</div>
+            )}
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">
                 {turnInFlight
@@ -621,7 +1133,9 @@ export default function ProjectWorkspace({
                     ? "Reviewing..."
                     : "Claude is thinking..."
                   : wsOpen
-                    ? "Connected"
+                    ? draftAttachments.length > 0
+                      ? `${draftAttachments.length} image${draftAttachments.length === 1 ? "" : "s"} attached`
+                      : "Connected"
                     : "Waiting for websocket"}
               </span>
               <div className="flex gap-2">
@@ -639,7 +1153,12 @@ export default function ProjectWorkspace({
                 )}
                 <Button
                   type="submit"
-                  disabled={wsStatus !== "open" || turnInFlight !== null || !prompt.trim()}
+                  disabled={
+                    wsStatus !== "open" ||
+                    turnInFlight !== null ||
+                    (!prompt.trim() && draftAttachments.length === 0) ||
+                    !activeSession
+                  }
                   size="sm"
                 >
                   <Send />
@@ -687,9 +1206,8 @@ export default function ProjectWorkspace({
                     type="button"
                     onClick={requestFileList}
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     aria-label="Refresh files"
-                    className="size-8"
                   >
                     <RefreshCw className={fileListLoading ? "animate-spin" : ""} />
                   </Button>
@@ -718,24 +1236,70 @@ export default function ProjectWorkspace({
               </div>
             </div>
           }
+          previewActions={
+            project.previewUrl ? (
+              <>
+                <div
+                  role="group"
+                  aria-label="Preview viewport"
+                  className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
+                >
+                  {(Object.keys(DEVICE_FRAME) as DeviceView[]).map((d) => {
+                    const { label, Icon } = DEVICE_FRAME[d];
+                    const active = device === d;
+                    return (
+                      <Button
+                        key={d}
+                        type="button"
+                        onClick={() => setDevice(d)}
+                        variant={active ? "secondary" : "ghost"}
+                        size="icon-xs"
+                        aria-label={label}
+                        aria-pressed={active}
+                      >
+                        <Icon />
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div
+                  className="flex min-w-0 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
+                  title={project.previewUrl}
+                >
+                  <Globe2 className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="truncate font-mono">{toRelativePath(project.previewUrl)}</span>
+                </div>
+                <Button asChild variant="ghost" size="icon-sm" aria-label="Open preview in new tab">
+                  <a href={project.previewUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink />
+                  </a>
+                </Button>
+              </>
+            ) : null
+          }
           preview={
             project.previewUrl ? (
-              <div className="flex min-w-0 flex-1 flex-col bg-background">
-                <div className="flex min-h-11 items-center gap-2 border-b border-border bg-card px-3 text-xs text-muted-foreground">
-                  <Globe2 className="size-4 text-primary" />
-                  <span className="truncate font-mono">{project.previewUrl}</span>
+              <div className="flex min-w-0 min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/40 p-3 sm:p-6">
+                <div
+                  className={cn(
+                    "relative overflow-hidden rounded-lg bg-white shadow-xl ring-1 ring-border transition-[width,height,max-width,max-height] duration-200",
+                    device === "desktop" && "h-full w-full",
+                    device === "tablet" && "aspect-[834/1112] h-full max-h-[1112px] max-w-full",
+                    device === "mobile" && "aspect-[390/844] h-full max-h-[844px] max-w-full",
+                  )}
+                >
+                  <iframe
+                    src={project.previewUrl}
+                    className="h-full w-full border-0 bg-white"
+                    sandbox="allow-scripts allow-same-origin allow-forms"
+                    title="project preview"
+                  />
                 </div>
-                <iframe
-                  src={project.previewUrl}
-                  className="w-full flex-1 border-0 bg-white"
-                  sandbox="allow-scripts allow-same-origin allow-forms"
-                  title="project preview"
-                />
               </div>
             ) : (
               <div className="flex w-full flex-1 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
                 <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-secondary">
-                  <Globe2 className="size-5" />
+                  <Globe2 className="size-5" aria-hidden="true" />
                 </div>
                 No preview URL.
               </div>

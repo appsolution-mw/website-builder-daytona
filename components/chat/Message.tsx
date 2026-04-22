@@ -1,14 +1,21 @@
 "use client";
 
-import { AlertTriangle, Bot, ChevronRight, Terminal, User } from "lucide-react";
+import { AlertTriangle, Bot, ImageIcon, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { Badge } from "@/components/ui/badge";
 import { summariseAgentLabel } from "@/lib/agents/labels";
 
+export type ChatImageAttachmentView = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  dataUrl?: string;
+};
+
 export type ChatMessageView =
-  | { kind: "user"; turnId: string; text: string }
+  | { kind: "user"; turnId: string; text: string; attachments?: ChatImageAttachmentView[] }
   | {
       kind: "agent";
       turnId: string;
@@ -20,6 +27,31 @@ export type ChatMessageView =
     }
   | { kind: "error"; turnId: string | null; agentId?: string; text: string };
 
+function ActivityDots() {
+  return (
+    <span className="inline-flex items-center gap-0.5" aria-hidden="true">
+      <span className="size-1 rounded-full bg-current animate-pulse" />
+      <span className="size-1 rounded-full bg-current animate-pulse [animation-delay:150ms]" />
+      <span className="size-1 rounded-full bg-current animate-pulse [animation-delay:300ms]" />
+    </span>
+  );
+}
+
+function ActivityStatus({ tools }: { tools: string[] }) {
+  const label = tools.at(-1) ?? "Working on it";
+  const count = tools.length;
+
+  return (
+    <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-background/70 px-2 py-1 text-xs text-muted-foreground">
+      <span className="truncate">
+        {label}
+        {count > 1 ? ` (${count} steps)` : ""}
+      </span>
+      <ActivityDots />
+    </div>
+  );
+}
+
 export function Message({ m }: { m: ChatMessageView }) {
   if (m.kind === "user") {
     return (
@@ -29,6 +61,31 @@ export function Message({ m }: { m: ChatMessageView }) {
           You
         </div>
         <div className="whitespace-pre-wrap text-sm leading-6">{m.text}</div>
+        {m.attachments && m.attachments.length > 0 && (
+          <ul className="mt-2 grid grid-cols-2 gap-2">
+            {m.attachments.map((attachment) => (
+              <li
+                key={attachment.id}
+                className="overflow-hidden rounded-md border border-primary-foreground/20 bg-black/15"
+                title={attachment.name}
+              >
+                {attachment.dataUrl ? (
+                  <div
+                    role="img"
+                    aria-label={attachment.name}
+                    className="h-24 w-full bg-cover bg-center"
+                    style={{ backgroundImage: `url(${attachment.dataUrl})` }}
+                  />
+                ) : (
+                  <div className="flex h-24 items-center justify-center">
+                    <ImageIcon className="size-5 opacity-75" aria-hidden="true" />
+                  </div>
+                )}
+                <div className="truncate px-2 py-1 text-xs opacity-85">{attachment.name}</div>
+              </li>
+            ))}
+          </ul>
+        )}
       </li>
     );
   }
@@ -56,21 +113,11 @@ export function Message({ m }: { m: ChatMessageView }) {
         <Bot className="size-3.5" />
         {label}
       </div>
-      {m.tools.length > 0 && (
-        <ul className="mb-2 flex flex-col gap-1">
-          {m.tools.map((t, i) => (
-            <li key={i}>
-              <Badge variant="outline" className="max-w-full">
-                <Terminal className="size-3.5" />
-                <span className="truncate">{t}</span>
-              </Badge>
-            </li>
-          ))}
-        </ul>
-      )}
       <div className="text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-background [&_pre]:p-3 [&_pre]:text-xs [&_pre]:text-blue-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ul]:pl-5">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-        {m.streaming && <ChevronRight className="inline size-4 animate-pulse text-primary" />}
+        {m.text.trim().length > 0 && (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+        )}
+        {m.streaming && <ActivityStatus tools={m.tools} />}
       </div>
       {m.footer && <div className="mt-2 text-xs text-muted-foreground">{m.footer}</div>}
     </li>

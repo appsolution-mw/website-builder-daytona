@@ -1,4 +1,4 @@
-import type { BrokerToHost } from "@wbd/protocol";
+import type { AgentUsageDetails, BrokerToHost } from "@wbd/protocol";
 
 /**
  * Per-turn mapping from Task tool_use id → sub-agent name.
@@ -9,6 +9,51 @@ export type TaskMap = Map<string, string>;
 
 export function createTaskMap(): TaskMap {
   return new Map();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function numberField(record: Record<string, unknown> | undefined, key: string): number {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function stringField(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function usageDetails(msg: Record<string, unknown>): AgentUsageDetails | undefined {
+  const usage = isRecord(msg.usage) ? msg.usage : undefined;
+  if (!usage) return undefined;
+
+  const serverToolUse = isRecord(usage.server_tool_use)
+    ? usage.server_tool_use
+    : undefined;
+  const inputTokens = numberField(usage, "input_tokens");
+  const outputTokens = numberField(usage, "output_tokens");
+  const cacheCreationInputTokens = numberField(usage, "cache_creation_input_tokens");
+  const cacheReadInputTokens = numberField(usage, "cache_read_input_tokens");
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
+    totalTokens:
+      inputTokens +
+      outputTokens +
+      cacheCreationInputTokens +
+      cacheReadInputTokens,
+    webSearchRequests: numberField(serverToolUse, "web_search_requests"),
+    webFetchRequests: numberField(serverToolUse, "web_fetch_requests"),
+    rawUsage: usage,
+    ...(isRecord(msg.modelUsage) ? { modelUsage: msg.modelUsage } : {}),
+    ...(stringField(usage, "service_tier") ? { serviceTier: stringField(usage, "service_tier") } : {}),
+    ...(stringField(usage, "inference_geo") ? { inferenceGeo: stringField(usage, "inference_geo") } : {}),
+  };
 }
 
 export function parseNdjsonLine(
@@ -31,7 +76,12 @@ export function parseNdjsonLine(
   const type = msg.type;
 
   if (type === "system" && msg.subtype === "init") {
-    return [{ type: "agent.status", turnId, phase: "starting" }];
+    const events: BrokerToHost[] = [];
+    if (typeof msg.session_id === "string") {
+      events.push({ type: "agent.session", turnId, claudeSessionId: msg.session_id });
+    }
+    events.push({ type: "agent.status", turnId, phase: "starting" });
+    return events;
   }
 
   if (type === "assistant") {
@@ -101,20 +151,22 @@ export function parseNdjsonLine(
 
   if (type === "result") {
     if (msg.subtype === "success") {
-      const usage = msg.usage as
-        | { input_tokens?: number; output_tokens?: number }
-        | undefined;
-      return [
-        {
-          type: "agent.done",
-          turnId,
-          durationMs: typeof msg.duration_ms === "number" ? msg.duration_ms : 0,
-          tokensIn: usage?.input_tokens ?? 0,
-          tokensOut: usage?.output_tokens ?? 0,
-          costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0,
-          exitCode: 0,
-        },
-      ];
+      const usage = usageDetails(msg);
+      const events: BrokerToHost[] = [];
+      if (typeof msg.session_id === "string") {
+        events.push({ type: "agent.session", turnId, claudeSessionId: msg.session_id });
+      }
+      events.push({
+        type: "agent.done",
+        turnId,
+        durationMs: typeof msg.duration_ms === "number" ? msg.duration_ms : 0,
+        tokensIn: usage?.inputTokens ?? 0,
+        tokensOut: usage?.outputTokens ?? 0,
+        costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : 0,
+        exitCode: 0,
+        ...(usage ? { usage } : {}),
+      });
+      return events;
     }
     return [
       {

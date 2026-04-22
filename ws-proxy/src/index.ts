@@ -2,6 +2,8 @@ import { config as loadDotenv } from "dotenv";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
+import type { AgentUsageEvent } from "@wbd/protocol";
+import type { Prisma } from "@prisma/client";
 
 // Load .env from monorepo root (this file lives at ws-proxy/src/index.ts,
 // so `../../` from __dirname resolves to the repo root).
@@ -23,6 +25,23 @@ export interface StartProxyOptions {
    * In this milestone all projects point at the same local broker.
    */
   resolveBrokerUrl: (projectId: string) => string | Promise<string>;
+  recordTokenUsage?: (
+    projectId: string,
+    event: AgentUsageEvent,
+  ) => void | Promise<void>;
+}
+
+function parseUsageEvent(data: RawData, isBinary: boolean): AgentUsageEvent | null {
+  if (isBinary) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.toString());
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const msg = parsed as Partial<AgentUsageEvent>;
+  return msg.type === "agent.usage" && typeof msg.turnId === "string" ? (msg as AgentUsageEvent) : null;
 }
 
 export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> {
@@ -43,7 +62,25 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       return;
     }
 
+    // Keepalive for the browser leg: ping every 25s so intermediate proxies
+    // don't idle-close during long Claude turns. Browser WS stacks auto-reply
+    // to ping frames.
+    let browserAlive = true;
+    browserSocket.on("pong", () => {
+      browserAlive = true;
+    });
+    const browserPingTimer = setInterval(() => {
+      if (!browserAlive) {
+        browserSocket.terminate();
+        return;
+      }
+      browserAlive = false;
+      browserSocket.ping();
+    }, 25_000);
+    browserSocket.on("close", () => clearInterval(browserPingTimer));
+
     let brokerSocket: WebSocket | null = null;
+    let brokerPingTimer: ReturnType<typeof setInterval> | null = null;
     const pendingFromBrowser: Array<{ data: RawData; isBinary: boolean }> = [];
 
     // Register immediately. The browser may send its first request right after
@@ -78,8 +115,13 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       }
     }, BROKER_CONNECT_TIMEOUT_MS);
 
-    const forward = (from: WebSocket, to: WebSocket) => {
+    const forward = (
+      from: WebSocket,
+      to: WebSocket,
+      onMessage?: (data: RawData, isBinary: boolean) => void,
+    ) => {
       from.on("message", (data: RawData, isBinary: boolean) => {
+        onMessage?.(data, isBinary);
         if (to.readyState === WebSocket.OPEN) to.send(data, { binary: isBinary });
       });
       from.on("close", () => {
@@ -103,13 +145,42 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     brokerSocket.once("open", () => {
       brokerOpened = true;
       clearTimeout(brokerConnectTimer);
+      // Keepalive for the broker leg too (ws-proxy acts as WS client here).
+      // Daytona's HTTPS reverse proxy idle-closes WSS connections after a
+      // short silence; pings prevent that during long Claude turns.
+      let brokerAlive = true;
+      brokerSocket.on("pong", () => {
+        brokerAlive = true;
+      });
+      brokerPingTimer = setInterval(() => {
+        if (!brokerSocket || brokerSocket.readyState !== WebSocket.OPEN) return;
+        if (!brokerAlive) {
+          brokerSocket.terminate();
+          return;
+        }
+        brokerAlive = false;
+        brokerSocket.ping();
+      }, 25_000);
+      brokerSocket.on("close", () => {
+        if (brokerPingTimer) {
+          clearInterval(brokerPingTimer);
+          brokerPingTimer = null;
+        }
+      });
       // Flush buffered messages
       for (const { data, isBinary } of pendingFromBrowser) {
         brokerSocket.send(data, { binary: isBinary });
       }
       pendingFromBrowser.length = 0;
       // Set up broker → browser forwarding
-      forward(brokerSocket, browserSocket);
+      forward(brokerSocket, browserSocket, (data, isBinary) => {
+        const usage = parseUsageEvent(data, isBinary);
+        if (!usage || !opts.recordTokenUsage) return;
+        void Promise.resolve(opts.recordTokenUsage(projectId, usage)).catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[ws-proxy] failed to persist token usage for project ${projectId}: ${message}`);
+        });
+      });
     });
 
     brokerSocket.once("error", (err) => {
@@ -148,6 +219,16 @@ export function extractProjectId(url: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function dbUsageLabel(label: AgentUsageEvent["label"]) {
+  if (label === "coder") return "CODER";
+  if (label === "reviewer") return "REVIEWER";
+  return "TURN";
+}
+
+function jsonOrUndefined(value: unknown): Prisma.InputJsonValue | undefined {
+  return value === undefined ? undefined : (value as Prisma.InputJsonValue);
+}
+
 // Runnable entry point when invoked directly
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
@@ -168,6 +249,53 @@ async function main() {
         throw new Error(`project ${projectId} is not running`);
       }
       return project.brokerUrl;
+    },
+    recordTokenUsage: async (projectId, event) => {
+      const usage = event.usage;
+      await prisma.tokenUsage.upsert({
+        where: {
+          projectId_turnId_label: {
+            projectId,
+            turnId: event.turnId,
+            label: dbUsageLabel(event.label),
+          },
+        },
+        create: {
+          projectId,
+          turnId: event.turnId,
+          label: dbUsageLabel(event.label),
+          durationMs: event.durationMs,
+          inputTokens: usage?.inputTokens ?? event.tokensIn,
+          outputTokens: usage?.outputTokens ?? event.tokensOut,
+          cacheCreationInputTokens: usage?.cacheCreationInputTokens ?? 0,
+          cacheReadInputTokens: usage?.cacheReadInputTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? event.tokensIn + event.tokensOut,
+          webSearchRequests: usage?.webSearchRequests ?? 0,
+          webFetchRequests: usage?.webFetchRequests ?? 0,
+          costUsd: event.costUsd,
+          exitCode: event.exitCode,
+          serviceTier: usage?.serviceTier,
+          inferenceGeo: usage?.inferenceGeo,
+          rawUsage: jsonOrUndefined(usage?.rawUsage),
+          modelUsage: jsonOrUndefined(usage?.modelUsage),
+        },
+        update: {
+          durationMs: event.durationMs,
+          inputTokens: usage?.inputTokens ?? event.tokensIn,
+          outputTokens: usage?.outputTokens ?? event.tokensOut,
+          cacheCreationInputTokens: usage?.cacheCreationInputTokens ?? 0,
+          cacheReadInputTokens: usage?.cacheReadInputTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? event.tokensIn + event.tokensOut,
+          webSearchRequests: usage?.webSearchRequests ?? 0,
+          webFetchRequests: usage?.webFetchRequests ?? 0,
+          costUsd: event.costUsd,
+          exitCode: event.exitCode,
+          serviceTier: usage?.serviceTier,
+          inferenceGeo: usage?.inferenceGeo,
+          rawUsage: jsonOrUndefined(usage?.rawUsage),
+          modelUsage: jsonOrUndefined(usage?.modelUsage),
+        },
+      });
     },
   });
   console.log(`[ws-proxy] listening on ws://localhost:${handle.port}`);

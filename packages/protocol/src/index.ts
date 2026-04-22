@@ -3,10 +3,51 @@
  * All messages are JSON; both directions use a `type` discriminator.
  */
 
+export type PromptImageAttachment = {
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+};
+
+export type AgentUsageLabel = "coder" | "reviewer" | "turn";
+
+export type AgentUsageDetails = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  totalTokens: number;
+  webSearchRequests: number;
+  webFetchRequests: number;
+  rawUsage: unknown;
+  modelUsage?: unknown;
+  serviceTier?: string;
+  inferenceGeo?: string;
+};
+
+export type AgentUsageEvent = {
+  type: "agent.usage";
+  turnId: string;
+  label: AgentUsageLabel;
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  exitCode: number;
+  usage?: AgentUsageDetails;
+};
+
 // Messages from host → broker
 export type HostToBroker =
   | { type: "ping"; nonce: string }
-  | { type: "agent.prompt"; prompt: string; turnId: string }
+  | {
+      type: "agent.prompt";
+      prompt: string;
+      turnId: string;
+      claudeSessionId: string;
+      resumeClaudeSession: boolean;
+      attachments?: PromptImageAttachment[];
+    }
   | { type: "agent.abort"; turnId: string }
   | { type: "file.list"; requestId: string }
   | { type: "file.read"; requestId: string; path: string }
@@ -22,6 +63,11 @@ export type BrokerToHost =
       phase: "starting" | "thinking" | "tool_use" | "writing_file" | "reviewing" | "done";
       agentId?: string;
       detail?: string;
+    }
+  | {
+      type: "agent.session";
+      turnId: string;
+      claudeSessionId: string;
     }
   | { type: "agent.chunk"; turnId: string; delta: string; agentId?: string }
   | {
@@ -39,7 +85,9 @@ export type BrokerToHost =
       tokensOut: number;
       costUsd: number;
       exitCode: number;
+      usage?: AgentUsageDetails;
     }
+  | AgentUsageEvent
   | { type: "agent.error"; turnId: string; message: string; agentId?: string }
   | {
       type: "file.list.result";
@@ -73,4 +121,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.4.0" as const;
+export const PROTOCOL_VERSION = "1.8.0" as const;

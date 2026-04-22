@@ -1,10 +1,59 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { createDaytonaClient } from "@/lib/daytona";
 import { createFakeClient } from "@/lib/daytona/fake";
 
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
+const DEFAULT_SESSION_TITLE = "Main chat";
+
+async function ensureProjectSession(projectId: string) {
+  const existing = await prisma.session.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      title: true,
+      claudeSessionId: true,
+      createdAt: true,
+      lastMessageAt: true,
+      _count: { select: { messages: true } },
+    },
+  });
+  if (existing) return existing;
+
+  return prisma.session.create({
+    data: {
+      projectId,
+      title: DEFAULT_SESSION_TITLE,
+      claudeSessionId: randomUUID(),
+    },
+    select: {
+      id: true,
+      title: true,
+      claudeSessionId: true,
+      createdAt: true,
+      lastMessageAt: true,
+      _count: { select: { messages: true } },
+    },
+  });
+}
+
+async function listProjectSessions(projectId: string) {
+  return prisma.session.findMany({
+    where: { projectId },
+    orderBy: { lastMessageAt: "desc" },
+    select: {
+      id: true,
+      title: true,
+      claudeSessionId: true,
+      createdAt: true,
+      lastMessageAt: true,
+      _count: { select: { messages: true } },
+    },
+  });
+}
 
 async function isFakePreviewReachable(previewUrl: string | null): Promise<boolean> {
   if (!previewUrl) return false;
@@ -58,7 +107,10 @@ export async function GET(
     });
   }
 
-  return NextResponse.json({ project });
+  const chatSession = await ensureProjectSession(project.id);
+  const chatSessions = await listProjectSessions(project.id);
+
+  return NextResponse.json({ project: { ...project, chatSession, chatSessions } });
 }
 
 export async function DELETE(

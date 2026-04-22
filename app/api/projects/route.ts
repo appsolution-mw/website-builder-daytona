@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { createDaytonaClient } from "@/lib/daytona";
 
@@ -40,7 +41,17 @@ export async function POST(request: NextRequest) {
   }
 
   const project = await prisma.project.create({
-    data: { name, ownerId: DEV_USER_ID, status: "PROVISIONING" },
+    data: {
+      name,
+      ownerId: DEV_USER_ID,
+      status: "PROVISIONING",
+      sessions: {
+        create: {
+          title: "Main chat",
+          claudeSessionId: randomUUID(),
+        },
+      },
+    },
   });
 
   const daytona = createDaytonaClient();

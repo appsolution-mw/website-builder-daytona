@@ -4,16 +4,43 @@ import type { Readable, Writable } from "node:stream";
 import type { BrokerToHost } from "@wbd/protocol";
 import { parseNdjsonLine, createTaskMap } from "./ndjson-parser";
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const MODEL = "claude-sonnet-4-6";
+const MINIMAL_TERMINAL_PROMPT = [
+  "You are operating in minimal terminal mode.",
+  "Only output short status updates.",
+  "No explanations unless asked.",
+  "No code unless explicitly requested.",
+  "Prefer one-line updates.",
+  "Do not list files you read or edited.",
+  "Do not emit one status line per file or tool call; group routine progress.",
+  'Examples: "Working on it...", "Updating the project...", "Checking progress...", "Done".',
+].join("\n");
 
 const REVIEWER_MODEL = "claude-sonnet-4-6";
 const REVIEWER_PROMPT =
-  "Invoke the reviewer sub-agent on the uncommitted changes from this turn. Output only the review note.";
+  "Invoke the reviewer sub-agent on the uncommitted changes from this turn. Output only a short status or concise issue bullets.";
 const REVIEWER_DEFAULT_TIMEOUT_MS = 90 * 1000;
+
+function timeoutFromEnv(name: string, fallbackMs: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallbackMs;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallbackMs;
+}
+
+function formatTimeout(ms: number): string {
+  if (ms === 0) return "no timeout";
+  const mins = ms / 60_000;
+  if (mins >= 1) return `${Number.isInteger(mins) ? mins : mins.toFixed(1)} minutes`;
+  const secs = ms / 1000;
+  return `${Number.isInteger(secs) ? secs : secs.toFixed(1)} seconds`;
+}
 
 export interface ClaudeRunnerOptions {
   projectId: string;
+  claudeSessionId: string;
+  resumeClaudeSession: boolean;
   prompt: string;
   turnId: string;
   onEvent: (event: BrokerToHost) => void;
@@ -43,22 +70,6 @@ export interface ClaudeRunnerDeps {
 }
 
 /**
- * Build a stable session-id (Claude Code requires valid UUID v4 format).
- * We derive one from the projectId via a deterministic fallback: if projectId
- * is already a UUID, use it; else generate a fresh one (session won't persist
- * across turns for non-UUID projectIds, but that's acceptable for MVP).
- */
-function sessionIdFor(projectId: string): string {
-  // Simple UUID-v4 regex check
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)
-  ) {
-    return projectId;
-  }
-  return randomUUID();
-}
-
-/**
  * Spawn `claude --print` and stream its NDJSON output as protocol events.
  * Resolves (never rejects) on any termination path — success, error, or abort.
  */
@@ -67,7 +78,7 @@ export async function runClaudeTurn(
   deps: ClaudeRunnerDeps = {},
 ): Promise<void> {
   const spawnFn: SpawnFn = deps.spawn ?? (nodeSpawn as unknown as SpawnFn);
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? timeoutFromEnv("CLAUDE_TURN_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 
   const argv = [
     "--print",
@@ -75,8 +86,10 @@ export async function runClaudeTurn(
     "--output-format",
     "stream-json",
     "--verbose",
-    "--session-id",
-    sessionIdFor(opts.projectId),
+    "--append-system-prompt",
+    MINIMAL_TERMINAL_PROMPT,
+    opts.resumeClaudeSession ? "--resume" : "--session-id",
+    opts.claudeSessionId,
     "--model",
     MODEL,
     // --dangerously-skip-permissions is blocked when running as root (Daytona
@@ -95,6 +108,7 @@ export async function runClaudeTurn(
 
   let sawResult = false;
   let aborted = false;
+  let timedOut = false;
   let stderrTail = "";
 
   const emit = (e: BrokerToHost) => {
@@ -102,18 +116,23 @@ export async function runClaudeTurn(
     opts.onEvent(e);
   };
 
-  const timeout = setTimeout(() => {
-    aborted = true;
+  const killChild = () => {
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 2000).unref();
-  }, timeoutMs);
-  timeout.unref();
+  };
+
+  const timeout = timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        killChild();
+      }, timeoutMs)
+    : null;
+  timeout?.unref();
 
   if (opts.signal) {
     opts.signal.addEventListener("abort", () => {
       aborted = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+      killChild();
     });
   }
 
@@ -138,11 +157,17 @@ export async function runClaudeTurn(
 
   await new Promise<void>((resolve) => {
     child.once("close", (code) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (buffer.trim()) {
         for (const event of parseNdjsonLine(buffer, opts.turnId, taskMap)) emit(event);
       }
-      if (aborted) {
+      if (timedOut && !sawResult) {
+        emit({
+          type: "agent.error",
+          turnId: opts.turnId,
+          message: `Claude timed out after ${formatTimeout(timeoutMs)}. Increase CLAUDE_TURN_TIMEOUT_MS for longer tasks.`,
+        });
+      } else if (aborted) {
         emit({
           type: "agent.done",
           turnId: opts.turnId,
@@ -162,7 +187,7 @@ export async function runClaudeTurn(
       resolve();
     });
     child.once("error", (err) => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       if (!sawResult) {
         emit({
           type: "agent.error",
@@ -188,7 +213,7 @@ export async function runReviewerPass(
   deps: ClaudeRunnerDeps = {},
 ): Promise<void> {
   const spawnFn: SpawnFn = deps.spawn ?? (nodeSpawn as unknown as SpawnFn);
-  const timeoutMs = opts.timeoutMs ?? REVIEWER_DEFAULT_TIMEOUT_MS;
+  const timeoutMs = opts.timeoutMs ?? timeoutFromEnv("CLAUDE_REVIEWER_TIMEOUT_MS", REVIEWER_DEFAULT_TIMEOUT_MS);
 
   const sessionId = randomUUID();
 
@@ -198,6 +223,8 @@ export async function runReviewerPass(
     "--output-format",
     "stream-json",
     "--verbose",
+    "--append-system-prompt",
+    MINIMAL_TERMINAL_PROMPT,
     "--session-id",
     sessionId,
     "--model",
@@ -215,7 +242,9 @@ export async function runReviewerPass(
   });
 
   const taskMap = createTaskMap();
+  let sawResult = false;
   let aborted = false;
+  let timedOut = false;
   let stderrTail = "";
 
   const tagReviewer = (e: BrokerToHost): BrokerToHost => {
@@ -229,20 +258,28 @@ export async function runReviewerPass(
     }
     return e;
   };
-  const emit = (e: BrokerToHost) => opts.onEvent(tagReviewer(e));
+  const emit = (e: BrokerToHost) => {
+    if (e.type === "agent.done" || e.type === "agent.error") sawResult = true;
+    opts.onEvent(tagReviewer(e));
+  };
 
-  const timeout = setTimeout(() => {
-    aborted = true;
+  const killChild = () => {
     child.kill("SIGTERM");
     setTimeout(() => child.kill("SIGKILL"), 2000).unref();
-  }, timeoutMs);
-  timeout.unref();
+  };
+
+  const timeout = timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        killChild();
+      }, timeoutMs)
+    : null;
+  timeout?.unref();
 
   if (opts.signal) {
     opts.signal.addEventListener("abort", () => {
       aborted = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+      killChild();
     });
   }
 
@@ -268,7 +305,7 @@ export async function runReviewerPass(
     const finish = () => {
       if (resolved) return;
       resolved = true;
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
       resolve();
     };
 
@@ -276,13 +313,19 @@ export async function runReviewerPass(
       // Node guarantees 'close' fires after 'error'; skip double work if we
       // already resolved from the error path.
       if (resolved) {
-        clearTimeout(timeout);
+        if (timeout) clearTimeout(timeout);
         return;
       }
       if (buffer.trim()) {
         for (const event of parseNdjsonLine(buffer, opts.turnId, taskMap)) emit(event);
       }
-      if (aborted) {
+      if (timedOut && !sawResult) {
+        emit({
+          type: "agent.error",
+          turnId: opts.turnId,
+          message: `Reviewer timed out after ${formatTimeout(timeoutMs)}. Increase CLAUDE_REVIEWER_TIMEOUT_MS for longer reviews.`,
+        });
+      } else if (aborted) {
         emit({
           type: "agent.done",
           turnId: opts.turnId,
@@ -292,7 +335,7 @@ export async function runReviewerPass(
           costUsd: 0,
           exitCode: -1,
         });
-      } else if (code !== 0 && code !== null) {
+      } else if (!sawResult && code !== 0 && code !== null) {
         emit({
           type: "agent.error",
           turnId: opts.turnId,
