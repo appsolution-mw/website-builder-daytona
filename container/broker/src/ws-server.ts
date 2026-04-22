@@ -1,7 +1,7 @@
 import { WebSocketServer, type WebSocket } from "ws";
 import type { HostToBroker, BrokerToHost } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
-import { runClaudeTurn } from "./claude-runner";
+import { runClaudeTurn, runReviewerPass, type SpawnFn } from "./claude-runner";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
 import {
   handleFileList,
@@ -18,7 +18,11 @@ export interface StartBrokerOptions {
   port: number;
   projectRoot?: string;
   enableFsTracker?: boolean;
+  /** Test-only: override child_process.spawn used by claude-runner. */
+  __testSpawn?: SpawnFn;
 }
+
+const WRITE_TOOL_NAMES = new Set(["Write", "Edit", "NotebookEdit", "Create"]);
 
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
   const projectRoot = opts.projectRoot ?? "/workspace/project";
@@ -47,23 +51,33 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     }
   };
 
+  // Per-turn counter of agent file writes. Shared across fs-tracker callback
+  // AND any write-class tool_use observer below.
+  let filesWrittenInTurn = 0;
+
   let tracker: FsTracker | undefined;
   if (enableFsTracker) {
     tracker = await createFsTracker({
       root: projectRoot,
       isAgentActive,
-      onEvent: (e) =>
+      onEvent: (e) => {
+        if (e.source === "agent" && (e.event === "add" || e.event === "change")) {
+          filesWrittenInTurn++;
+        }
         broadcast({
           type: "file.changed",
           path: e.path,
           event: e.event,
           source: e.source,
-        }),
+        });
+      },
     });
   }
 
   wss.on("connection", (socket: WebSocket) => {
-    let currentTurn: { turnId: string; ctl: AbortController } | null = null;
+    let currentTurn:
+      | { turnId: string; ctl: AbortController; reviewerCtl: AbortController }
+      | null = null;
 
     const send = (obj: unknown) => {
       if (socket.readyState === socket.OPEN) {
@@ -95,26 +109,109 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           });
           return;
         }
+
         const ctl = new AbortController();
-        currentTurn = { turnId: msg.turnId, ctl };
+        const reviewerCtl = new AbortController();
+        currentTurn = { turnId: msg.turnId, ctl, reviewerCtl };
         activeTurnCount++;
+        filesWrittenInTurn = 0;
         const projectId = process.env.PROJECT_ID ?? "unknown";
-        runClaudeTurn({
-          projectId,
-          prompt: msg.prompt,
-          turnId: msg.turnId,
-          onEvent: (event) => send(event),
-          signal: ctl.signal,
-        }).finally(() => {
-          currentTurn = null;
-          activeTurnCount = Math.max(0, activeTurnCount - 1);
-        });
+        const turnId = msg.turnId;
+
+        let coderDone:
+          | Extract<BrokerToHost, { type: "agent.done" }>
+          | null = null;
+        let coderErrored = false;
+
+        const coderOnEvent = (event: BrokerToHost) => {
+          if (event.type === "agent.tool_use" && WRITE_TOOL_NAMES.has(event.tool)) {
+            filesWrittenInTurn++;
+          }
+          if (event.type === "agent.done") {
+            coderDone = event;
+            return;
+          }
+          if (event.type === "agent.error") {
+            coderErrored = true;
+            send(event);
+            return;
+          }
+          send(event);
+        };
+
+        runClaudeTurn(
+          {
+            projectId,
+            prompt: msg.prompt,
+            turnId,
+            onEvent: coderOnEvent,
+            signal: ctl.signal,
+          },
+          opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
+        )
+          .then(async () => {
+            if (coderErrored) return;
+            if (!coderDone) return;
+            if (filesWrittenInTurn === 0) {
+              send(coderDone);
+              return;
+            }
+
+            send({ type: "agent.status", turnId, phase: "reviewing" });
+
+            let reviewerDone:
+              | Extract<BrokerToHost, { type: "agent.done" }>
+              | null = null;
+
+            const reviewerOnEvent = (event: BrokerToHost) => {
+              if (event.type === "agent.done") {
+                reviewerDone = event;
+                return;
+              }
+              send(event);
+            };
+
+            await runReviewerPass(
+              {
+                projectId,
+                turnId,
+                onEvent: reviewerOnEvent,
+                signal: reviewerCtl.signal,
+              },
+              opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
+            );
+
+            const coder = coderDone!;
+            const reviewer = reviewerDone ?? {
+              type: "agent.done" as const,
+              turnId,
+              durationMs: 0,
+              tokensIn: 0,
+              tokensOut: 0,
+              costUsd: 0,
+              exitCode: 0,
+            };
+            send({
+              type: "agent.done",
+              turnId,
+              durationMs: coder.durationMs + reviewer.durationMs,
+              tokensIn: coder.tokensIn + reviewer.tokensIn,
+              tokensOut: coder.tokensOut + reviewer.tokensOut,
+              costUsd: coder.costUsd + reviewer.costUsd,
+              exitCode: Math.max(coder.exitCode, reviewer.exitCode),
+            });
+          })
+          .finally(() => {
+            currentTurn = null;
+            activeTurnCount = Math.max(0, activeTurnCount - 1);
+          });
         return;
       }
 
       if (msg.type === "agent.abort") {
         if (currentTurn?.turnId === msg.turnId) {
           currentTurn.ctl.abort();
+          currentTurn.reviewerCtl.abort();
         }
         return;
       }
@@ -187,8 +284,6 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   return {
     port: address.port,
     close: async () => {
-      // Terminate clients + close WSS first so stray chokidar drain events
-      // during tracker.close() cannot reach live sockets.
       await new Promise<void>((resolve, reject) => {
         for (const client of wss.clients) {
           client.terminate();

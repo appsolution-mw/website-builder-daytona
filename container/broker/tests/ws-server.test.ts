@@ -156,4 +156,180 @@ describe("broker ws server", () => {
     }
     throw new Error("never saw file.write.result");
   });
+
+  it("runs reviewer after coder turn that wrote files", async () => {
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const { fakeSpawn, spawns } = spawnsSetup([
+      // coder
+      {
+        stdout: [
+          { type: "system", subtype: "init" },
+          {
+            type: "assistant",
+            message: {
+              content: [
+                {
+                  type: "tool_use",
+                  id: "tu-write-1",
+                  name: "Write",
+                  input: { file_path: "/workspace/project/x.txt", content: "ok" },
+                },
+                { type: "text", text: "wrote x.txt" },
+              ],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            duration_ms: 1000,
+            usage: { input_tokens: 5, output_tokens: 10 },
+            total_cost_usd: 0.002,
+          },
+        ],
+      },
+      // reviewer
+      {
+        stdout: [
+          {
+            type: "assistant",
+            message: { content: [{ type: "text", text: "✅ Passed" }] },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            duration_ms: 200,
+            usage: { input_tokens: 2, output_tokens: 3 },
+            total_cost_usd: 0.0005,
+          },
+        ],
+      },
+    ]);
+
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      __testSpawn: fakeSpawn,
+    });
+
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify({ type: "agent.prompt", prompt: "write x", turnId: "t1" }));
+
+    const start = Date.now();
+    while (Date.now() - start < 3000) {
+      if (events.some((e) => (e as { type?: string; turnId?: string }).type === "agent.done" && (e as { turnId?: string }).turnId === "t1")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(spawns.length).toBe(2);
+    const reviewerArgv = spawns[1].argv;
+    expect(reviewerArgv[reviewerArgv.indexOf("--print") + 1]).toMatch(/reviewer sub-agent/i);
+
+    const reviewing = events.find(
+      (e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing",
+    );
+    expect(reviewing).toBeDefined();
+
+    const reviewerChunk = events.find(
+      (e) => (e as { type?: string; agentId?: string }).type === "agent.chunk" && (e as { agentId?: string }).agentId === "reviewer",
+    );
+    expect(reviewerChunk).toBeDefined();
+
+    const dones = events.filter((e) => (e as { type?: string }).type === "agent.done");
+    expect(dones.length).toBe(1);
+    const done = dones[0] as { tokensIn: number; tokensOut: number; durationMs: number; costUsd: number };
+    expect(done.tokensIn).toBe(5 + 2);
+    expect(done.tokensOut).toBe(10 + 3);
+    expect(done.durationMs).toBe(1000 + 200);
+    expect(done.costUsd).toBeCloseTo(0.002 + 0.0005, 6);
+
+    client.close();
+  });
+
+  it("skips reviewer when coder wrote no files", async () => {
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const { fakeSpawn, spawns } = spawnsSetup([
+      {
+        stdout: [
+          { type: "system", subtype: "init" },
+          {
+            type: "assistant",
+            message: { content: [{ type: "text", text: "This project uses Next.js." }] },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            duration_ms: 400,
+            usage: { input_tokens: 3, output_tokens: 5 },
+            total_cost_usd: 0.001,
+          },
+        ],
+      },
+    ]);
+
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      __testSpawn: fakeSpawn,
+    });
+
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify({ type: "agent.prompt", prompt: "what is this?", turnId: "t2" }));
+
+    const start = Date.now();
+    while (Date.now() - start < 2000) {
+      if (events.some((e) => (e as { type?: string; turnId?: string }).type === "agent.done" && (e as { turnId?: string }).turnId === "t2")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(spawns.length).toBe(1);
+    expect(events.some((e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing")).toBe(false);
+    client.close();
+  });
+
+  it("skips reviewer when coder emits an error", async () => {
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const { fakeSpawn, spawns } = spawnsSetup([
+      {
+        stdout: [
+          { type: "system", subtype: "init" },
+          { type: "result", subtype: "error_max_turns" },
+        ],
+      },
+    ]);
+
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      __testSpawn: fakeSpawn,
+    });
+
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify({ type: "agent.prompt", prompt: "foo", turnId: "t3" }));
+
+    const start = Date.now();
+    while (Date.now() - start < 2000) {
+      if (events.some((e) => (e as { type?: string; turnId?: string }).type === "agent.error" && (e as { turnId?: string }).turnId === "t3")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(spawns.length).toBe(1);
+    expect(events.some((e) => (e as { type?: string }).type === "agent.error")).toBe(true);
+    expect(events.some((e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing")).toBe(false);
+    client.close();
+  });
 });
