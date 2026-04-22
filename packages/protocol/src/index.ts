@@ -19,11 +19,18 @@ export type BrokerToHost =
   | {
       type: "agent.status";
       turnId: string;
-      phase: "starting" | "thinking" | "tool_use" | "writing_file" | "done";
+      phase: "starting" | "thinking" | "tool_use" | "writing_file" | "reviewing" | "done";
+      agentId?: string;
       detail?: string;
     }
-  | { type: "agent.chunk"; turnId: string; delta: string }
-  | { type: "agent.tool_use"; turnId: string; tool: string; input: unknown }
+  | { type: "agent.chunk"; turnId: string; delta: string; agentId?: string }
+  | {
+      type: "agent.tool_use";
+      turnId: string;
+      tool: string;
+      input: unknown;
+      agentId?: string;
+    }
   | {
       type: "agent.done";
       turnId: string;
@@ -33,7 +40,7 @@ export type BrokerToHost =
       costUsd: number;
       exitCode: number;
     }
-  | { type: "agent.error"; turnId: string; message: string }
+  | { type: "agent.error"; turnId: string; message: string; agentId?: string }
   | {
       type: "file.list.result";
       requestId: string;
@@ -66,4 +73,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.3.0" as const;
+export const PROTOCOL_VERSION = "1.4.0" as const;
