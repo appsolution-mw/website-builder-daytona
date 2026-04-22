@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n next,broker,proxy -c blue,green,yellow \"pnpm dev:next\" \"pnpm dev:broker\" \"pnpm dev:proxy\"",
+    "dev": "pnpm dev:clean && concurrently -n next,broker,proxy -c blue,green,yellow \"pnpm dev:next\" \"pnpm dev:broker\" \"pnpm dev:proxy\"",
+    "dev:clean": "sh scripts/clean-ports.sh",
     "dev:next": "next dev",
     "dev:broker": "pnpm -F @wbd/broker dev",
     "dev:proxy": "pnpm -F @wbd/ws-proxy dev",
