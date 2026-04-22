@@ -292,24 +292,31 @@ export default function ProjectWorkspace({
     ws.onopen = async () => {
       setWsStatus("open");
       const requestId = crypto.randomUUID();
+      console.log("[ws] onopen → sending file.list", requestId);
       try {
         const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.list.result" }>>(
           { type: "file.list", requestId },
           requestId,
         );
+        console.log("[ws] file.list reply", reply);
         setPaths(reply.paths.slice().sort());
-      } catch {
-        // tree stays empty; user reloads page
+      } catch (err) {
+        console.error("[ws] file.list failed", err);
       }
     };
-    ws.onclose = () => setWsStatus("closed");
+    ws.onclose = () => {
+      console.log("[ws] onclose");
+      setWsStatus("closed");
+    };
     ws.onmessage = (ev) => {
       let parsed: ProxyToBrowser;
       try {
         parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
       } catch {
+        console.warn("[ws] non-json message", ev.data);
         return;
       }
+      console.log("[ws] message", parsed.type, parsed);
       handleEventRef.current(parsed);
     };
     return () => ws.close();
@@ -434,6 +441,8 @@ export default function ProjectWorkspace({
           <Link href="/" className="text-sm underline">← back</Link>
           <h1 className="text-lg font-semibold">{project.name}</h1>
           <span className="text-xs text-gray-500">WS: {wsStatus}</span>
+          <span className="text-xs text-gray-500">paths: {paths.length}</span>
+          <span className="text-xs text-gray-500">tab: {tab}</span>
         </div>
       </header>
 
