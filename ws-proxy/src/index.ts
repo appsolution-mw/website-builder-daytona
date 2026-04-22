@@ -1,5 +1,12 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
+
+// Load .env from monorepo root (this file lives at ws-proxy/src/index.ts,
+// so `../../` from __dirname resolves to the repo root).
+const __dirname = dirname(fileURLToPath(import.meta.url));
+loadDotenv({ path: resolve(__dirname, "../../.env") });
 
 export interface ProxyHandle {
   port: number;
