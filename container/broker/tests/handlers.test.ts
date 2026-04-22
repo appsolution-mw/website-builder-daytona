@@ -18,4 +18,9 @@ describe("broker handlers", () => {
       message: 'Unknown message type: "garbage"',
     });
   });
+
+  it("returns undefined for stateful agent message types", () => {
+    expect(handleMessage({ type: "agent.prompt", prompt: "x", turnId: "t" })).toBeUndefined();
+    expect(handleMessage({ type: "agent.abort", turnId: "t" })).toBeUndefined();
+  });
 });
