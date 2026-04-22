@@ -1,4 +1,8 @@
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startBroker, type BrokerHandle } from "@wbd/broker";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
 
@@ -7,8 +11,13 @@ interface FakeSandbox {
   broker: BrokerHandle;
   preview: Server;
   previewPort: number;
+  projectRoot: string;
   status: SandboxStatus;
 }
+
+const PROJECT_TEMPLATE_DIR = resolve(
+  fileURLToPath(new URL("../../container/project-template", import.meta.url)),
+);
 
 declare global {
   // Keep fake sandbox handles alive across repeated client factory calls in dev.
@@ -66,7 +75,9 @@ async function closeServer(server: Server): Promise<void> {
 export function createFakeClient(): DaytonaClient {
   return {
     async spawnProjectSandbox({ projectId }): Promise<SandboxInfo> {
-      const broker = await startBroker({ port: 0 });
+      const projectRoot = await mkdtemp(join(tmpdir(), `wbd-fake-${projectId}-`));
+      await cp(PROJECT_TEMPLATE_DIR, projectRoot, { recursive: true });
+      const broker = await startBroker({ port: 0, projectRoot });
       const preview = await startPreviewServer(projectId);
       const id = `fake-${projectId}-${broker.port}`;
       sandboxes.set(id, {
@@ -74,6 +85,7 @@ export function createFakeClient(): DaytonaClient {
         broker,
         preview: preview.server,
         previewPort: preview.port,
+        projectRoot,
         status: "running",
       });
       return {
@@ -88,6 +100,7 @@ export function createFakeClient(): DaytonaClient {
       const sb = sandboxes.get(sandboxId);
       if (!sb) return;
       await Promise.all([sb.broker.close(), closeServer(sb.preview)]);
+      await rm(sb.projectRoot, { recursive: true, force: true });
       sb.status = "destroyed";
       sandboxes.delete(sandboxId);
     },
