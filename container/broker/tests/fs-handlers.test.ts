@@ -79,4 +79,89 @@ describe("fs-handlers", () => {
       expect(r).toEqual({ path: "blob.bin", error: "binary" });
     });
   });
+
+  describe("handleFileWrite", () => {
+    beforeEach(async () => {
+      tracker = await createFsTracker({ root, isAgentActive: () => false, onEvent: () => {} });
+    });
+
+    it("writes content to the target path", async () => {
+      const r = await handleFileWrite({
+        root,
+        path: "new.txt",
+        content: "hello",
+        isLocked: () => false,
+      });
+      expect(r).toEqual({ path: "new.txt", ok: true });
+      const read = await readFile(join(root, "new.txt"), "utf8");
+      expect(read).toBe("hello");
+    });
+
+    it("creates parent directories when missing", async () => {
+      const r = await handleFileWrite({
+        root,
+        path: "nested/deep/file.ts",
+        content: "x",
+        isLocked: () => false,
+      });
+      expect(r.ok).toBe(true);
+      const read = await readFile(join(root, "nested/deep/file.ts"), "utf8");
+      expect(read).toBe("x");
+    });
+
+    it("returns locked when isLocked() is true and does not touch disk", async () => {
+      await writeFile(join(root, "a.txt"), "original");
+      const r = await handleFileWrite({
+        root,
+        path: "a.txt",
+        content: "overwritten",
+        isLocked: () => true,
+      });
+      expect(r).toEqual({ path: "a.txt", ok: false, reason: "locked" });
+      expect(await readFile(join(root, "a.txt"), "utf8")).toBe("original");
+    });
+
+    it("returns invalid_path for absolute targets", async () => {
+      const r = await handleFileWrite({
+        root,
+        path: "/etc/evil",
+        content: "x",
+        isLocked: () => false,
+      });
+      expect(r).toEqual({ path: "/etc/evil", ok: false, reason: "invalid_path" });
+    });
+
+    it("returns invalid_path for .. escapes", async () => {
+      const r = await handleFileWrite({
+        root,
+        path: "../outside",
+        content: "x",
+        isLocked: () => false,
+      });
+      expect(r).toEqual({ path: "../outside", ok: false, reason: "invalid_path" });
+    });
+
+    it("returns too_large when content exceeds 1 MB", async () => {
+      const big = "x".repeat(1024 * 1024 + 1);
+      const r = await handleFileWrite({
+        root,
+        path: "big.txt",
+        content: big,
+        isLocked: () => false,
+      });
+      expect(r).toEqual({ path: "big.txt", ok: false, reason: "too_large" });
+    });
+
+    it("does not leave a stray tmp file when write succeeds", async () => {
+      await handleFileWrite({
+        root,
+        path: "atomic.txt",
+        content: "abc",
+        isLocked: () => false,
+      });
+      const { readdir } = await import("node:fs/promises");
+      const entries = await readdir(root);
+      expect(entries.filter((n) => n.startsWith(".tmp-"))).toEqual([]);
+    });
+  });
 });

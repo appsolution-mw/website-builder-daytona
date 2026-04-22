@@ -81,8 +81,35 @@ export interface FileWriteOptions {
   content: string;
   isLocked: () => boolean;
 }
-export async function handleFileWrite(_opts: FileWriteOptions): Promise<FileWriteResult> {
-  throw new Error("not implemented yet");
+export async function handleFileWrite(opts: FileWriteOptions): Promise<FileWriteResult> {
+  if (opts.isLocked()) {
+    return { path: opts.path, ok: false, reason: "locked" };
+  }
+  const abs = resolveSafe(opts.root, opts.path);
+  if (!abs) return { path: opts.path, ok: false, reason: "invalid_path" };
+  if (Buffer.byteLength(opts.content, "utf8") > MAX_BYTES) {
+    return { path: opts.path, ok: false, reason: "too_large" };
+  }
+
+  try {
+    await mkdir(dirname(abs), { recursive: true });
+  } catch {
+    return { path: opts.path, ok: false, reason: "io_error" };
+  }
+
+  const tmp = join(dirname(abs), `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  try {
+    await writeFile(tmp, opts.content, "utf8");
+    await rename(tmp, abs);
+  } catch {
+    try {
+      await unlink(tmp);
+    } catch {
+      // ignore — tmp may not exist if writeFile failed before creating it
+    }
+    return { path: opts.path, ok: false, reason: "io_error" };
+  }
+  return { path: opts.path, ok: true };
 }
 
 export { resolveSafe, toPosix, MAX_BYTES };
