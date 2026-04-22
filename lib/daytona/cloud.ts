@@ -16,15 +16,21 @@ function getDaytona(): Daytona {
 /**
  * Build the one-liner shell command that the host runs inside the sandbox
  * AFTER create returns. This command:
- *   1. installs git + pnpm (alpine needs git; corepack ships with node:24-alpine)
- *   2. clones the private monorepo using the caller-provided PAT
- *   3. cd's into the repo
- *   4. invokes the committed entrypoint.sh, which installs deps and starts both
- *      broker and next dev
+ *   1. Downloads the monorepo as a tarball via GitHub API (no git required —
+ *      Alpine's apk CDN is unreachable inside Daytona sandboxes due to TLS/
+ *      network restrictions, so `apk add git` fails; wget + GitHub tarball
+ *      API works because it only needs HTTPS to api.github.com).
+ *   2. Extracts the tarball and normalises the top-level directory to "repo".
+ *   3. Enables pnpm via corepack (already present in node:24-alpine).
+ *   4. Invokes container/entrypoint.sh in the background, which installs deps
+ *      and starts both broker and next dev.
  *
  * The command is passed verbatim to sandbox.process.executeCommand.
  * We background the whole thing with `nohup ... &` so executeCommand returns
  * promptly — the broker/next processes continue running inside the sandbox.
+ *
+ * NOTE: apk repo access inside Daytona Cloud sandboxes is blocked (403 from
+ * CDN and TLS errors). Do NOT add `apk add ...` steps here — they will fail.
  */
 function buildBootCommand(args: {
   projectId: string;
@@ -38,12 +44,17 @@ function buildBootCommand(args: {
   // single quotes (tokens alnum+underscore+dash; owner/repo/branch per
   // GitHub/Git ref-format constraints).
   return [
-    `apk add --no-cache git`,
-    `corepack enable pnpm`,
     `mkdir -p /workspace`,
     `cd /workspace`,
-    `git clone --depth=1 -b '${branch}' "https://x-access-token:${cloneToken}@github.com/${repoOwner}/${repoName}.git" repo`,
+    // Download the repo as a tarball via GitHub API — no git needed
+    `wget -q --header='Authorization: token ${cloneToken}' -O repo.tar.gz 'https://api.github.com/repos/${repoOwner}/${repoName}/tarball/${branch}'`,
+    // Extract: GitHub tarball has a single top-level dir with a commit hash;
+    // rename it to "repo" for a predictable path.
+    `tar -xzf repo.tar.gz`,
+    `mv $(tar -tzf repo.tar.gz | head -1 | cut -d/ -f1) repo`,
+    `rm repo.tar.gz`,
     `cd repo`,
+    `corepack enable pnpm`,
     `PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/entrypoint.sh > /workspace/entrypoint.log 2>&1 &`,
     // Give the entrypoint a moment to get going before returning
     `sleep 3`,

@@ -3,8 +3,13 @@
 #
 # PREREQUISITE: This script assumes the monorepo is already checked out at
 # the current working directory. The caller (host's cloud Daytona client)
-# is responsible for: apk-adding git + corepack, cloning the repo with the
-# GITHUB_CLONE_TOKEN, cd'ing into the repo, and then invoking this script.
+# is responsible for: downloading the repo tarball via GitHub API (wget),
+# extracting it to /workspace/repo, enabling corepack/pnpm, cd'ing into the
+# repo, and then invoking this script.
+#
+# NOTE: Do NOT rely on `apk add` in the boot sequence. Alpine's package CDN
+# is blocked inside Daytona Cloud sandboxes (TLS/403 errors). Use only tools
+# already present in the node:24-alpine base image (wget, tar, corepack).
 #
 # Required env (injected by the host when calling daytona.create / executeCommand):
 #   PROJECT_ID             — UUID of the project (exposed to the template)
