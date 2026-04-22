@@ -98,11 +98,12 @@ export async function createFsTracker(opts: FsTrackerOptions): Promise<FsTracker
     console.error("[fs-tracker] chokidar error:", err);
   });
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     watcher.once("ready", () => {
       ready = true;
       resolve();
     });
+    watcher.once("error", reject);
   });
 
   return {
