@@ -76,7 +76,11 @@ describe("runClaudeTurn", () => {
     expect(argv).toContain("--verbose");
     expect(argv).toContain("--session-id");
     expect(argv).toContain("--model");
-    expect(argv).toContain("--dangerously-skip-permissions");
+    // Claude Code v2.1.117 refuses --dangerously-skip-permissions under root,
+    // which containers always run as. Use --permission-mode acceptEdits instead.
+    expect(argv).toContain("--permission-mode");
+    expect(argv).toContain("acceptEdits");
+    expect(argv).not.toContain("--dangerously-skip-permissions");
     // --max-turns is NOT supported in Claude Code v2.1.116+; must not be passed
     expect(argv).not.toContain("--max-turns");
   });
