@@ -273,6 +273,12 @@ export async function runReviewerPass(
     };
 
     child.once("close", (code) => {
+      // Node guarantees 'close' fires after 'error'; skip double work if we
+      // already resolved from the error path.
+      if (resolved) {
+        clearTimeout(timeout);
+        return;
+      }
       if (buffer.trim()) {
         for (const event of parseNdjsonLine(buffer, opts.turnId, taskMap)) emit(event);
       }
