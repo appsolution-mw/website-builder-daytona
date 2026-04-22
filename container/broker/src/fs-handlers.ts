@@ -97,6 +97,11 @@ export async function handleFileWrite(opts: FileWriteOptions): Promise<FileWrite
     return { path: opts.path, ok: false, reason: "io_error" };
   }
 
+  // Re-check lock after async mkdir — a turn may have started while we awaited.
+  if (opts.isLocked()) {
+    return { path: opts.path, ok: false, reason: "locked" };
+  }
+
   const tmp = join(dirname(abs), `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   try {
     await writeFile(tmp, opts.content, "utf8");
@@ -105,7 +110,7 @@ export async function handleFileWrite(opts: FileWriteOptions): Promise<FileWrite
     try {
       await unlink(tmp);
     } catch {
-      // ignore — tmp may not exist if writeFile failed before creating it
+      // ignore
     }
     return { path: opts.path, ok: false, reason: "io_error" };
   }
