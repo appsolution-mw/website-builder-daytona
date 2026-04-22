@@ -1,7 +1,13 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import type { HostToBroker } from "@wbd/protocol";
+import type { HostToBroker, BrokerToHost } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
 import { runClaudeTurn } from "./claude-runner";
+import { createFsTracker, type FsTracker } from "./fs-tracker";
+import {
+  handleFileList,
+  handleFileRead,
+  handleFileWrite,
+} from "./fs-handlers";
 
 export interface BrokerHandle {
   port: number;
@@ -9,11 +15,15 @@ export interface BrokerHandle {
 }
 
 export interface StartBrokerOptions {
-  /** Port to listen on. Use 0 to let the OS pick an available port. */
   port: number;
+  projectRoot?: string;
+  enableFsTracker?: boolean;
 }
 
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
+  const projectRoot = opts.projectRoot ?? "/workspace/project";
+  const enableFsTracker = opts.enableFsTracker ?? true;
+
   const wss = new WebSocketServer({ port: opts.port });
 
   await new Promise<void>((resolve, reject) => {
@@ -26,8 +36,33 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     throw new Error("ws server did not bind to a numeric port");
   }
 
+  let activeTurnCount = 0;
+  const isAgentActive = () => activeTurnCount > 0;
+  const isLocked = () => activeTurnCount > 0;
+
+  const broadcast = (msg: BrokerToHost) => {
+    const data = JSON.stringify(msg);
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) client.send(data);
+    }
+  };
+
+  let tracker: FsTracker | undefined;
+  if (enableFsTracker) {
+    tracker = await createFsTracker({
+      root: projectRoot,
+      isAgentActive,
+      onEvent: (e) =>
+        broadcast({
+          type: "file.changed",
+          path: e.path,
+          event: e.event,
+          source: e.source,
+        }),
+    });
+  }
+
   wss.on("connection", (socket: WebSocket) => {
-    // Per-connection state
     let currentTurn: { turnId: string; ctl: AbortController } | null = null;
 
     const send = (obj: unknown) => {
@@ -51,7 +86,6 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
 
       const msg = parsed as HostToBroker;
 
-      // Stateful branches
       if (msg.type === "agent.prompt") {
         if (currentTurn) {
           send({
@@ -63,6 +97,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         }
         const ctl = new AbortController();
         currentTurn = { turnId: msg.turnId, ctl };
+        activeTurnCount++;
         const projectId = process.env.PROJECT_ID ?? "unknown";
         runClaudeTurn({
           projectId,
@@ -72,6 +107,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           signal: ctl.signal,
         }).finally(() => {
           currentTurn = null;
+          activeTurnCount = Math.max(0, activeTurnCount - 1);
         });
         return;
       }
@@ -83,7 +119,66 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         return;
       }
 
-      // Stateless: defer to pure handler
+      if (msg.type === "file.list") {
+        if (!tracker) {
+          send({ type: "file.list.result", requestId: msg.requestId, paths: [] });
+          return;
+        }
+        const r = handleFileList(tracker);
+        send({ type: "file.list.result", requestId: msg.requestId, paths: r.paths });
+        return;
+      }
+
+      if (msg.type === "file.read") {
+        handleFileRead({ root: projectRoot, path: msg.path })
+          .then((r) => {
+            send({
+              type: "file.content",
+              requestId: msg.requestId,
+              path: r.path,
+              ...(r.content !== undefined ? { content: r.content } : {}),
+              ...(r.error ? { error: r.error } : {}),
+            });
+          })
+          .catch(() => {
+            send({
+              type: "file.content",
+              requestId: msg.requestId,
+              path: msg.path,
+              error: "io_error",
+            });
+          });
+        return;
+      }
+
+      if (msg.type === "file.write") {
+        handleFileWrite({
+          root: projectRoot,
+          path: msg.path,
+          content: msg.content,
+          isLocked,
+        })
+          .then((r) => {
+            send({
+              type: "file.write.result",
+              requestId: msg.requestId,
+              path: r.path,
+              ok: r.ok,
+              ...(r.reason ? { reason: r.reason } : {}),
+            });
+          })
+          .catch(() => {
+            send({
+              type: "file.write.result",
+              requestId: msg.requestId,
+              path: msg.path,
+              ok: false,
+              reason: "io_error",
+            });
+          });
+        return;
+      }
+
       const reply = handleMessage(msg);
       if (reply) send(reply);
     });
@@ -91,12 +186,14 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
 
   return {
     port: address.port,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
+    close: async () => {
+      if (tracker) await tracker.close();
+      await new Promise<void>((resolve, reject) => {
         for (const client of wss.clients) {
           client.terminate();
         }
         wss.close((err) => (err ? reject(err) : resolve()));
-      }),
+      });
+    },
   };
 }
