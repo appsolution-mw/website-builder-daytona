@@ -27,6 +27,10 @@ describe("fake daytona client", () => {
     expect(info.brokerUrl).toMatch(/^ws:\/\/localhost:\d+$/);
     expect(info.previewUrl).toMatch(/^http:\/\//);
 
+    const preview = await fetch(info.previewUrl);
+    expect(preview.ok).toBe(true);
+    expect(await preview.text()).toContain("Hello from project p1");
+
     const ws = new WebSocket(info.brokerUrl);
     const reply = await new Promise<string>((resolve, reject) => {
       ws.once("open", () => ws.send(JSON.stringify({ type: "ping", nonce: "x" })));

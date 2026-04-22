@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState, type FormEvent } from "react";
+import { use, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
 
@@ -25,6 +25,9 @@ type ChatMessage =
   | { kind: "error"; turnId: string | null; text: string };
 
 const POLL_INTERVAL_MS = 2_000;
+const DEFAULT_CHAT_WIDTH_PCT = 28;
+const MIN_CHAT_WIDTH_PCT = 22;
+const MAX_CHAT_WIDTH_PCT = 45;
 
 function formatDoneFooter(d: {
   durationMs: number;
@@ -65,49 +68,30 @@ export default function ProjectWorkspace({
   const [prompt, setPrompt] = useState("");
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const [chatWidthPct, setChatWidthPct] = useState(DEFAULT_CHAT_WIDTH_PCT);
 
-  // Poll project until RUNNING or DESTROYED
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | null = null;
-    async function loadOnce() {
-      const res = await fetch(`/api/projects/${id}`);
-      if (!res.ok) return;
-      const data = (await res.json()) as { project: Project };
-      if (cancelled) return;
-      setProject(data.project);
-      if (data.project.status === "PROVISIONING") {
-        timer = window.setTimeout(loadOnce, POLL_INTERVAL_MS);
-      }
-    }
-    loadOnce();
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-  }, [id]);
+  function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = workspace.getBoundingClientRect();
 
-  // Open WS once project is RUNNING
-  useEffect(() => {
-    if (project?.status !== "RUNNING") return;
-    const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
-    const ws = new WebSocket(`${base}/p/${id}`);
-    wsRef.current = ws;
-    setWsStatus("connecting");
-    ws.onopen = () => setWsStatus("open");
-    ws.onclose = () => setWsStatus("closed");
-    ws.onmessage = (ev) => {
-      let parsed: ProxyToBrowser;
-      try {
-        parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
-      } catch {
-        return;
-      }
-      handleEvent(parsed);
+    const updateWidth = (clientX: number) => {
+      const next = ((clientX - rect.left) / rect.width) * 100;
+      setChatWidthPct(Math.min(MAX_CHAT_WIDTH_PCT, Math.max(MIN_CHAT_WIDTH_PCT, next)));
     };
-    return () => ws.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.status, id]);
+
+    updateWidth(e.clientX);
+    const onPointerMove = (ev: PointerEvent) => updateWidth(ev.clientX);
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+  }
 
   function handleEvent(ev: ProxyToBrowser) {
     if (ev.type === "agent.status") {
@@ -185,8 +169,49 @@ export default function ProjectWorkspace({
       setTurnInFlight(null);
       return;
     }
-    // pong / error / other → ignore silently
+    // pong / error / other -> ignore silently
   }
+
+  // Poll project until RUNNING or DESTROYED
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    async function loadOnce() {
+      const res = await fetch(`/api/projects/${id}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { project: Project };
+      if (cancelled) return;
+      setProject(data.project);
+      if (data.project.status === "PROVISIONING") {
+        timer = window.setTimeout(loadOnce, POLL_INTERVAL_MS);
+      }
+    }
+    loadOnce();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [id]);
+
+  // Open WS once project is RUNNING
+  useEffect(() => {
+    if (project?.status !== "RUNNING") return;
+    const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
+    const ws = new WebSocket(`${base}/p/${id}`);
+    wsRef.current = ws;
+    ws.onopen = () => setWsStatus("open");
+    ws.onclose = () => setWsStatus("closed");
+    ws.onmessage = (ev) => {
+      let parsed: ProxyToBrowser;
+      try {
+        parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
+      } catch {
+        return;
+      }
+      handleEvent(parsed);
+    };
+    return () => ws.close();
+  }, [project?.status, id]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -251,8 +276,11 @@ export default function ProjectWorkspace({
         </div>
       </header>
 
-      <div className="grid flex-1 grid-cols-2 gap-0 divide-x divide-gray-200 overflow-hidden">
-        <section className="flex min-w-0 flex-col overflow-hidden">
+      <div ref={workspaceRef} className="flex flex-1 overflow-hidden">
+        <section
+          className="flex min-w-[260px] flex-col overflow-hidden"
+          style={{ flexBasis: `${chatWidthPct}%` }}
+        >
           <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Chat</h2>
           <ul className="flex flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
             {messages.length === 0 && <li className="text-gray-400">No messages yet.</li>}
@@ -321,12 +349,23 @@ export default function ProjectWorkspace({
           </form>
         </section>
 
-        <section className="flex min-w-0 flex-col overflow-hidden">
+        <div
+          className="w-1 shrink-0 cursor-col-resize bg-gray-200 transition hover:bg-gray-400"
+          onPointerDown={onResizeStart}
+          role="separator"
+          aria-label="Resize chat panel"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_CHAT_WIDTH_PCT}
+          aria-valuemax={MAX_CHAT_WIDTH_PCT}
+          aria-valuenow={Math.round(chatWidthPct)}
+        />
+
+        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Preview</h2>
           {project.previewUrl ? (
             <iframe
               src={project.previewUrl}
-              className="flex-1"
+              className="flex-1 border-0"
               sandbox="allow-scripts allow-same-origin allow-forms"
               title="project preview"
             />

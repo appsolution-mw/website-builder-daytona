@@ -1,33 +1,95 @@
+import { createServer, type Server } from "node:http";
 import { startBroker, type BrokerHandle } from "@wbd/broker";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
 
 interface FakeSandbox {
   id: string;
   broker: BrokerHandle;
+  preview: Server;
+  previewPort: number;
   status: SandboxStatus;
 }
 
-export function createFakeClient(): DaytonaClient {
-  const sandboxes = new Map<string, FakeSandbox>();
+declare global {
+  // Keep fake sandbox handles alive across repeated client factory calls in dev.
+  var __wbdFakeSandboxes: Map<string, FakeSandbox> | undefined;
+}
 
+const sandboxes = globalThis.__wbdFakeSandboxes ?? new Map<string, FakeSandbox>();
+globalThis.__wbdFakeSandboxes = sandboxes;
+
+async function startPreviewServer(projectId: string): Promise<{ server: Server; port: number }> {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
+    res.end(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Preview</title>
+    <style>
+      body { margin: 0; font-family: Arial, Helvetica, sans-serif; color: #171717; background: #fff; }
+      main { padding: 2rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hello from project ${projectId}</h1>
+      <p>This is a placeholder template. Later phases will let you edit the code that runs here.</p>
+    </main>
+  </body>
+</html>`);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1");
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("preview server did not bind to a numeric port");
+  }
+  return { server, port: address.port };
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+export function createFakeClient(): DaytonaClient {
   return {
     async spawnProjectSandbox({ projectId }): Promise<SandboxInfo> {
       const broker = await startBroker({ port: 0 });
+      const preview = await startPreviewServer(projectId);
       const id = `fake-${projectId}-${broker.port}`;
-      sandboxes.set(id, { id, broker, status: "running" });
+      sandboxes.set(id, {
+        id,
+        broker,
+        preview: preview.server,
+        previewPort: preview.port,
+        status: "running",
+      });
       return {
         sandboxId: id,
         brokerUrl: `ws://localhost:${broker.port}`,
         brokerPreviewToken: "",
-        previewUrl: `http://localhost:${broker.port}/__fake-preview`,
+        previewUrl: `http://localhost:${preview.port}`,
       };
     },
 
     async destroyProjectSandbox(sandboxId: string): Promise<void> {
       const sb = sandboxes.get(sandboxId);
       if (!sb) return;
-      await sb.broker.close();
+      await Promise.all([sb.broker.close(), closeServer(sb.preview)]);
       sb.status = "destroyed";
+      sandboxes.delete(sandboxId);
     },
 
     async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

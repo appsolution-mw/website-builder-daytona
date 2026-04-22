@@ -34,7 +34,23 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    async function loadInitial() {
+      try {
+        const res = await fetch("/api/projects");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { projects: Project[] };
+        if (!cancelled) setProjects(data.projects);
+      } catch (err) {
+        if (cancelled) return;
+        setProjects([]);
+        setError(err instanceof Error ? err.message : "failed to load");
+      }
+    }
+    loadInitial();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Poll while any project is PROVISIONING
