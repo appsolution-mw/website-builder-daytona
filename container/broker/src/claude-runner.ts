@@ -74,7 +74,12 @@ export async function runClaudeTurn(
     sessionIdFor(opts.projectId),
     "--model",
     MODEL,
-    "--dangerously-skip-permissions",
+    // --dangerously-skip-permissions is blocked when running as root (Daytona
+    // containers run as root).  --permission-mode acceptEdits lets Claude edit
+    // files without interactive confirmation, which is equivalent for our
+    // sandboxed use-case.
+    "--permission-mode",
+    "acceptEdits",
   ];
 
   const child: SpawnedChild = spawnFn("claude", argv, {
