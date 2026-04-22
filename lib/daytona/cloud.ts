@@ -108,10 +108,18 @@ export function createCloudClient(): DaytonaClient {
         public: true, // preview URLs are unauthenticated
         envVars: {
           PROJECT_ID: projectId,
+          AGENT_RUNTIME: process.env.AGENT_RUNTIME ?? process.env.AGENT_PROVIDER ?? "claude-code",
           ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
           CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
           CLAUDE_TURN_TIMEOUT_MS: process.env.CLAUDE_TURN_TIMEOUT_MS ?? "",
           CLAUDE_REVIEWER_TIMEOUT_MS: process.env.CLAUDE_REVIEWER_TIMEOUT_MS ?? "",
+          OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
+          CODEX_API_KEY: process.env.CODEX_API_KEY ?? "",
+          CODEX_MODEL: process.env.CODEX_MODEL ?? "",
+          CODEX_REVIEWER_MODEL: process.env.CODEX_REVIEWER_MODEL ?? "",
+          CODEX_REASONING_EFFORT: process.env.CODEX_REASONING_EFFORT ?? "",
+          CODEX_REVIEWER_REASONING_EFFORT: process.env.CODEX_REVIEWER_REASONING_EFFORT ?? "",
+          CODEX_NETWORK_ACCESS: process.env.CODEX_NETWORK_ACCESS ?? "",
         },
       });
 

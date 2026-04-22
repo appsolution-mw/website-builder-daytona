@@ -10,7 +10,8 @@ import type {
   PromptImageAttachment,
 } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
-import { runClaudeTurn, runReviewerPass, type SpawnFn } from "./claude-runner";
+import type { SpawnFn } from "./claude-runner";
+import { createAgentProvider } from "./agent-provider-factory";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
 import {
   handleFileList,
@@ -203,6 +204,8 @@ async function savePromptAttachments(args: {
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
   const projectRoot = opts.projectRoot ?? "/workspace/project";
   const enableFsTracker = opts.enableFsTracker ?? true;
+  const agentProvider = createAgentProvider({ __testSpawn: opts.__testSpawn });
+  console.log(`[broker] agent runtime=${agentProvider.runtime}`);
 
   const wss = new WebSocketServer({ port: opts.port });
 
@@ -364,17 +367,16 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
             ? [msg.prompt, ...attachmentResult.promptLines].join("\n")
             : msg.prompt;
 
-          await runClaudeTurn(
+          await agentProvider.runTurn(
             {
               projectId,
-              claudeSessionId: msg.claudeSessionId,
-              resumeClaudeSession: msg.resumeClaudeSession,
+              sessionId: msg.claudeSessionId,
+              resumeSession: msg.resumeClaudeSession,
               prompt,
               turnId,
               onEvent: coderOnEvent,
               signal: ctl.signal,
             },
-            opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
           );
         })()
           .then(async () => {
@@ -403,15 +405,12 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               send(event);
             };
 
-            await runReviewerPass(
-              {
-                projectId,
-                turnId,
-                onEvent: reviewerOnEvent,
-                signal: reviewerCtl.signal,
-              },
-              opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
-            );
+            await agentProvider.runReview?.({
+              projectId,
+              turnId,
+              onEvent: reviewerOnEvent,
+              signal: reviewerCtl.signal,
+            });
 
             if (!coderDone) return;
             const coder = coderDone;
