@@ -11,7 +11,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7",
+    "@prisma/client": "^7",
     "@wbd/protocol": "workspace:*",
+    "pg": "^8",
     "ws": "^8.18.0"
   },
   "devDependencies": {

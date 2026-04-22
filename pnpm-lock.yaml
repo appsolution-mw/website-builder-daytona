@@ -115,9 +115,18 @@ importers:
 
   ws-proxy:
     dependencies:
+      '@prisma/adapter-pg':
+        specifier: ^7
+        version: 7.7.0
+      '@prisma/client':
+        specifier: ^7
+        version: 7.7.0(prisma@7.7.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3))(typescript@5.9.3)
       '@wbd/protocol':
         specifier: workspace:*
         version: link:../packages/protocol
+      pg:
+        specifier: ^8
+        version: 8.20.0
       ws:
         specifier: ^8.18.0
         version: 8.20.0

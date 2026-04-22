@@ -110,15 +110,25 @@ export function extractProjectId(url: string): string | null {
 // Runnable entry point when invoked directly
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  const { prisma } = await import("./db");
   const port = Number(process.env.WS_PROXY_PORT ?? 4100);
-  const brokerPort = Number(process.env.BROKER_PORT ?? 4000);
   const handle = await startProxy({
     port,
-    resolveBrokerUrl: () => `ws://localhost:${brokerPort}`,
+    resolveBrokerUrl: async (projectId) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { brokerUrl: true, status: true },
+      });
+      if (!project || project.status !== "RUNNING" || !project.brokerUrl) {
+        throw new Error(`project ${projectId} is not running`);
+      }
+      return project.brokerUrl;
+    },
   });
   console.log(`[ws-proxy] listening on ws://localhost:${handle.port}`);
   const shutdown = async () => {
     await handle.close();
+    await prisma.$disconnect();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
