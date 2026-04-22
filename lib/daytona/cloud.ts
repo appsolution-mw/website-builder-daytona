@@ -43,22 +43,32 @@ function buildBootCommand(args: {
   // Single-quote-safe: neither token nor repo names nor branch can contain
   // single quotes (tokens alnum+underscore+dash; owner/repo/branch per
   // GitHub/Git ref-format constraints).
-  return [
+  //
+  // IMPORTANT: The backgrounded command (`nohup ... &`) MUST be followed by
+  // a plain space + next command, NOT `&&`. The shell interprets `& &&` as a
+  // syntax error, and `& ;` is also invalid. In POSIX sh, `cmd1 & cmd2` runs
+  // cmd1 in the background and cmd2 in the foreground — that is the correct
+  // form. Here `sleep 3` is the foreground command that keeps executeCommand
+  // alive long enough for the entrypoint to start writing its log.
+  const setupSteps = [
     `mkdir -p /workspace`,
     `cd /workspace`,
     // Download the repo as a tarball via GitHub API — no git needed
     `wget -q --header='Authorization: token ${cloneToken}' -O repo.tar.gz 'https://api.github.com/repos/${repoOwner}/${repoName}/tarball/${branch}'`,
     // Extract: GitHub tarball has a single top-level dir with a commit hash;
-    // rename it to "repo" for a predictable path.
+    // capture the dir name before extracting so we can rename it to "repo".
+    `TOPDIR=$(tar -tzf repo.tar.gz | head -1 | cut -d/ -f1)`,
     `tar -xzf repo.tar.gz`,
-    `mv $(tar -tzf repo.tar.gz | head -1 | cut -d/ -f1) repo`,
+    `mv "$TOPDIR" repo`,
     `rm repo.tar.gz`,
     `cd repo`,
     `corepack enable pnpm`,
-    `PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/entrypoint.sh > /workspace/entrypoint.log 2>&1 &`,
-    // Give the entrypoint a moment to get going before returning
-    `sleep 3`,
   ].join(" && ");
+
+  // `nohup ... & sleep 3`: background the entrypoint, then sleep so the
+  // executeCommand session stays alive while nohup starts. No `&&` or `;`
+  // between `&` and `sleep` — plain space is the correct POSIX separator.
+  return `${setupSteps} && PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/entrypoint.sh > /workspace/entrypoint.log 2>&1 & sleep 3`;
 }
 
 function mapState(state: unknown): SandboxStatus {
@@ -115,11 +125,21 @@ export function createCloudClient(): DaytonaClient {
       const brokerPreview = await sandbox.getPreviewLink(BROKER_PORT);
       const appPreview = await sandbox.getPreviewLink(PREVIEW_PORT);
 
+      // The Daytona proxy requires the preview token to authenticate WebSocket
+      // connections. It accepts the token either as the `x-daytona-preview-token`
+      // HTTP header OR as a same-named URL query parameter. We embed it in the
+      // brokerUrl query string so the ws-proxy can forward requests without
+      // needing separate token-header injection logic.
+      const token = brokerPreview.token ?? "";
+      const brokerWss = brokerPreview.url.replace(/^https:\/\//, "wss://");
+      const brokerUrlWithToken = token
+        ? `${brokerWss}?x-daytona-preview-token=${encodeURIComponent(token)}`
+        : brokerWss;
+
       return {
         sandboxId: sandbox.id,
-        // Preview URLs come back as https://...; ws-proxy talks to broker over WSS.
-        brokerUrl: brokerPreview.url.replace(/^https:\/\//, "wss://"),
-        brokerPreviewToken: brokerPreview.token ?? "",
+        brokerUrl: brokerUrlWithToken,
+        brokerPreviewToken: token,
         previewUrl: appPreview.url,
       };
     },
