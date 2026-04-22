@@ -187,13 +187,15 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   return {
     port: address.port,
     close: async () => {
-      if (tracker) await tracker.close();
+      // Terminate clients + close WSS first so stray chokidar drain events
+      // during tracker.close() cannot reach live sockets.
       await new Promise<void>((resolve, reject) => {
         for (const client of wss.clients) {
           client.terminate();
         }
         wss.close((err) => (err ? reject(err) : resolve()));
       });
+      if (tracker) await tracker.close();
     },
   };
 }
