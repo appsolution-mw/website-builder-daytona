@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 
 export interface ProxyHandle {
