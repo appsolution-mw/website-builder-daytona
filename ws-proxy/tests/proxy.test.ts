@@ -61,6 +61,33 @@ describe("ws-proxy", () => {
     client.close();
   });
 
+  it("buffers browser messages while broker URL resolution is pending", async () => {
+    await proxy?.close();
+    proxy = await startProxy({
+      port: 0,
+      resolveBrokerUrl: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return `ws://localhost:${broker!.port}`;
+      },
+    });
+
+    const client = new WebSocket(`ws://localhost:${proxy.port}/p/test-project`);
+    const reply = await new Promise<string>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("timed out waiting for pong")), 1000);
+      client.once("open", () => {
+        client.send(JSON.stringify({ type: "ping", nonce: "early-message" }));
+      });
+      client.once("message", (data) => {
+        clearTimeout(timeout);
+        resolve(data.toString());
+      });
+      client.once("error", reject);
+    });
+
+    expect(JSON.parse(reply)).toEqual({ type: "pong", nonce: "early-message" });
+    client.close();
+  });
+
   it("preserves text-frame semantics when forwarding", async () => {
     const client = new WebSocket(`ws://localhost:${proxy!.port}/p/test-project`);
     await new Promise<void>((resolve, reject) => {

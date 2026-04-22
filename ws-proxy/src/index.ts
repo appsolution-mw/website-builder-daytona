@@ -8,6 +8,8 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 loadDotenv({ path: resolve(__dirname, "../../.env") });
 
+const BROKER_CONNECT_TIMEOUT_MS = 8_000;
+
 export interface ProxyHandle {
   port: number;
   close: () => Promise<void>;
@@ -41,6 +43,19 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       return;
     }
 
+    let brokerSocket: WebSocket | null = null;
+    const pendingFromBrowser: Array<{ data: RawData; isBinary: boolean }> = [];
+
+    // Register immediately. The browser may send its first request right after
+    // its websocket opens, while broker URL resolution still awaits the DB.
+    browserSocket.on("message", (data: RawData, isBinary: boolean) => {
+      if (brokerSocket?.readyState === WebSocket.OPEN) {
+        brokerSocket.send(data, { binary: isBinary });
+      } else {
+        pendingFromBrowser.push({ data, isBinary });
+      }
+    });
+
     let brokerUrl: string;
     try {
       brokerUrl = await opts.resolveBrokerUrl(projectId);
@@ -49,7 +64,19 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       return;
     }
 
-    const brokerSocket = new WebSocket(brokerUrl);
+    brokerSocket = new WebSocket(brokerUrl, {
+      handshakeTimeout: BROKER_CONNECT_TIMEOUT_MS,
+    });
+    let brokerOpened = false;
+    const brokerConnectTimer = setTimeout(() => {
+      if (brokerSocket.readyState === WebSocket.CONNECTING) {
+        console.error(`[ws-proxy] broker connect timeout for project ${projectId}`);
+        brokerSocket.terminate();
+        if (browserSocket.readyState === WebSocket.OPEN) {
+          browserSocket.close(1011, "broker connection timeout");
+        }
+      }
+    }, BROKER_CONNECT_TIMEOUT_MS);
 
     const forward = (from: WebSocket, to: WebSocket) => {
       from.on("message", (data: RawData, isBinary: boolean) => {
@@ -63,19 +90,10 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       });
     };
 
-    // Buffer messages from browser that arrive before the broker connection opens
-    const pendingFromBrowser: Array<{ data: RawData; isBinary: boolean }> = [];
-    browserSocket.on("message", (data: RawData, isBinary: boolean) => {
-      if (brokerSocket.readyState === WebSocket.OPEN) {
-        brokerSocket.send(data, { binary: isBinary });
-      } else {
-        pendingFromBrowser.push({ data, isBinary });
-      }
-    });
     const tearDownBroker = () => {
       // Terminate regardless of readyState so a still-CONNECTING broker
       // socket doesn't leak after the browser disconnects.
-      if (brokerSocket.readyState !== WebSocket.CLOSED) {
+      if (brokerSocket && brokerSocket.readyState !== WebSocket.CLOSED) {
         brokerSocket.terminate();
       }
     };
@@ -83,6 +101,8 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     browserSocket.on("error", tearDownBroker);
 
     brokerSocket.once("open", () => {
+      brokerOpened = true;
+      clearTimeout(brokerConnectTimer);
       // Flush buffered messages
       for (const { data, isBinary } of pendingFromBrowser) {
         brokerSocket.send(data, { binary: isBinary });
@@ -92,8 +112,21 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       forward(brokerSocket, browserSocket);
     });
 
-    brokerSocket.once("error", () => {
-      browserSocket.close(1011, "broker connection failed");
+    brokerSocket.once("error", (err) => {
+      clearTimeout(brokerConnectTimer);
+      console.error(`[ws-proxy] broker connection failed for project ${projectId}: ${err.message}`);
+      if (browserSocket.readyState === WebSocket.OPEN) {
+        browserSocket.close(1011, "broker connection failed");
+      }
+    });
+
+    brokerSocket.once("close", (code, reason) => {
+      clearTimeout(brokerConnectTimer);
+      if (!brokerOpened && browserSocket.readyState === WebSocket.OPEN) {
+        const detail = reason.toString() || `code ${code}`;
+        console.error(`[ws-proxy] broker closed before open for project ${projectId}: ${detail}`);
+        browserSocket.close(1011, "broker connection closed");
+      }
     });
   });
 
@@ -118,6 +151,10 @@ export function extractProjectId(url: string): string | null {
 // Runnable entry point when invoked directly
 const isEntry = import.meta.url === `file://${process.argv[1]}`;
 if (isEntry) {
+  void main();
+}
+
+async function main() {
   const { prisma } = await import("./db");
   const port = Number(process.env.WS_PROXY_PORT ?? 4100);
   const handle = await startProxy({
