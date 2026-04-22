@@ -48,6 +48,12 @@ importers:
       '@types/react-dom':
         specifier: ^19
         version: 19.2.3(@types/react@19.2.14)
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      '@wbd/broker':
+        specifier: workspace:*
+        version: link:container/broker
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
@@ -69,6 +75,12 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@20.19.39)(lightningcss@1.32.0)
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   container/broker:
     dependencies:

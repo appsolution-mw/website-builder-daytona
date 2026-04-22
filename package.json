@@ -13,7 +13,8 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "test:host": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@daytona/sdk": "^0.168.0",
@@ -31,12 +32,16 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.1",
+    "@wbd/broker": "workspace:*",
     "concurrently": "^9.2.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "prisma": "^7.7.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9",
+    "ws": "^8.20.0"
   }
 }
