@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
 
@@ -12,9 +12,46 @@ type Project = {
   provisioningError: string | null;
 };
 
-type ChatEntry = { id: string; from: "you" | "broker"; text: string };
+type ChatMessage =
+  | { kind: "user"; turnId: string; text: string }
+  | {
+      kind: "agent";
+      turnId: string;
+      text: string;
+      streaming: boolean;
+      tools: string[];
+      footer: string | null;
+    }
+  | { kind: "error"; turnId: string | null; text: string };
 
 const POLL_INTERVAL_MS = 2_000;
+
+function formatDoneFooter(d: {
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  exitCode: number;
+}): string {
+  if (d.exitCode === -1) return "aborted";
+  const secs = (d.durationMs / 1000).toFixed(1);
+  const cost = d.costUsd.toFixed(3);
+  return `${secs}s · ${d.tokensIn} in / ${d.tokensOut} out · $${cost}`;
+}
+
+function summariseTool(tool: string, input: unknown): string {
+  if (input && typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    const path =
+      typeof o.file_path === "string"
+        ? o.file_path
+        : typeof o.path === "string"
+          ? o.path
+          : "";
+    return path ? `${tool} ${path}` : tool;
+  }
+  return tool;
+}
 
 export default function ProjectWorkspace({
   params,
@@ -24,14 +61,15 @@ export default function ProjectWorkspace({
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
-  const [chat, setChat] = useState<ChatEntry[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [prompt, setPrompt] = useState("");
+  const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Poll for project status until RUNNING or DESTROYED
+  // Poll project until RUNNING or DESTROYED
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
-
     async function loadOnce() {
       const res = await fetch(`/api/projects/${id}`);
       if (!res.ok) return;
@@ -49,7 +87,7 @@ export default function ProjectWorkspace({
     };
   }, [id]);
 
-  // Open WS only when project is RUNNING
+  // Open WS once project is RUNNING
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
@@ -63,30 +101,111 @@ export default function ProjectWorkspace({
       try {
         parsed = JSON.parse(ev.data as string) as ProxyToBrowser;
       } catch {
-        setChat((c) => [
-          ...c,
-          { id: crypto.randomUUID(), from: "broker", text: `malformed: ${String(ev.data).slice(0, 80)}` },
-        ]);
         return;
       }
-      const text =
-        parsed.type === "pong"
-          ? `pong (${parsed.nonce})`
-          : parsed.type === "error"
-            ? `error: ${parsed.code} — ${parsed.message}`
-            : JSON.stringify(parsed);
-      setChat((c) => [...c, { id: crypto.randomUUID(), from: "broker", text }]);
+      handleEvent(parsed);
     };
     return () => ws.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.status, id]);
 
-  function sendPing() {
+  function handleEvent(ev: ProxyToBrowser) {
+    if (ev.type === "agent.status") {
+      if (ev.phase === "done") setTurnInFlight(null);
+      return;
+    }
+    if (ev.type === "agent.chunk") {
+      setMessages((msgs) => {
+        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
+        if (i < 0) {
+          return [
+            ...msgs,
+            {
+              kind: "agent",
+              turnId: ev.turnId,
+              text: ev.delta,
+              streaming: true,
+              tools: [],
+              footer: null,
+            },
+          ];
+        }
+        const m = msgs[i];
+        if (m.kind !== "agent") return msgs;
+        const next = msgs.slice();
+        next[i] = { ...m, text: m.text + ev.delta };
+        return next;
+      });
+      return;
+    }
+    if (ev.type === "agent.tool_use") {
+      setMessages((msgs) => {
+        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
+        const label = summariseTool(ev.tool, ev.input);
+        if (i < 0) {
+          return [
+            ...msgs,
+            {
+              kind: "agent",
+              turnId: ev.turnId,
+              text: "",
+              streaming: true,
+              tools: [label],
+              footer: null,
+            },
+          ];
+        }
+        const m = msgs[i];
+        if (m.kind !== "agent") return msgs;
+        const next = msgs.slice();
+        next[i] = { ...m, tools: [...m.tools, label] };
+        return next;
+      });
+      return;
+    }
+    if (ev.type === "agent.done") {
+      setMessages((msgs) => {
+        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
+        const footer = formatDoneFooter(ev);
+        if (i < 0) return msgs;
+        const m = msgs[i];
+        if (m.kind !== "agent") return msgs;
+        const next = msgs.slice();
+        next[i] = { ...m, streaming: false, footer };
+        return next;
+      });
+      setTurnInFlight(null);
+      return;
+    }
+    if (ev.type === "agent.error") {
+      setMessages((msgs) => [
+        ...msgs,
+        { kind: "error", turnId: ev.turnId, text: ev.message },
+      ]);
+      setTurnInFlight(null);
+      return;
+    }
+    // pong / error / other → ignore silently
+  }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const nonce = crypto.randomUUID().slice(0, 8);
-    const msg: BrowserToProxy = { type: "ping", nonce };
+    const text = prompt.trim();
+    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight) return;
+    const turnId = crypto.randomUUID();
+    setMessages((msgs) => [...msgs, { kind: "user", turnId, text }]);
+    const msg: BrowserToProxy = { type: "agent.prompt", prompt: text, turnId };
     ws.send(JSON.stringify(msg));
-    setChat((c) => [...c, { id: crypto.randomUUID(), from: "you", text: `ping (${nonce})` }]);
+    setTurnInFlight(turnId);
+    setPrompt("");
+  }
+
+  function onAbort() {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !turnInFlight) return;
+    const msg: BrowserToProxy = { type: "agent.abort", turnId: turnInFlight };
+    ws.send(JSON.stringify(msg));
   }
 
   if (!project) {
@@ -130,27 +249,76 @@ export default function ProjectWorkspace({
           <h1 className="text-lg font-semibold">{project.name}</h1>
           <span className="text-xs text-gray-500">WS: {wsStatus}</span>
         </div>
-        <button
-          onClick={sendPing}
-          disabled={wsStatus !== "open"}
-          className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
-        >
-          Send ping
-        </button>
       </header>
 
       <div className="grid flex-1 grid-cols-2 gap-0 divide-x divide-gray-200 overflow-hidden">
         <section className="flex min-w-0 flex-col overflow-hidden">
           <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Chat</h2>
-          <ul className="flex flex-1 flex-col gap-1 overflow-auto p-3 font-mono text-xs">
-            {chat.length === 0 && <li className="text-gray-400">No messages yet.</li>}
-            {chat.map((m) => (
-              <li key={m.id} className={m.from === "you" ? "text-blue-700" : "text-gray-800"}>
-                <span className="mr-2 text-gray-400">{m.from}:</span>
-                {m.text}
-              </li>
-            ))}
+          <ul className="flex flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
+            {messages.length === 0 && <li className="text-gray-400">No messages yet.</li>}
+            {messages.map((m, idx) => {
+              if (m.kind === "user") {
+                return (
+                  <li key={m.turnId + ":user"} className="self-end max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-white">
+                    {m.text}
+                  </li>
+                );
+              }
+              if (m.kind === "error") {
+                return (
+                  <li key={(m.turnId ?? "err") + ":err:" + idx} className="rounded-lg bg-red-50 px-3 py-2 font-mono text-xs text-red-800">
+                    error: {m.text}
+                  </li>
+                );
+              }
+              return (
+                <li key={m.turnId + ":agent"} className="max-w-[85%] rounded-lg border border-gray-200 bg-white px-3 py-2">
+                  {m.tools.length > 0 && (
+                    <ul className="mb-2 flex flex-col gap-0.5 text-xs italic text-gray-500">
+                      {m.tools.map((t, i) => (
+                        <li key={i}>→ {t}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <pre className="whitespace-pre-wrap font-sans">{m.text}{m.streaming && "▎"}</pre>
+                  {m.footer && <div className="mt-2 text-xs text-gray-400">{m.footer}</div>}
+                </li>
+              );
+            })}
           </ul>
+          <form onSubmit={onSubmit} className="flex flex-col gap-2 border-t border-gray-200 p-3">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Tell Claude what to change…"
+              rows={3}
+              disabled={wsStatus !== "open" || turnInFlight !== null}
+              className="rounded border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-50"
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">
+                {turnInFlight ? "Claude is thinking…" : ""}
+              </span>
+              <div className="flex gap-2">
+                {turnInFlight && (
+                  <button
+                    type="button"
+                    onClick={onAbort}
+                    className="rounded border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50"
+                  >
+                    Abort
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={wsStatus !== "open" || turnInFlight !== null || !prompt.trim()}
+                  className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </form>
         </section>
 
         <section className="flex min-w-0 flex-col overflow-hidden">
