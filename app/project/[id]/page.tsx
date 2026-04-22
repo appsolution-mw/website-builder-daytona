@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { use, useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
 import { Message, type ChatMessageView } from "@/components/chat/Message";
@@ -75,6 +75,7 @@ export default function ProjectWorkspace({
   const [tab, setTab] = useState<RightPaneTab>("preview");
 
   const pendingRef = useRef<Map<string, { resolve: (msg: ProxyToBrowser) => void; timer: number }>>(new Map());
+  const handleEventRef = useRef<(ev: ProxyToBrowser) => void>(() => {});
 
   const selectedPathRef = useRef<string | null>(null);
   const fileContentRef = useRef<string | null>(null);
@@ -82,6 +83,7 @@ export default function ProjectWorkspace({
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
+  useEffect(() => { handleEventRef.current = handleEvent; });
 
   function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
     const workspace = workspaceRef.current;
@@ -165,6 +167,7 @@ export default function ProjectWorkspace({
       clearTimeout(entry.timer);
       pendingRef.current.delete(maybeRequestId);
       entry.resolve(ev);
+      return;
     }
 
     if (ev.type === "agent.status") {
@@ -307,7 +310,7 @@ export default function ProjectWorkspace({
       } catch {
         return;
       }
-      handleEvent(parsed);
+      handleEventRef.current(parsed);
     };
     return () => ws.close();
   }, [project?.status, id]);
@@ -341,19 +344,21 @@ export default function ProjectWorkspace({
     }
   }
 
-  async function onSave() {
-    if (!selectedPath || fileContent === null) return;
+  const onSave = useCallback(async () => {
+    const path = selectedPathRef.current;
+    const content = fileContentRef.current;
+    if (!path || content === null) return;
     if (turnInFlight !== null) return;
     const requestId = crypto.randomUUID();
     setSaveIndicator("idle");
     setSaveError(null);
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
-        { type: "file.write", requestId, path: selectedPath, content: fileContent },
+        { type: "file.write", requestId, path, content },
         requestId,
       );
       if (reply.ok) {
-        setFileContentBase(fileContent);
+        setFileContentBase(content);
         setSaveIndicator("saved");
         window.setTimeout(() => setSaveIndicator((s) => (s === "saved" ? "idle" : s)), 1500);
       } else {
@@ -364,7 +369,7 @@ export default function ProjectWorkspace({
       setSaveIndicator("error");
       setSaveError("request timeout");
     }
-  }
+  }, [turnInFlight]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
