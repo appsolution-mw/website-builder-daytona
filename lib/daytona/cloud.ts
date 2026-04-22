@@ -31,16 +31,18 @@ function buildBootCommand(args: {
   cloneToken: string;
   repoOwner: string;
   repoName: string;
+  branch: string;
 }): string {
-  const { projectId, cloneToken, repoOwner, repoName } = args;
-  // Single-quote-safe: neither token nor repo names can contain single quotes
-  // (tokens are alnum+underscore+dash, owner/repo per GitHub constraints).
+  const { projectId, cloneToken, repoOwner, repoName, branch } = args;
+  // Single-quote-safe: neither token nor repo names nor branch can contain
+  // single quotes (tokens alnum+underscore+dash; owner/repo/branch per
+  // GitHub/Git ref-format constraints).
   return [
     `apk add --no-cache git`,
     `corepack enable pnpm`,
     `mkdir -p /workspace`,
     `cd /workspace`,
-    `git clone --depth=1 "https://x-access-token:${cloneToken}@github.com/${repoOwner}/${repoName}.git" repo`,
+    `git clone --depth=1 -b '${branch}' "https://x-access-token:${cloneToken}@github.com/${repoOwner}/${repoName}.git" repo`,
     `cd repo`,
     `PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/entrypoint.sh > /workspace/entrypoint.log 2>&1 &`,
     // Give the entrypoint a moment to get going before returning
@@ -90,8 +92,9 @@ export function createCloudClient(): DaytonaClient {
 
       // Run the boot script. nohup+& means this returns as soon as the clone
       // + backgrounding + sleep 3 finishes — the entrypoint continues running.
+      const branch = process.env.GITHUB_CLONE_BRANCH ?? "main";
       await sandbox.process.executeCommand(
-        buildBootCommand({ projectId, cloneToken, repoOwner, repoName }),
+        buildBootCommand({ projectId, cloneToken, repoOwner, repoName, branch }),
         undefined,
         undefined,
         BOOT_TIMEOUT_SEC,
