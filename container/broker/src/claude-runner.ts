@@ -7,6 +7,11 @@ import { parseNdjsonLine, createTaskMap } from "./ndjson-parser";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const MODEL = "claude-sonnet-4-6";
 
+const REVIEWER_MODEL = "claude-sonnet-4-6";
+const REVIEWER_PROMPT =
+  "Invoke the reviewer sub-agent on the uncommitted changes from this turn. Output only the review note.";
+const REVIEWER_DEFAULT_TIMEOUT_MS = 90 * 1000;
+
 export interface ClaudeRunnerOptions {
   projectId: string;
   prompt: string;
@@ -166,6 +171,137 @@ export async function runClaudeTurn(
         });
       }
       resolve();
+    });
+  });
+}
+
+export interface ReviewerRunnerOptions {
+  projectId: string;
+  turnId: string;
+  onEvent: (event: BrokerToHost) => void;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export async function runReviewerPass(
+  opts: ReviewerRunnerOptions,
+  deps: ClaudeRunnerDeps = {},
+): Promise<void> {
+  const spawnFn: SpawnFn = deps.spawn ?? (nodeSpawn as unknown as SpawnFn);
+  const timeoutMs = opts.timeoutMs ?? REVIEWER_DEFAULT_TIMEOUT_MS;
+
+  const sessionId = randomUUID();
+
+  const argv = [
+    "--print",
+    REVIEWER_PROMPT,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--session-id",
+    sessionId,
+    "--model",
+    REVIEWER_MODEL,
+    "--permission-mode",
+    "acceptEdits",
+    "--add-dir",
+    "/workspace/project",
+  ];
+
+  const child: SpawnedChild = spawnFn("claude", argv, {
+    cwd: "/workspace/project",
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  const taskMap = createTaskMap();
+  let aborted = false;
+  let stderrTail = "";
+
+  const tagReviewer = (e: BrokerToHost): BrokerToHost => {
+    if (
+      e.type === "agent.chunk" ||
+      e.type === "agent.status" ||
+      e.type === "agent.tool_use" ||
+      e.type === "agent.error"
+    ) {
+      return { ...e, agentId: "reviewer" } as BrokerToHost;
+    }
+    return e;
+  };
+  const emit = (e: BrokerToHost) => opts.onEvent(tagReviewer(e));
+
+  const timeout = setTimeout(() => {
+    aborted = true;
+    child.kill("SIGTERM");
+    setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+  }, timeoutMs);
+  timeout.unref();
+
+  if (opts.signal) {
+    opts.signal.addEventListener("abort", () => {
+      aborted = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+    });
+  }
+
+  let buffer = "";
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    buffer += chunk;
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      for (const event of parseNdjsonLine(line, opts.turnId, taskMap)) emit(event);
+    }
+  });
+
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    stderrTail = (stderrTail + chunk).slice(-4096);
+  });
+
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve();
+    };
+
+    child.once("close", (code) => {
+      if (buffer.trim()) {
+        for (const event of parseNdjsonLine(buffer, opts.turnId, taskMap)) emit(event);
+      }
+      if (aborted) {
+        emit({
+          type: "agent.done",
+          turnId: opts.turnId,
+          durationMs: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0,
+          exitCode: -1,
+        });
+      } else if (code !== 0 && code !== null) {
+        emit({
+          type: "agent.error",
+          turnId: opts.turnId,
+          message: `reviewer exited with code ${code}${stderrTail ? `\n${stderrTail}` : ""}`,
+        });
+      }
+      finish();
+    });
+    child.once("error", (err) => {
+      emit({
+        type: "agent.error",
+        turnId: opts.turnId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      finish();
     });
   });
 }

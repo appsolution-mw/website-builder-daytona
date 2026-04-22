@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Readable, Writable, PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
-import { runClaudeTurn, type ClaudeRunnerDeps, type SpawnFn } from "../src/claude-runner";
+import { runClaudeTurn, runReviewerPass, type ClaudeRunnerDeps, type SpawnFn, type SpawnedChild } from "../src/claude-runner";
 import type { BrokerToHost } from "@wbd/protocol";
 
 function makeFakeChild(stdoutLines: string[], exitCode = 0) {
@@ -136,5 +136,131 @@ describe("runClaudeTurn", () => {
     const last = events[events.length - 1];
     expect(last?.type).toBe("agent.done");
     expect(last && last.type === "agent.done" && last.exitCode).toBe(-1);
+  });
+});
+
+describe("runReviewerPass", () => {
+  function fakeChild(): SpawnedChild & EventEmitter {
+    const em = new EventEmitter() as SpawnedChild & EventEmitter;
+    const stdout = new Readable({ read() {} });
+    const stderr = new Readable({ read() {} });
+    const stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+    Object.assign(em, {
+      stdout,
+      stderr,
+      stdin,
+      kill: vi.fn().mockReturnValue(true),
+    });
+    return em;
+  }
+
+  it("spawns claude with the reviewer prompt and a fresh session id", async () => {
+    const child = fakeChild();
+    const spawn = vi.fn().mockReturnValue(child) as unknown as SpawnFn;
+    const events: BrokerToHost[] = [];
+
+    const promise = runReviewerPass(
+      {
+        projectId: "proj-1",
+        turnId: "turn-1",
+        onEvent: (e) => events.push(e),
+        timeoutMs: 5_000,
+      },
+      { spawn },
+    );
+
+    child.stdout!.push(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        duration_ms: 1234,
+        usage: { input_tokens: 10, output_tokens: 20 },
+        total_cost_usd: 0.001,
+      }) + "\n",
+    );
+    child.stdout!.push(null);
+    child.emit("close", 0);
+    await promise;
+
+    expect(spawn).toHaveBeenCalledOnce();
+    const [cmd, argv] = (spawn as unknown as { mock: { calls: [string, string[]][] } }).mock.calls[0];
+    expect(cmd).toBe("claude");
+    expect(argv).toContain("--print");
+    const printIdx = argv.indexOf("--print");
+    expect(argv[printIdx + 1]).toMatch(/reviewer sub-agent/i);
+    const sessionIdx = argv.indexOf("--session-id");
+    expect(argv[sessionIdx + 1]).not.toBe("turn-1");
+    expect(argv[sessionIdx + 1]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("tags every emitted event with agentId='reviewer'", async () => {
+    const child = fakeChild();
+    const spawn = vi.fn().mockReturnValue(child) as unknown as SpawnFn;
+    const events: BrokerToHost[] = [];
+
+    const promise = runReviewerPass(
+      { projectId: "p", turnId: "t", onEvent: (e) => events.push(e) },
+      { spawn },
+    );
+
+    child.stdout!.push(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "✅ Passed" }] },
+      }) + "\n",
+    );
+    child.stdout!.push(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        duration_ms: 500,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }) + "\n",
+    );
+    child.stdout!.push(null);
+    child.emit("close", 0);
+    await promise;
+
+    for (const ev of events) {
+      if (ev.type === "agent.chunk" || ev.type === "agent.status" ||
+          ev.type === "agent.tool_use" || ev.type === "agent.error") {
+        expect((ev as { agentId?: string }).agentId).toBe("reviewer");
+      }
+    }
+  });
+
+  it("emits agent.error{agentId:reviewer} on spawn failure and resolves", async () => {
+    const child = fakeChild();
+    const spawn = vi.fn().mockReturnValue(child) as unknown as SpawnFn;
+    const events: BrokerToHost[] = [];
+    const promise = runReviewerPass(
+      { projectId: "p", turnId: "t", onEvent: (e) => events.push(e) },
+      { spawn },
+    );
+    child.emit("error", new Error("ENOENT"));
+    child.emit("close", 127);
+    await promise;
+
+    const err = events.find((e) => e.type === "agent.error");
+    expect(err).toBeDefined();
+    expect((err as { agentId?: string }).agentId).toBe("reviewer");
+  });
+
+  it("kills the child on abort signal", async () => {
+    const child = fakeChild();
+    const spawn = vi.fn().mockReturnValue(child) as unknown as SpawnFn;
+    const ctl = new AbortController();
+    const events: BrokerToHost[] = [];
+    const promise = runReviewerPass(
+      { projectId: "p", turnId: "t", onEvent: (e) => events.push(e), signal: ctl.signal },
+      { spawn },
+    );
+    ctl.abort();
+    await new Promise((r) => setImmediate(r));
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    child.emit("close", null);
+    await promise;
   });
 });
