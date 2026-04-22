@@ -42,6 +42,18 @@ cd /workspace/project
 echo "[entrypoint] installing project deps (no frozen lockfile — template has none)..."
 pnpm install
 
+echo "[entrypoint] installing claude code cli…"
+npm install -g @anthropic-ai/claude-code >/workspace/claude-install.log 2>&1
+if ! command -v claude >/dev/null 2>&1; then
+  echo "[entrypoint] WARN: claude CLI not on PATH after install; agent features will fail" >&2
+  tail -20 /workspace/claude-install.log >&2 || true
+fi
+
+echo "[entrypoint] copying .claude/ into project…"
+if [ -d "${REPO_DIR}/container/project-template/.claude" ]; then
+  cp -r "${REPO_DIR}/container/project-template/.claude" /workspace/project/.claude
+fi
+
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}..."
 PORT="${PREVIEW_PORT}" PROJECT_ID="${PROJECT_ID}" \
   pnpm dev > /workspace/project.log 2>&1 &
