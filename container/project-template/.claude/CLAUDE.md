@@ -10,6 +10,10 @@ shows the result of your changes in real time via Next.js HMR.
   there are immediately visible in the preview.
 - `app/layout.tsx` — shared HTML shell.
 - No Tailwind; inline styles are fine for prototyping.
+- App Router files are Server Components by default. If you add event handlers
+  such as `onClick`, `onMouseEnter`, or browser state/effects, add `"use client";`
+  at the top of that component file or move the interactive part into a Client
+  Component. Otherwise the preview will render a 500 error.
 
 ## Working style
 
