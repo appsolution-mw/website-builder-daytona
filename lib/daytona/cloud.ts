@@ -108,6 +108,7 @@ export function createCloudClient(): DaytonaClient {
         public: true, // preview URLs are unauthenticated
         envVars: {
           PROJECT_ID: projectId,
+          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
         },
       });
 
