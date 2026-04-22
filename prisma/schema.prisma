@@ -14,15 +14,22 @@ model User {
 }
 
 model Project {
-  id          String        @id @default(cuid())
-  ownerId     String
-  owner       User          @relation(fields: [ownerId], references: [id])
-  name        String
-  status      ProjectStatus @default(PROVISIONING)
-  createdAt   DateTime      @default(now())
-  lastActive  DateTime      @default(now())
-  sessions    Session[]
-  messages    Message[]
+  id                   String        @id @default(cuid())
+  ownerId              String
+  owner                User          @relation(fields: [ownerId], references: [id])
+  name                 String
+  status               ProjectStatus @default(PROVISIONING)
+  createdAt            DateTime      @default(now())
+  lastActive           DateTime      @default(now())
+
+  daytonaSandboxId     String?
+  brokerUrl            String?
+  brokerPreviewToken   String?
+  previewUrl           String?
+  provisioningError    String?
+
+  sessions             Session[]
+  messages             Message[]
 
   @@index([ownerId])
 }
