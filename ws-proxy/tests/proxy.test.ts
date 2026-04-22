@@ -60,6 +60,23 @@ describe("ws-proxy", () => {
     expect(JSON.parse(reply)).toEqual({ type: "pong", nonce: "proxy-test" });
     client.close();
   });
+
+  it("preserves text-frame semantics when forwarding", async () => {
+    const client = new WebSocket(`ws://localhost:${proxy!.port}/p/test-project`);
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+
+    const { data, isBinary } = await new Promise<{ data: unknown; isBinary: boolean }>((resolve) => {
+      client.once("message", (d, isBin) => resolve({ data: d, isBinary: isBin }));
+      client.send(JSON.stringify({ type: "ping", nonce: "text-check" }));
+    });
+
+    expect(isBinary).toBe(false);
+    expect(Buffer.isBuffer(data)).toBe(true);
+    client.close();
+  });
 });
 
 describe("extractProjectId", () => {

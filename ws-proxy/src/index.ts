@@ -52,8 +52,8 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     const brokerSocket = new WebSocket(brokerUrl);
 
     const forward = (from: WebSocket, to: WebSocket) => {
-      from.on("message", (data: RawData) => {
-        if (to.readyState === WebSocket.OPEN) to.send(data);
+      from.on("message", (data: RawData, isBinary: boolean) => {
+        if (to.readyState === WebSocket.OPEN) to.send(data, { binary: isBinary });
       });
       from.on("close", () => {
         if (to.readyState === WebSocket.OPEN) to.close();
@@ -64,12 +64,12 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
     };
 
     // Buffer messages from browser that arrive before the broker connection opens
-    const pendingFromBrowser: RawData[] = [];
-    browserSocket.on("message", (data: RawData) => {
+    const pendingFromBrowser: Array<{ data: RawData; isBinary: boolean }> = [];
+    browserSocket.on("message", (data: RawData, isBinary: boolean) => {
       if (brokerSocket.readyState === WebSocket.OPEN) {
-        brokerSocket.send(data);
+        brokerSocket.send(data, { binary: isBinary });
       } else {
-        pendingFromBrowser.push(data);
+        pendingFromBrowser.push({ data, isBinary });
       }
     });
     const tearDownBroker = () => {
@@ -84,8 +84,8 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
 
     brokerSocket.once("open", () => {
       // Flush buffered messages
-      for (const data of pendingFromBrowser) {
-        brokerSocket.send(data);
+      for (const { data, isBinary } of pendingFromBrowser) {
+        brokerSocket.send(data, { binary: isBinary });
       }
       pendingFromBrowser.length = 0;
       // Set up broker → browser forwarding
