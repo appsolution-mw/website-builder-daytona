@@ -2,7 +2,6 @@ import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { startBroker, type BrokerHandle } from "@wbd/broker";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
 
@@ -15,9 +14,8 @@ interface FakeSandbox {
   status: SandboxStatus;
 }
 
-const PROJECT_TEMPLATE_DIR = resolve(
-  fileURLToPath(new URL("../../container/project-template", import.meta.url)),
-);
+// Resolve at runtime from the host process cwd (next dev runs from repo root).
+const PROJECT_TEMPLATE_DIR = resolve(process.cwd(), "container/project-template");
 
 declare global {
   // Keep fake sandbox handles alive across repeated client factory calls in dev.
