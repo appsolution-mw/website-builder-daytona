@@ -3,6 +3,10 @@
 import { use, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
+import { Message, type ChatMessageView } from "@/components/chat/Message";
+import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
+import { FileTree } from "@/components/workspace/FileTree";
+import { CodeEditor } from "@/components/workspace/CodeEditor";
 
 type Project = {
   id: string;
@@ -12,22 +16,12 @@ type Project = {
   provisioningError: string | null;
 };
 
-type ChatMessage =
-  | { kind: "user"; turnId: string; text: string }
-  | {
-      kind: "agent";
-      turnId: string;
-      text: string;
-      streaming: boolean;
-      tools: string[];
-      footer: string | null;
-    }
-  | { kind: "error"; turnId: string | null; text: string };
-
 const POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CHAT_WIDTH_PCT = 28;
 const MIN_CHAT_WIDTH_PCT = 22;
 const MAX_CHAT_WIDTH_PCT = 45;
+const BADGE_DURATION_MS = 3000;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 function formatDoneFooter(d: {
   durationMs: number;
@@ -64,12 +58,30 @@ export default function ProjectWorkspace({
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessageView[]>([]);
   const [prompt, setPrompt] = useState("");
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [chatWidthPct, setChatWidthPct] = useState(DEFAULT_CHAT_WIDTH_PCT);
+
+  const [paths, setPaths] = useState<string[]>([]);
+  const [recentlyChanged, setRecentlyChanged] = useState<Set<string>>(() => new Set());
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [fileContentBase, setFileContentBase] = useState<string | null>(null);
+  const [saveIndicator, setSaveIndicator] = useState<"idle" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [tab, setTab] = useState<RightPaneTab>("preview");
+
+  const pendingRef = useRef<Map<string, { resolve: (msg: ProxyToBrowser) => void; timer: number }>>(new Map());
+
+  const selectedPathRef = useRef<string | null>(null);
+  const fileContentRef = useRef<string | null>(null);
+  const fileContentBaseRef = useRef<string | null>(null);
+  useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
+  useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
+  useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
 
   function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
     const workspace = workspaceRef.current;
@@ -77,12 +89,10 @@ export default function ProjectWorkspace({
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = workspace.getBoundingClientRect();
-
     const updateWidth = (clientX: number) => {
       const next = ((clientX - rect.left) / rect.width) * 100;
       setChatWidthPct(Math.min(MAX_CHAT_WIDTH_PCT, Math.max(MIN_CHAT_WIDTH_PCT, next)));
     };
-
     updateWidth(e.clientX);
     const onPointerMove = (ev: PointerEvent) => updateWidth(ev.clientX);
     const onPointerUp = () => {
@@ -93,7 +103,70 @@ export default function ProjectWorkspace({
     window.addEventListener("pointerup", onPointerUp, { once: true });
   }
 
+  function sendRequest<T extends ProxyToBrowser>(msg: BrowserToProxy, requestId: string): Promise<T> {
+    const ws = wsRef.current;
+    return new Promise<T>((resolve, reject) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("ws not open"));
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        pendingRef.current.delete(requestId);
+        reject(new Error("request timeout"));
+      }, REQUEST_TIMEOUT_MS);
+      pendingRef.current.set(requestId, {
+        resolve: (m) => resolve(m as T),
+        timer,
+      });
+      ws.send(JSON.stringify(msg));
+    });
+  }
+
+  function markChanged(path: string) {
+    setRecentlyChanged((prev) => {
+      const next = new Set(prev);
+      next.add(path);
+      return next;
+    });
+    window.setTimeout(() => {
+      setRecentlyChanged((prev) => {
+        const next = new Set(prev);
+        next.delete(path);
+        return next;
+      });
+    }, BADGE_DURATION_MS);
+  }
+
+  async function refreshOpenFile(path: string) {
+    const requestId = crypto.randomUUID();
+    try {
+      const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+        { type: "file.read", requestId, path },
+        requestId,
+      );
+      if (reply.error) {
+        setSaveIndicator("error");
+        setSaveError(reply.error);
+        return;
+      }
+      if (typeof reply.content === "string") {
+        setFileContent(reply.content);
+        setFileContentBase(reply.content);
+      }
+    } catch {
+      // swallow — WS drop surfaces via wsStatus
+    }
+  }
+
   function handleEvent(ev: ProxyToBrowser) {
+    const maybeRequestId = (ev as { requestId?: string }).requestId;
+    if (maybeRequestId && pendingRef.current.has(maybeRequestId)) {
+      const entry = pendingRef.current.get(maybeRequestId)!;
+      clearTimeout(entry.timer);
+      pendingRef.current.delete(maybeRequestId);
+      entry.resolve(ev);
+    }
+
     if (ev.type === "agent.status") {
       if (ev.phase === "done") setTurnInFlight(null);
       return;
@@ -169,10 +242,24 @@ export default function ProjectWorkspace({
       setTurnInFlight(null);
       return;
     }
-    // pong / error / other -> ignore silently
+
+    if (ev.type === "file.changed") {
+      setPaths((prev) => {
+        if (ev.event === "add" && !prev.includes(ev.path)) return [...prev, ev.path].sort();
+        if (ev.event === "unlink") return prev.filter((p) => p !== ev.path);
+        return prev;
+      });
+      markChanged(ev.path);
+      if (ev.event === "change" && ev.path === selectedPathRef.current) {
+        const dirty = fileContentRef.current !== fileContentBaseRef.current;
+        if (!dirty) {
+          void refreshOpenFile(ev.path);
+        }
+      }
+      return;
+    }
   }
 
-  // Poll project until RUNNING or DESTROYED
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
@@ -193,13 +280,25 @@ export default function ProjectWorkspace({
     };
   }, [id]);
 
-  // Open WS once project is RUNNING
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
     const ws = new WebSocket(`${base}/p/${id}`);
     wsRef.current = ws;
-    ws.onopen = () => setWsStatus("open");
+    setWsStatus("connecting");
+    ws.onopen = async () => {
+      setWsStatus("open");
+      const requestId = crypto.randomUUID();
+      try {
+        const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.list.result" }>>(
+          { type: "file.list", requestId },
+          requestId,
+        );
+        setPaths(reply.paths.slice().sort());
+      } catch {
+        // tree stays empty; user reloads page
+      }
+    };
     ws.onclose = () => setWsStatus("closed");
     ws.onmessage = (ev) => {
       let parsed: ProxyToBrowser;
@@ -212,6 +311,60 @@ export default function ProjectWorkspace({
     };
     return () => ws.close();
   }, [project?.status, id]);
+
+  async function onSelectFile(path: string) {
+    if (path === selectedPath) return;
+    setSelectedPath(path);
+    setFileContent(null);
+    setFileContentBase(null);
+    setSaveIndicator("idle");
+    setSaveError(null);
+    setTab("code");
+    const requestId = crypto.randomUUID();
+    try {
+      const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+        { type: "file.read", requestId, path },
+        requestId,
+      );
+      if (reply.error) {
+        setSaveIndicator("error");
+        setSaveError(reply.error);
+        return;
+      }
+      if (typeof reply.content === "string") {
+        setFileContent(reply.content);
+        setFileContentBase(reply.content);
+      }
+    } catch {
+      setSaveIndicator("error");
+      setSaveError("request timeout");
+    }
+  }
+
+  async function onSave() {
+    if (!selectedPath || fileContent === null) return;
+    if (turnInFlight !== null) return;
+    const requestId = crypto.randomUUID();
+    setSaveIndicator("idle");
+    setSaveError(null);
+    try {
+      const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
+        { type: "file.write", requestId, path: selectedPath, content: fileContent },
+        requestId,
+      );
+      if (reply.ok) {
+        setFileContentBase(fileContent);
+        setSaveIndicator("saved");
+        window.setTimeout(() => setSaveIndicator((s) => (s === "saved" ? "idle" : s)), 1500);
+      } else {
+        setSaveIndicator("error");
+        setSaveError(reply.reason ?? "unknown");
+      }
+    } catch {
+      setSaveIndicator("error");
+      setSaveError("request timeout");
+    }
+  }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -266,6 +419,9 @@ export default function ProjectWorkspace({
     );
   }
 
+  const dirty = fileContent !== null && fileContent !== fileContentBase;
+  const editorReadOnly = turnInFlight !== null;
+
   return (
     <main className="flex flex-1 flex-col">
       <header className="flex items-baseline justify-between border-b border-gray-200 p-3 px-4">
@@ -284,35 +440,9 @@ export default function ProjectWorkspace({
           <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Chat</h2>
           <ul className="flex flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
             {messages.length === 0 && <li className="text-gray-400">No messages yet.</li>}
-            {messages.map((m, idx) => {
-              if (m.kind === "user") {
-                return (
-                  <li key={m.turnId + ":user"} className="self-end max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-white">
-                    {m.text}
-                  </li>
-                );
-              }
-              if (m.kind === "error") {
-                return (
-                  <li key={(m.turnId ?? "err") + ":err:" + idx} className="rounded-lg bg-red-50 px-3 py-2 font-mono text-xs text-red-800">
-                    error: {m.text}
-                  </li>
-                );
-              }
-              return (
-                <li key={m.turnId + ":agent"} className="max-w-[85%] rounded-lg border border-gray-200 bg-white px-3 py-2">
-                  {m.tools.length > 0 && (
-                    <ul className="mb-2 flex flex-col gap-0.5 text-xs italic text-gray-500">
-                      {m.tools.map((t, i) => (
-                        <li key={i}>→ {t}</li>
-                      ))}
-                    </ul>
-                  )}
-                  <pre className="whitespace-pre-wrap font-sans">{m.text}{m.streaming && "▎"}</pre>
-                  {m.footer && <div className="mt-2 text-xs text-gray-400">{m.footer}</div>}
-                </li>
-              );
-            })}
+            {messages.map((m, idx) => (
+              <Message key={(m.turnId ?? "err") + ":" + idx} m={m} />
+            ))}
           </ul>
           <form onSubmit={onSubmit} className="flex flex-col gap-2 border-t border-gray-200 p-3">
             <textarea
@@ -360,19 +490,46 @@ export default function ProjectWorkspace({
           aria-valuenow={Math.round(chatWidthPct)}
         />
 
-        <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Preview</h2>
-          {project.previewUrl ? (
-            <iframe
-              src={project.previewUrl}
-              className="flex-1 border-0"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-              title="project preview"
-            />
-          ) : (
-            <div className="flex flex-1 items-center justify-center text-sm text-gray-400">No preview URL.</div>
-          )}
-        </section>
+        <RightPane
+          tab={tab}
+          onTabChange={setTab}
+          code={
+            <div className="flex h-full w-full">
+              <aside className="w-60 shrink-0 overflow-auto border-r border-gray-200">
+                <FileTree
+                  paths={paths}
+                  selectedPath={selectedPath}
+                  recentlyChanged={recentlyChanged}
+                  onSelect={onSelectFile}
+                />
+              </aside>
+              <div className="flex min-w-0 flex-1">
+                <CodeEditor
+                  path={selectedPath}
+                  content={fileContent}
+                  readOnly={editorReadOnly}
+                  dirty={dirty}
+                  saveIndicator={saveIndicator}
+                  saveError={saveError}
+                  onContentChange={(c) => setFileContent(c)}
+                  onSave={onSave}
+                />
+              </div>
+            </div>
+          }
+          preview={
+            project.previewUrl ? (
+              <iframe
+                src={project.previewUrl}
+                className="w-full flex-1 border-0"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                title="project preview"
+              />
+            ) : (
+              <div className="flex w-full flex-1 items-center justify-center text-sm text-gray-400">No preview URL.</div>
+            )
+          }
+        />
       </div>
     </main>
   );
