@@ -2,6 +2,21 @@ import { describe, it, expect, afterEach } from "vitest";
 import WebSocket from "ws";
 import { startBroker, type BrokerHandle } from "../src/ws-server";
 
+const CLAUDE_SESSION_ID = "22222222-2222-4222-8222-222222222222";
+const promptMsg = (
+  prompt: string,
+  turnId: string,
+  resumeClaudeSession = false,
+  attachments?: Array<{ name: string; mimeType: string; dataBase64: string }>,
+) => ({
+  type: "agent.prompt" as const,
+  prompt,
+  turnId,
+  claudeSessionId: CLAUDE_SESSION_ID,
+  resumeClaudeSession,
+  ...(attachments ? { attachments } : {}),
+});
+
 describe("broker ws server", () => {
   let handle: BrokerHandle | undefined;
 
@@ -60,8 +75,8 @@ describe("broker ws server", () => {
     const errors: unknown[] = [];
     client.on("message", (d) => errors.push(JSON.parse(d.toString())));
 
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "first", turnId: "t1" }));
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "second", turnId: "t2" }));
+    client.send(JSON.stringify(promptMsg("first", "t1")));
+    client.send(JSON.stringify(promptMsg("second", "t2")));
 
     // Wait briefly for the broker to process and reject the second message
     await new Promise((r) => setTimeout(r, 200));
@@ -135,7 +150,7 @@ describe("broker ws server", () => {
     const replies: unknown[] = [];
     client.on("message", (data) => replies.push(JSON.parse(data.toString())));
 
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "x", turnId: "t1" }));
+    client.send(JSON.stringify(promptMsg("x", "t1")));
     client.send(JSON.stringify({ type: "file.write", requestId: "w1", path: "x.txt", content: "y" }));
 
     const start = Date.now();
@@ -182,7 +197,12 @@ describe("broker ws server", () => {
             type: "result",
             subtype: "success",
             duration_ms: 1000,
-            usage: { input_tokens: 5, output_tokens: 10 },
+            usage: {
+              input_tokens: 5,
+              output_tokens: 10,
+              cache_creation_input_tokens: 50,
+              cache_read_input_tokens: 100,
+            },
             total_cost_usd: 0.002,
           },
         ],
@@ -198,7 +218,12 @@ describe("broker ws server", () => {
             type: "result",
             subtype: "success",
             duration_ms: 200,
-            usage: { input_tokens: 2, output_tokens: 3 },
+            usage: {
+              input_tokens: 2,
+              output_tokens: 3,
+              cache_creation_input_tokens: 20,
+              cache_read_input_tokens: 30,
+            },
             total_cost_usd: 0.0005,
           },
         ],
@@ -217,7 +242,7 @@ describe("broker ws server", () => {
     const events: unknown[] = [];
     client.on("message", (data) => events.push(JSON.parse(data.toString())));
 
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "write x", turnId: "t1" }));
+    client.send(JSON.stringify(promptMsg("write x", "t1")));
 
     const start = Date.now();
     while (Date.now() - start < 3000) {
@@ -226,6 +251,8 @@ describe("broker ws server", () => {
     }
 
     expect(spawns.length).toBe(2);
+    const coderArgv = spawns[0].argv;
+    expect(coderArgv[coderArgv.indexOf("--session-id") + 1]).toBe(CLAUDE_SESSION_ID);
     const reviewerArgv = spawns[1].argv;
     expect(reviewerArgv[reviewerArgv.indexOf("--print") + 1]).toMatch(/reviewer sub-agent/i);
 
@@ -246,6 +273,20 @@ describe("broker ws server", () => {
     expect(done.tokensOut).toBe(10 + 3);
     expect(done.durationMs).toBe(1000 + 200);
     expect(done.costUsd).toBeCloseTo(0.002 + 0.0005, 6);
+    expect((done as { usage?: { totalTokens?: number } }).usage?.totalTokens).toBe(5 + 10 + 50 + 100 + 2 + 3 + 20 + 30);
+
+    const usageEvents = events.filter((e) => (e as { type?: string }).type === "agent.usage");
+    expect(usageEvents.map((e) => (e as { label?: string }).label)).toEqual([
+      "coder",
+      "reviewer",
+      "turn",
+    ]);
+    const turnUsage = usageEvents.find((e) => (e as { label?: string }).label === "turn") as
+      | { usage?: { cacheCreationInputTokens?: number; cacheReadInputTokens?: number; totalTokens?: number } }
+      | undefined;
+    expect(turnUsage?.usage?.cacheCreationInputTokens).toBe(70);
+    expect(turnUsage?.usage?.cacheReadInputTokens).toBe(130);
+    expect(turnUsage?.usage?.totalTokens).toBe(220);
 
     client.close();
   });
@@ -283,7 +324,7 @@ describe("broker ws server", () => {
     const events: unknown[] = [];
     client.on("message", (data) => events.push(JSON.parse(data.toString())));
 
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "what is this?", turnId: "t2" }));
+    client.send(JSON.stringify(promptMsg("what is this?", "t2")));
 
     const start = Date.now();
     while (Date.now() - start < 2000) {
@@ -293,6 +334,64 @@ describe("broker ws server", () => {
 
     expect(spawns.length).toBe(1);
     expect(events.some((e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing")).toBe(false);
+    client.close();
+  });
+
+  it("writes prompt image attachments and passes their paths to Claude", async () => {
+    const { mkdtemp, readFile, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-images-"));
+    const { fakeSpawn, spawns } = spawnsSetup([
+      {
+        stdout: [
+          {
+            type: "result",
+            subtype: "success",
+            duration_ms: 10,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        ],
+      },
+    ]);
+
+    handle = await startBroker({
+      port: 0,
+      projectRoot: root,
+      enableFsTracker: false,
+      __testSpawn: fakeSpawn,
+    });
+
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify(promptMsg("match this screenshot", "t-img", false, [
+      {
+        name: "Screen Shot.png",
+        mimeType: "image/png",
+        dataBase64: Buffer.from("fake image bytes").toString("base64"),
+      },
+    ])));
+
+    const start = Date.now();
+    while (Date.now() - start < 2000) {
+      if (events.some((e) => (e as { type?: string }).type === "agent.done")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    expect(spawns.length).toBe(1);
+    const argv = spawns[0].argv;
+    const prompt = argv[argv.indexOf("--print") + 1];
+    expect(prompt).toContain("match this screenshot");
+    expect(prompt).toContain(".agent-artifacts/chat-uploads/t-img/1-Screen-Shot.png");
+
+    const imagePath = join(root, ".agent-artifacts", "chat-uploads", "t-img", "1-Screen-Shot.png");
+    await expect(stat(imagePath)).resolves.toBeDefined();
+    await expect(readFile(imagePath, "utf8")).resolves.toBe("fake image bytes");
     client.close();
   });
 
@@ -319,7 +418,7 @@ describe("broker ws server", () => {
     const events: unknown[] = [];
     client.on("message", (data) => events.push(JSON.parse(data.toString())));
 
-    client.send(JSON.stringify({ type: "agent.prompt", prompt: "foo", turnId: "t3" }));
+    client.send(JSON.stringify(promptMsg("foo", "t3")));
 
     const start = Date.now();
     while (Date.now() - start < 2000) {

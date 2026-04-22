@@ -28,6 +28,8 @@ function makeFakeChild(stdoutLines: string[], exitCode = 0) {
 describe("runClaudeTurn", () => {
   const baseOpts = {
     projectId: "p1",
+    claudeSessionId: "11111111-1111-4111-8111-111111111111",
+    resumeClaudeSession: false,
     prompt: "change hi",
     turnId: "t-1",
   };
@@ -56,7 +58,7 @@ describe("runClaudeTurn", () => {
     await runClaudeTurn({ ...baseOpts, onEvent: (e) => events.push(e) }, deps);
 
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["agent.status", "agent.chunk", "agent.done"]);
+    expect(types).toEqual(["agent.session", "agent.status", "agent.chunk", "agent.done"]);
   });
 
   it("passes the correct argv to spawn (no --max-turns, has other flags)", async () => {
@@ -75,6 +77,8 @@ describe("runClaudeTurn", () => {
     expect(argv).toContain("stream-json");
     expect(argv).toContain("--verbose");
     expect(argv).toContain("--session-id");
+    const sessionIdx = argv.indexOf("--session-id");
+    expect(argv[sessionIdx + 1]).toBe(baseOpts.claudeSessionId);
     expect(argv).toContain("--model");
     // Claude Code v2.1.117 refuses --dangerously-skip-permissions under root,
     // which containers always run as. Use --permission-mode acceptEdits instead.
@@ -83,6 +87,23 @@ describe("runClaudeTurn", () => {
     expect(argv).not.toContain("--dangerously-skip-permissions");
     // --max-turns is NOT supported in Claude Code v2.1.116+; must not be passed
     expect(argv).not.toContain("--max-turns");
+  });
+
+  it("uses --resume instead of --session-id when continuing a saved session", async () => {
+    const spawn = vi.fn(() =>
+      makeFakeChild([
+        JSON.stringify({ type: "result", subtype: "success", duration_ms: 1 }),
+      ]),
+    ) as unknown as SpawnFn;
+    await runClaudeTurn(
+      { ...baseOpts, resumeClaudeSession: true, onEvent: () => {} },
+      { spawn },
+    );
+    const mockFn = spawn as unknown as ReturnType<typeof vi.fn>;
+    const [, argv] = mockFn.mock.calls[0] as [string, string[], ...unknown[]];
+    expect(argv).toContain("--resume");
+    expect(argv[argv.indexOf("--resume") + 1]).toBe(baseOpts.claudeSessionId);
+    expect(argv).not.toContain("--session-id");
   });
 
   it("emits agent.error when process exits non-zero without a result line", async () => {
@@ -136,6 +157,40 @@ describe("runClaudeTurn", () => {
     const last = events[events.length - 1];
     expect(last?.type).toBe("agent.done");
     expect(last && last.type === "agent.done" && last.exitCode).toBe(-1);
+  });
+
+  it("emits a timeout error instead of a generic abort when the hard limit is reached", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: Readable;
+      stderr: Readable;
+      stdin: Writable;
+      kill: (sig?: NodeJS.Signals | number) => boolean;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    child.kill = vi.fn(() => {
+      setImmediate(() => {
+        (child.stdout as PassThrough).end();
+        (child.stderr as PassThrough).end();
+        child.emit("close", null);
+      });
+      return true;
+    });
+
+    const deps: ClaudeRunnerDeps = { spawn: vi.fn(() => child) as unknown as SpawnFn };
+    const events: BrokerToHost[] = [];
+
+    await runClaudeTurn(
+      { ...baseOpts, onEvent: (e) => events.push(e), timeoutMs: 1 },
+      deps,
+    );
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    const last = events[events.length - 1];
+    expect(last?.type).toBe("agent.error");
+    expect(last && last.type === "agent.error" && last.message).toMatch(/timed out after/i);
+    expect(last && last.type === "agent.error" && last.message).toContain("CLAUDE_TURN_TIMEOUT_MS");
   });
 });
 

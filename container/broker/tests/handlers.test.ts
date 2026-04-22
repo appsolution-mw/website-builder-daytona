@@ -20,7 +20,13 @@ describe("broker handlers", () => {
   });
 
   it("returns undefined for stateful agent message types", () => {
-    expect(handleMessage({ type: "agent.prompt", prompt: "x", turnId: "t" })).toBeUndefined();
+    expect(handleMessage({
+      type: "agent.prompt",
+      prompt: "x",
+      turnId: "t",
+      claudeSessionId: "33333333-3333-4333-8333-333333333333",
+      resumeClaudeSession: false,
+    })).toBeUndefined();
     expect(handleMessage({ type: "agent.abort", turnId: "t" })).toBeUndefined();
   });
 });

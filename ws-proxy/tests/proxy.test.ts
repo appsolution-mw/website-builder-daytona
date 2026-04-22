@@ -1,14 +1,18 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import WebSocket, { WebSocketServer, type AddressInfo } from "ws";
 import { startProxy, type ProxyHandle, extractProjectId } from "../src/index";
+import type { AgentUsageEvent } from "@wbd/protocol";
 
 // Minimal mock broker: accepts connections, echoes ping → pong.
-function startMockBroker(): Promise<{ port: number; close: () => Promise<void> }> {
+function startMockBroker(opts: {
+  onConnection?: (socket: WebSocket) => void;
+} = {}): Promise<{ port: number; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const wss = new WebSocketServer({ port: 0 });
     wss.once("error", reject);
     wss.once("listening", () => {
       wss.on("connection", (socket) => {
+        opts.onConnection?.(socket);
         socket.on("message", (data) => {
           const msg = JSON.parse(data.toString());
           if (msg.type === "ping") {
@@ -102,6 +106,61 @@ describe("ws-proxy", () => {
 
     expect(isBinary).toBe(false);
     expect(Buffer.isBuffer(data)).toBe(true);
+    client.close();
+  });
+
+  it("records token usage events while forwarding broker messages", async () => {
+    await proxy?.close();
+    await broker?.close();
+
+    const usageEvent: AgentUsageEvent = {
+      type: "agent.usage",
+      turnId: "turn-1",
+      label: "turn",
+      durationMs: 1000,
+      tokensIn: 10,
+      tokensOut: 20,
+      costUsd: 0.012,
+      exitCode: 0,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheCreationInputTokens: 30,
+        cacheReadInputTokens: 40,
+        totalTokens: 100,
+        webSearchRequests: 1,
+        webFetchRequests: 2,
+        rawUsage: { input_tokens: 10 },
+      },
+    };
+    broker = await startMockBroker({
+      onConnection: (socket) => {
+        socket.once("message", () => socket.send(JSON.stringify(usageEvent)));
+      },
+    });
+
+    const recorded: Array<{ projectId: string; event: AgentUsageEvent }> = [];
+    proxy = await startProxy({
+      port: 0,
+      resolveBrokerUrl: () => `ws://localhost:${broker!.port}`,
+      recordTokenUsage: (projectId, event) => {
+        recorded.push({ projectId, event });
+      },
+    });
+
+    const client = new WebSocket(`ws://localhost:${proxy.port}/p/test-project`);
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+
+    const reply = await new Promise<string>((resolve) => {
+      client.once("message", (data) => resolve(data.toString()));
+      client.send(JSON.stringify({ type: "ping", nonce: "usage" }));
+    });
+
+    expect(JSON.parse(reply)).toEqual(usageEvent);
+    expect(recorded).toEqual([{ projectId: "test-project", event: usageEvent }]);
     client.close();
   });
 });

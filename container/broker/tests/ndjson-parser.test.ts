@@ -6,9 +6,18 @@ const TURN = "t-123";
 
 describe("parseNdjsonLine", () => {
   it("maps init system event to agent.status{phase:starting}", () => {
-    const line = JSON.stringify({ type: "system", subtype: "init", session_id: "s-1" });
+    const line = JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "11111111-1111-4111-8111-111111111111",
+    });
     const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
+      {
+        type: "agent.session",
+        turnId: TURN,
+        claudeSessionId: "11111111-1111-4111-8111-111111111111",
+      },
       { type: "agent.status", turnId: TURN, phase: "starting" },
     ]);
   });
@@ -77,13 +86,28 @@ describe("parseNdjsonLine", () => {
     const line = JSON.stringify({
       type: "result",
       subtype: "success",
+      session_id: "22222222-2222-4222-8222-222222222222",
       duration_ms: 12340,
       num_turns: 3,
       total_cost_usd: 0.012,
-      usage: { input_tokens: 1234, output_tokens: 456 },
+      usage: {
+        input_tokens: 1234,
+        output_tokens: 456,
+        cache_creation_input_tokens: 7,
+        cache_read_input_tokens: 8,
+        server_tool_use: { web_search_requests: 1, web_fetch_requests: 2 },
+        service_tier: "standard",
+        inference_geo: "not_available",
+      },
+      modelUsage: { "claude-sonnet": { inputTokens: 1234 } },
     });
     const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
+      {
+        type: "agent.session",
+        turnId: TURN,
+        claudeSessionId: "22222222-2222-4222-8222-222222222222",
+      },
       {
         type: "agent.done",
         turnId: TURN,
@@ -92,6 +116,27 @@ describe("parseNdjsonLine", () => {
         tokensOut: 456,
         costUsd: 0.012,
         exitCode: 0,
+        usage: {
+          inputTokens: 1234,
+          outputTokens: 456,
+          cacheCreationInputTokens: 7,
+          cacheReadInputTokens: 8,
+          totalTokens: 1705,
+          webSearchRequests: 1,
+          webFetchRequests: 2,
+          rawUsage: {
+            input_tokens: 1234,
+            output_tokens: 456,
+            cache_creation_input_tokens: 7,
+            cache_read_input_tokens: 8,
+            server_tool_use: { web_search_requests: 1, web_fetch_requests: 2 },
+            service_tier: "standard",
+            inference_geo: "not_available",
+          },
+          modelUsage: { "claude-sonnet": { inputTokens: 1234 } },
+          serviceTier: "standard",
+          inferenceGeo: "not_available",
+        },
       },
     ]);
   });
