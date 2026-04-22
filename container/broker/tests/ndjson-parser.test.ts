@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseNdjsonLine } from "../src/ndjson-parser";
+import { parseNdjsonLine, createTaskMap, type TaskMap } from "../src/ndjson-parser";
 import type { BrokerToHost } from "@wbd/protocol";
 
 const TURN = "t-123";
@@ -7,7 +7,7 @@ const TURN = "t-123";
 describe("parseNdjsonLine", () => {
   it("maps init system event to agent.status{phase:starting}", () => {
     const line = JSON.stringify({ type: "system", subtype: "init", session_id: "s-1" });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
       { type: "agent.status", turnId: TURN, phase: "starting" },
     ]);
@@ -18,7 +18,7 @@ describe("parseNdjsonLine", () => {
       type: "assistant",
       message: { content: [{ type: "text", text: "Hello world" }] },
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
       { type: "agent.chunk", turnId: TURN, delta: "Hello world" },
     ]);
@@ -33,7 +33,7 @@ describe("parseNdjsonLine", () => {
         ],
       },
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
       {
         type: "agent.tool_use",
@@ -60,7 +60,7 @@ describe("parseNdjsonLine", () => {
         ],
       },
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events.map((e) => e.type)).toEqual(["agent.chunk", "agent.tool_use", "agent.status"]);
   });
 
@@ -69,7 +69,7 @@ describe("parseNdjsonLine", () => {
       type: "user",
       message: { content: [{ type: "tool_result", tool_use_id: "x", content: "ok" }] },
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual([]);
   });
 
@@ -82,7 +82,7 @@ describe("parseNdjsonLine", () => {
       total_cost_usd: 0.012,
       usage: { input_tokens: 1234, output_tokens: 456 },
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
       {
         type: "agent.done",
@@ -102,7 +102,7 @@ describe("parseNdjsonLine", () => {
       subtype: "error_max_turns",
       duration_ms: 5000,
     });
-    const events = parseNdjsonLine(line, TURN);
+    const events = parseNdjsonLine(line, TURN, createTaskMap());
     expect(events).toEqual<BrokerToHost[]>([
       {
         type: "agent.error",
@@ -113,17 +113,17 @@ describe("parseNdjsonLine", () => {
   });
 
   it("returns [] for blank or whitespace lines", () => {
-    expect(parseNdjsonLine("", TURN)).toEqual([]);
-    expect(parseNdjsonLine("   ", TURN)).toEqual([]);
+    expect(parseNdjsonLine("", TURN, createTaskMap())).toEqual([]);
+    expect(parseNdjsonLine("   ", TURN, createTaskMap())).toEqual([]);
   });
 
   it("returns [] (does not throw) for malformed JSON", () => {
-    expect(parseNdjsonLine("{not valid json", TURN)).toEqual([]);
+    expect(parseNdjsonLine("{not valid json", TURN, createTaskMap())).toEqual([]);
   });
 
   it("returns [] for unknown type (forward-compatible)", () => {
     const line = JSON.stringify({ type: "future_event_type", foo: "bar" });
-    expect(parseNdjsonLine(line, TURN)).toEqual([]);
+    expect(parseNdjsonLine(line, TURN, createTaskMap())).toEqual([]);
   });
 
   it("handles the recorded fixture end-to-end", async () => {
@@ -134,12 +134,132 @@ describe("parseNdjsonLine", () => {
     const content = await readFile(resolve(here, "fixtures/sample-turn.ndjson"), "utf8");
     const lines = content.split("\n");
     const allEvents: BrokerToHost[] = [];
+    const fixtureMap = createTaskMap();
     for (const line of lines) {
-      allEvents.push(...parseNdjsonLine(line, TURN));
+      allEvents.push(...parseNdjsonLine(line, TURN, fixtureMap));
     }
     expect(allEvents.length).toBeGreaterThan(0);
     // The last real event should be agent.done or agent.error
     const last = allEvents[allEvents.length - 1];
     expect(["agent.done", "agent.error"]).toContain(last?.type);
+  });
+});
+
+describe("ndjson-parser agentId tagging", () => {
+  function line(obj: unknown): string {
+    return JSON.stringify(obj);
+  }
+
+  it("tags a Task tool_use with no agentId and records the mapping", () => {
+    const map: TaskMap = createTaskMap();
+    const events = parseNdjsonLine(
+      line({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tu-1",
+              name: "Task",
+              input: { subagent_type: "planner", description: "x", prompt: "y" },
+            },
+          ],
+        },
+      }),
+      "turn-1",
+      map,
+    );
+
+    expect(map.has("tu-1")).toBe(true);
+    expect(map.get("tu-1")).toBe("planner");
+    const toolUseEvent = events.find((e) => e.type === "agent.tool_use");
+    expect((toolUseEvent as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+  });
+
+  it("tags an inner tool_use as coming from the mapped sub-agent", () => {
+    const map: TaskMap = createTaskMap();
+    map.set("tu-1", "planner");
+    const events = parseNdjsonLine(
+      line({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tu-2",
+              name: "Grep",
+              input: { pattern: "foo" },
+              parent_tool_use_id: "tu-1",
+            },
+          ],
+        },
+      }),
+      "turn-1",
+      map,
+    );
+
+    const toolUseEvent = events.find((e) => e.type === "agent.tool_use");
+    expect((toolUseEvent as { agentId?: string } | undefined)?.agentId).toBe("planner");
+  });
+
+  it("tags text chunks under a sub-agent with agentId", () => {
+    const map: TaskMap = createTaskMap();
+    map.set("tu-1", "explorer");
+    const events = parseNdjsonLine(
+      line({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "I found 2 matches." },
+          ],
+          parent_tool_use_id: "tu-1",
+        },
+      }),
+      "turn-1",
+      map,
+    );
+
+    const chunk = events.find((e) => e.type === "agent.chunk");
+    expect((chunk as { agentId?: string } | undefined)?.agentId).toBe("explorer");
+  });
+
+  it("leaves events without parent_tool_use_id untagged", () => {
+    const map: TaskMap = createTaskMap();
+    const events = parseNdjsonLine(
+      line({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "hi" }],
+        },
+      }),
+      "turn-1",
+      map,
+    );
+    const chunk = events.find((e) => e.type === "agent.chunk");
+    expect((chunk as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+  });
+
+  it("ignores parent_tool_use_id that was never registered", () => {
+    const map: TaskMap = createTaskMap();
+    const events = parseNdjsonLine(
+      line({
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "stray" }],
+          parent_tool_use_id: "unknown-id",
+        },
+      }),
+      "turn-1",
+      map,
+    );
+    const chunk = events.find((e) => e.type === "agent.chunk");
+    expect((chunk as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+  });
+
+  it("createTaskMap returns a fresh map each call", () => {
+    const a = createTaskMap();
+    const b = createTaskMap();
+    a.set("tu-1", "planner");
+    expect(b.has("tu-1")).toBe(false);
   });
 });

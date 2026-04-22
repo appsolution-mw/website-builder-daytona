@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import type { BrokerToHost } from "@wbd/protocol";
-import { parseNdjsonLine } from "./ndjson-parser";
+import { parseNdjsonLine, createTaskMap } from "./ndjson-parser";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const MODEL = "claude-sonnet-4-6";
@@ -112,6 +112,8 @@ export async function runClaudeTurn(
     });
   }
 
+  const taskMap = createTaskMap();
+
   let buffer = "";
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {
@@ -120,7 +122,7 @@ export async function runClaudeTurn(
     while ((idx = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 1);
-      for (const event of parseNdjsonLine(line, opts.turnId)) emit(event);
+      for (const event of parseNdjsonLine(line, opts.turnId, taskMap)) emit(event);
     }
   });
 
@@ -133,7 +135,7 @@ export async function runClaudeTurn(
     child.once("close", (code) => {
       clearTimeout(timeout);
       if (buffer.trim()) {
-        for (const event of parseNdjsonLine(buffer, opts.turnId)) emit(event);
+        for (const event of parseNdjsonLine(buffer, opts.turnId, taskMap)) emit(event);
       }
       if (aborted) {
         emit({

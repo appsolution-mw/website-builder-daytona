@@ -1,15 +1,21 @@
 import type { BrokerToHost } from "@wbd/protocol";
 
 /**
- * Map one line of Claude Code stream-json output to zero or more protocol events.
- *
- * Design: pure function, no I/O, no state. The caller (claude-runner) is
- * responsible for line-splitting and for tracking the turn that owns the stream.
- *
- * Forward-compatibility: unknown `type` values return [] rather than throwing,
- * so a future Claude Code release adding new event types doesn't crash the broker.
+ * Per-turn mapping from Task tool_use id → sub-agent name.
+ * Caller must create a fresh map per turn (via createTaskMap()) and pass the
+ * same instance to every parseNdjsonLine call for that turn.
  */
-export function parseNdjsonLine(line: string, turnId: string): BrokerToHost[] {
+export type TaskMap = Map<string, string>;
+
+export function createTaskMap(): TaskMap {
+  return new Map();
+}
+
+export function parseNdjsonLine(
+  line: string,
+  turnId: string,
+  taskMap: TaskMap,
+): BrokerToHost[] {
   const trimmed = line.trim();
   if (!trimmed) return [];
 
@@ -29,24 +35,60 @@ export function parseNdjsonLine(line: string, turnId: string): BrokerToHost[] {
   }
 
   if (type === "assistant") {
-    const message = msg.message as { content?: Array<Record<string, unknown>> } | undefined;
+    const message = msg.message as
+      | {
+          content?: Array<Record<string, unknown>>;
+          parent_tool_use_id?: string;
+        }
+      | undefined;
     const content = message?.content ?? [];
+    const messageParent = message?.parent_tool_use_id;
+
     const events: BrokerToHost[] = [];
     for (const block of content) {
+      const blockParent =
+        typeof block.parent_tool_use_id === "string"
+          ? block.parent_tool_use_id
+          : messageParent;
+      const agentId =
+        typeof blockParent === "string" ? taskMap.get(blockParent) : undefined;
+
       if (block.type === "text" && typeof block.text === "string") {
-        events.push({ type: "agent.chunk", turnId, delta: block.text });
+        events.push({
+          type: "agent.chunk",
+          turnId,
+          delta: block.text,
+          ...(agentId ? { agentId } : {}),
+        });
       } else if (block.type === "tool_use" && typeof block.name === "string") {
+        const toolUseId = typeof block.id === "string" ? block.id : undefined;
+        const input = block.input;
+        if (
+          block.name === "Task" &&
+          toolUseId &&
+          input &&
+          typeof input === "object" &&
+          typeof (input as Record<string, unknown>).subagent_type === "string"
+        ) {
+          taskMap.set(
+            toolUseId,
+            (input as Record<string, unknown>).subagent_type as string,
+          );
+        }
+
         events.push({
           type: "agent.tool_use",
           turnId,
           tool: block.name,
-          input: block.input,
+          input,
+          ...(agentId ? { agentId } : {}),
         });
         events.push({
           type: "agent.status",
           turnId,
           phase: "tool_use",
           detail: block.name,
+          ...(agentId ? { agentId } : {}),
         });
       }
     }
@@ -54,13 +96,14 @@ export function parseNdjsonLine(line: string, turnId: string): BrokerToHost[] {
   }
 
   if (type === "user") {
-    // Tool results — no UI event needed; the status was emitted on tool_use.
     return [];
   }
 
   if (type === "result") {
     if (msg.subtype === "success") {
-      const usage = msg.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+      const usage = msg.usage as
+        | { input_tokens?: number; output_tokens?: number }
+        | undefined;
       return [
         {
           type: "agent.done",
