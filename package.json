@@ -16,6 +16,7 @@
     "test": "pnpm -r test"
   },
   "dependencies": {
+    "@daytona/sdk": "^0.168.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@wbd/protocol": "workspace:*",
