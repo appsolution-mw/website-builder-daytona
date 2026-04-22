@@ -1,6 +1,9 @@
 "use client";
 
 import { type ReactNode } from "react";
+import { Code2, Eye } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 
 export type RightPaneTab = "code" | "preview";
 
@@ -12,23 +15,34 @@ export interface RightPaneProps {
 }
 
 export function RightPane(props: RightPaneProps) {
+  const icons = {
+    code: Code2,
+    preview: Eye,
+  };
+
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-      <div className="flex items-center gap-1 border-b border-gray-200 px-2 py-1 text-xs">
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="flex min-h-12 items-center justify-between border-b border-border bg-card px-3">
+        <div className="flex items-center gap-1 rounded-md border border-border bg-background p-1">
         {(["code", "preview"] as const).map((t) => (
-          <button
+          <Button
             key={t}
             type="button"
             onClick={() => props.onTabChange(t)}
-            className={`rounded px-3 py-1 capitalize ${
-              props.tab === t ? "bg-gray-100 font-semibold" : "text-gray-500 hover:text-gray-800"
-            }`}
+            variant={props.tab === t ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 capitalize"
           >
+            {(() => {
+              const Icon = icons[t];
+              return <Icon />;
+            })()}
             {t}
-          </button>
+          </Button>
         ))}
+        </div>
       </div>
-      <div className="flex flex-1 min-h-0">
+      <div className="flex min-h-0 flex-1">
         <div className={`min-w-0 flex-1 ${props.tab === "code" ? "flex" : "hidden"}`}>
           {props.code}
         </div>

@@ -2,11 +2,30 @@
 
 import { use, useCallback, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Bot,
+  Code2,
+  ExternalLink,
+  Globe2,
+  Loader2,
+  MessageSquare,
+  RefreshCw,
+  Send,
+  Square,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
 import { Message, type ChatMessageView } from "@/components/chat/Message";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 
 type Project = {
   id: string;
@@ -432,101 +451,194 @@ export default function ProjectWorkspace({
 
   if (!project) {
     return (
-      <main className="flex flex-1 items-center justify-center p-8 text-gray-500">
-        Loading project…
+      <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
+        <div className="w-full max-w-xl rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center gap-3">
+            <Skeleton className="size-11 rounded-lg" />
+            <div className="grid flex-1 gap-2">
+              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-4 w-72 max-w-full" />
+            </div>
+          </div>
+        </div>
       </main>
     );
   }
 
   if (project.status === "PROVISIONING") {
     return (
-      <main className="mx-auto flex max-w-xl flex-1 flex-col items-center gap-4 p-8 text-center">
-        <Link href="/" className="self-start text-sm underline">← back</Link>
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
-        <h1 className="text-xl font-semibold">Provisioning {project.name}…</h1>
-        <p className="text-sm text-gray-500">First boot takes about a minute while the container pulls dependencies.</p>
+      <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
+        <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+          <Button asChild variant="ghost" className="mb-5 w-fit">
+            <Link href="/">
+              <ArrowLeft />
+              Back
+            </Link>
+          </Button>
+          <div className="mx-auto flex size-14 items-center justify-center rounded-lg border border-border bg-secondary">
+            <Loader2 className="size-6 animate-spin text-primary" />
+          </div>
+          <h1 className="mt-5 text-2xl font-semibold tracking-tight">Provisioning {project.name}...</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            First boot can take about a minute while the container pulls dependencies.
+          </p>
+        </section>
       </main>
     );
   }
 
   if (project.status !== "RUNNING") {
     return (
-      <main className="mx-auto flex max-w-xl flex-1 flex-col items-center gap-4 p-8 text-center">
-        <Link href="/" className="self-start text-sm underline">← back</Link>
-        <h1 className="text-xl font-semibold text-red-700">Project {project.status.toLowerCase()}</h1>
+      <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
+        <section className="w-full max-w-xl rounded-lg border border-destructive/25 bg-card p-6 shadow-sm">
+          <Button asChild variant="ghost" className="mb-5 w-fit">
+            <Link href="/">
+              <ArrowLeft />
+              Back
+            </Link>
+          </Button>
+          <div className="flex items-start gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-destructive/25 bg-destructive/10">
+              <AlertTriangle className="size-5 text-red-200" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-red-100">
+                Project {project.status.toLowerCase()}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">The workspace is not available right now.</p>
+            </div>
+          </div>
         {project.provisioningError && (
-          <pre className="max-w-full overflow-auto rounded bg-red-50 p-3 text-left font-mono text-xs text-red-900">
+          <pre className="mt-4 max-w-full overflow-auto rounded-md border border-destructive/25 bg-background p-3 text-left font-mono text-xs text-red-100">
             {project.provisioningError}
           </pre>
         )}
+        </section>
       </main>
     );
   }
 
   const dirty = fileContent !== null && fileContent !== fileContentBase;
   const editorReadOnly = turnInFlight !== null;
+  const wsOpen = wsStatus === "open";
 
   return (
-    <main className="flex flex-1 flex-col">
-      <header className="flex items-baseline justify-between border-b border-gray-200 p-3 px-4">
-        <div className="flex items-baseline gap-3">
-          <Link href="/" className="text-sm underline">← back</Link>
-          <h1 className="text-lg font-semibold">{project.name}</h1>
-          <span className="text-xs text-gray-500">WS: {wsStatus}</span>
+    <main className="flex h-dvh min-h-dvh flex-1 flex-col overflow-hidden bg-background">
+      <header className="flex min-h-14 items-center justify-between gap-3 border-b border-border bg-card px-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button asChild variant="ghost" size="icon" aria-label="Back to projects">
+            <Link href="/">
+              <ArrowLeft />
+            </Link>
+          </Button>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-base font-semibold">{project.name}</h1>
+              <Badge variant="success">running</Badge>
+            </div>
+            <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+              {wsOpen ? <Wifi className="size-3.5 text-emerald-300" /> : <WifiOff className="size-3.5" />}
+              <span>WS: {wsStatus}</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {project.previewUrl && (
+            <Button asChild variant="outline" size="sm" className="hidden sm:inline-flex">
+              <a href={project.previewUrl} target="_blank" rel="noreferrer">
+                <ExternalLink />
+                Preview
+              </a>
+            </Button>
+          )}
+          <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
+            {turnInFlight ? "agent busy" : "ready"}
+          </Badge>
         </div>
       </header>
 
-      <div ref={workspaceRef} className="flex flex-1 overflow-hidden">
+      <div ref={workspaceRef} className="flex min-h-0 flex-1 overflow-hidden">
         <section
-          className="flex min-w-[260px] flex-col overflow-hidden"
+          className="flex min-w-[280px] flex-col overflow-hidden border-r border-border bg-card max-md:min-w-0 max-md:flex-[0_0_42%]"
           style={{ flexBasis: `${chatWidthPct}%` }}
         >
-          <h2 className="border-b border-gray-100 p-2 px-3 text-xs font-medium uppercase tracking-wide text-gray-500">Chat</h2>
+          <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="size-4 text-primary" />
+              <h2 className="text-sm font-semibold">Chat</h2>
+            </div>
+            {turnInFlight && <Badge variant="warning">streaming</Badge>}
+          </div>
           <ul className="flex flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
-            {messages.length === 0 && <li className="text-gray-400">No messages yet.</li>}
+            {messages.length === 0 && (
+              <li className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
+                <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
+                  <Bot className="size-4 text-primary" />
+                  Claude is ready
+                </div>
+                Ask for a change and watch files update in the editor.
+              </li>
+            )}
             {messages.map((m, idx) => (
               <Message key={(m.turnId ?? "err") + ":" + idx} m={m} />
             ))}
           </ul>
-          <form onSubmit={onSubmit} className="flex flex-col gap-2 border-t border-gray-200 p-3">
-            <textarea
+          <form onSubmit={onSubmit} className="flex flex-col gap-2 border-t border-border bg-background/55 p-3">
+            <label className="sr-only" htmlFor="agent-prompt">Prompt</label>
+            <Textarea
+              id="agent-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Tell Claude what to change…"
               rows={3}
               disabled={wsStatus !== "open" || turnInFlight !== null}
-              className="rounded border border-gray-300 px-2 py-1 text-sm disabled:bg-gray-50"
+              className="min-h-28"
             />
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">
-                {turnInFlight ? "Claude is thinking…" : ""}
+              <span className="text-xs text-muted-foreground">
+                {turnInFlight ? "Claude is thinking..." : wsOpen ? "Connected" : "Waiting for websocket"}
               </span>
               <div className="flex gap-2">
                 {turnInFlight && (
-                  <button
+                  <Button
                     type="button"
                     onClick={onAbort}
-                    className="rounded border border-red-300 px-3 py-1 text-xs text-red-700 hover:bg-red-50"
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/30 text-red-200 hover:bg-destructive/10 hover:text-red-100"
                   >
+                    <Square />
                     Abort
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
                   type="submit"
                   disabled={wsStatus !== "open" || turnInFlight !== null || !prompt.trim()}
-                  className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-50"
+                  size="sm"
                 >
+                  <Send />
                   Send
-                </button>
+                </Button>
               </div>
             </div>
           </form>
         </section>
 
         <div
-          className="w-1 shrink-0 cursor-col-resize bg-gray-200 transition hover:bg-gray-400"
+          className="w-1.5 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary focus-visible:bg-primary focus-visible:outline-none"
           onPointerDown={onResizeStart}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") {
+              e.preventDefault();
+              setChatWidthPct((v) => Math.max(MIN_CHAT_WIDTH_PCT, v - 2));
+            }
+            if (e.key === "ArrowRight") {
+              e.preventDefault();
+              setChatWidthPct((v) => Math.min(MAX_CHAT_WIDTH_PCT, v + 2));
+            }
+          }}
           role="separator"
+          tabIndex={0}
           aria-label="Resize chat panel"
           aria-orientation="vertical"
           aria-valuemin={MIN_CHAT_WIDTH_PCT}
@@ -538,8 +650,24 @@ export default function ProjectWorkspace({
           tab={tab}
           onTabChange={setTab}
           code={
-            <div className="flex h-full w-full">
-              <aside className="w-60 shrink-0 overflow-auto border-r border-gray-200">
+            <div className="flex h-full w-full bg-background">
+              <aside className="w-64 shrink-0 overflow-auto border-r border-border bg-card">
+                <div className="flex min-h-11 items-center justify-between border-b border-border px-3">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Code2 className="size-4 text-primary" />
+                    Files
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={requestFileList}
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Refresh files"
+                    className="size-8"
+                  >
+                    <RefreshCw className={fileListLoading ? "animate-spin" : ""} />
+                  </Button>
+                </div>
                 <FileTree
                   paths={paths}
                   selectedPath={selectedPath}
@@ -566,14 +694,25 @@ export default function ProjectWorkspace({
           }
           preview={
             project.previewUrl ? (
-              <iframe
-                src={project.previewUrl}
-                className="w-full flex-1 border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms"
-                title="project preview"
-              />
+              <div className="flex min-w-0 flex-1 flex-col bg-background">
+                <div className="flex min-h-11 items-center gap-2 border-b border-border bg-card px-3 text-xs text-muted-foreground">
+                  <Globe2 className="size-4 text-primary" />
+                  <span className="truncate font-mono">{project.previewUrl}</span>
+                </div>
+                <iframe
+                  src={project.previewUrl}
+                  className="w-full flex-1 border-0 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-forms"
+                  title="project preview"
+                />
+              </div>
             ) : (
-              <div className="flex w-full flex-1 items-center justify-center text-sm text-gray-400">No preview URL.</div>
+              <div className="flex w-full flex-1 flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+                <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-secondary">
+                  <Globe2 className="size-5" />
+                </div>
+                No preview URL.
+              </div>
             )
           }
         />

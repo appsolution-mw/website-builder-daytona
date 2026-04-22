@@ -2,12 +2,17 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef } from "react";
+import { Check, FileCode2, Loader2, Save, TriangleAlert } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 const Monaco = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center text-sm text-gray-400">
-      Loading editor…
+    <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Loader2 className="size-4 animate-spin" />
+      Loading editor...
     </div>
   ),
 });
@@ -53,43 +58,56 @@ export function CodeEditor(props: CodeEditorProps) {
 
   if (!path) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-sm text-gray-400">
-        Select a file from the tree to view it.
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+        <div className="flex size-12 items-center justify-center rounded-lg border border-border bg-secondary">
+          <FileCode2 className="size-5" />
+        </div>
+        <span>Select a file from the tree to view it.</span>
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="flex h-full w-full flex-col">
-      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-1 text-xs">
-        <div className="flex items-center gap-2 text-gray-600">
-          <span className="font-mono">{path}</span>
-          {dirty && <span className="text-amber-600">•</span>}
+    <div ref={containerRef} className="flex h-full w-full flex-col bg-background">
+      <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border bg-card px-3 text-xs">
+        <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+          <FileCode2 className="size-4 shrink-0" />
+          <span className="truncate font-mono">{path}</span>
+          {dirty && <span className="size-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Unsaved changes" />}
         </div>
         <div className="flex items-center gap-2">
           {readOnly && (
-            <span className="rounded bg-amber-50 px-2 py-0.5 text-amber-800">
-              Agent editing — save disabled
-            </span>
+            <Badge variant="warning">Agent editing</Badge>
           )}
-          {saveIndicator === "saved" && <span className="text-green-700">saved</span>}
+          {saveIndicator === "saved" && (
+            <Badge variant="success">
+              <Check className="size-3.5" />
+              saved
+            </Badge>
+          )}
           {saveIndicator === "error" && (
-            <span className="text-red-700">error{saveError ? `: ${saveError}` : ""}</span>
+            <Badge variant="destructive">
+              <TriangleAlert className="size-3.5" />
+              error{saveError ? `: ${saveError}` : ""}
+            </Badge>
           )}
-          <button
+          <Button
             type="button"
             onClick={onSave}
             disabled={readOnly || !dirty}
-            className="rounded border border-gray-300 px-2 py-0.5 disabled:opacity-40"
+            variant="secondary"
+            size="sm"
           >
+            <Save />
             Save
-          </button>
+          </Button>
         </div>
       </div>
       <div className="flex-1">
         {content === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-gray-400">
-            Loading…
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Loading...
           </div>
         ) : (
           <Monaco
@@ -102,9 +120,12 @@ export function CodeEditor(props: CodeEditorProps) {
               readOnly,
               minimap: { enabled: false },
               fontSize: 13,
+              fontLigatures: true,
               scrollBeyondLastLine: false,
               automaticLayout: true,
+              padding: { top: 16, bottom: 16 },
             }}
+            theme="vs-dark"
           />
         )}
       </div>

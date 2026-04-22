@@ -1,7 +1,10 @@
 "use client";
 
+import { AlertTriangle, Bot, ChevronRight, Terminal, User } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { Badge } from "@/components/ui/badge";
 
 export type ChatMessageView =
   | { kind: "user"; turnId: string; text: string }
@@ -18,32 +21,48 @@ export type ChatMessageView =
 export function Message({ m }: { m: ChatMessageView }) {
   if (m.kind === "user") {
     return (
-      <li className="self-end max-w-[85%] rounded-lg bg-blue-600 px-3 py-2 text-white">
-        {m.text}
+      <li className="self-end max-w-[88%] rounded-lg bg-primary px-3 py-2 text-primary-foreground shadow-sm">
+        <div className="mb-1 flex items-center gap-1.5 text-xs font-medium opacity-80">
+          <User className="size-3.5" />
+          You
+        </div>
+        <div className="whitespace-pre-wrap text-sm leading-6">{m.text}</div>
       </li>
     );
   }
   if (m.kind === "error") {
     return (
-      <li className="rounded-lg bg-red-50 px-3 py-2 font-mono text-xs text-red-800">
-        error: {m.text}
+      <li className="rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-red-100">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <span className="font-mono text-xs">error: {m.text}</span>
+        </div>
       </li>
     );
   }
   return (
-    <li className="max-w-[85%] rounded-lg border border-gray-200 bg-white px-3 py-2">
+    <li className="max-w-[92%] rounded-lg border border-border bg-card px-3 py-2 shadow-sm">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Bot className="size-3.5" />
+        Claude
+      </div>
       {m.tools.length > 0 && (
-        <ul className="mb-2 flex flex-col gap-0.5 text-xs italic text-gray-500">
+        <ul className="mb-2 flex flex-col gap-1">
           {m.tools.map((t, i) => (
-            <li key={i}>→ {t}</li>
+            <li key={i}>
+              <Badge variant="outline" className="max-w-full">
+                <Terminal className="size-3.5" />
+                <span className="truncate">{t}</span>
+              </Badge>
+            </li>
           ))}
         </ul>
       )}
-      <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 text-sm [&_code]:rounded [&_code]:bg-gray-100 [&_code]:px-1 [&_pre]:overflow-auto [&_pre]:rounded [&_pre]:bg-gray-900 [&_pre]:p-2 [&_pre]:text-xs [&_pre]:text-gray-100 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5">
+      <div className="text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-background [&_pre]:p-3 [&_pre]:text-xs [&_pre]:text-blue-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ul]:pl-5">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-        {m.streaming && <span>▎</span>}
+        {m.streaming && <ChevronRight className="inline size-4 animate-pulse text-primary" />}
       </div>
-      {m.footer && <div className="mt-2 text-xs text-gray-400">{m.footer}</div>}
+      {m.footer && <div className="mt-2 text-xs text-muted-foreground">{m.footer}</div>}
     </li>
   );
 }
