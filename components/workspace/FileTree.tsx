@@ -5,15 +5,36 @@ import { buildTreeFromPaths, type TreeNode } from "@/lib/tree/build-tree";
 
 export interface FileTreeProps {
   paths: string[];
+  loading: boolean;
+  error: string | null;
   selectedPath: string | null;
   recentlyChanged: Set<string>;
   onSelect: (path: string) => void;
+  onRetry: () => void;
 }
 
 export function FileTree(props: FileTreeProps) {
   const tree = buildTreeFromPaths(props.paths);
+  if (props.error) {
+    return (
+      <div className="flex flex-col gap-2 p-3 text-xs text-red-700">
+        <span>{props.error}</span>
+        <button
+          type="button"
+          onClick={props.onRetry}
+          className="w-fit rounded border border-red-200 px-2 py-1 text-red-800 hover:bg-red-50"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (tree.length === 0) {
-    return <div className="p-3 text-xs text-gray-400">Loading files…</div>;
+    return (
+      <div className="p-3 text-xs text-gray-400">
+        {props.loading ? "Loading files..." : "No files found."}
+      </div>
+    );
   }
   return (
     <ul className="flex flex-col gap-0.5 p-2 text-sm">

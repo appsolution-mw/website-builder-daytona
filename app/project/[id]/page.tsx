@@ -70,11 +70,15 @@ export default function ProjectWorkspace({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileContentBase, setFileContentBase] = useState<string | null>(null);
+  const [fileListLoading, setFileListLoading] = useState(false);
+  const [fileListError, setFileListError] = useState<string | null>(null);
   const [saveIndicator, setSaveIndicator] = useState<"idle" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
 
-  const pendingRef = useRef<Map<string, { resolve: (msg: ProxyToBrowser) => void; timer: number }>>(new Map());
+  const pendingRef = useRef<
+    Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
+  >(new Map());
   const handleEventRef = useRef<(ev: ProxyToBrowser) => void>(() => {});
 
   const selectedPathRef = useRef<string | null>(null);
@@ -83,7 +87,6 @@ export default function ProjectWorkspace({
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
-  useEffect(() => { handleEventRef.current = handleEvent; });
 
   function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
     const workspace = workspaceRef.current;
@@ -105,7 +108,10 @@ export default function ProjectWorkspace({
     window.addEventListener("pointerup", onPointerUp, { once: true });
   }
 
-  function sendRequest<T extends ProxyToBrowser>(msg: BrowserToProxy, requestId: string): Promise<T> {
+  const sendRequest = useCallback(function sendRequest<T extends ProxyToBrowser>(
+    msg: BrowserToProxy,
+    requestId: string,
+  ): Promise<T> {
     const ws = wsRef.current;
     return new Promise<T>((resolve, reject) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -118,11 +124,33 @@ export default function ProjectWorkspace({
       }, REQUEST_TIMEOUT_MS);
       pendingRef.current.set(requestId, {
         resolve: (m) => resolve(m as T),
+        reject,
         timer,
       });
       ws.send(JSON.stringify(msg));
     });
-  }
+  }, []);
+
+  const requestFileList = useCallback(async () => {
+    const requestId = crypto.randomUUID();
+    setFileListLoading(true);
+    setFileListError(null);
+    console.log("[ws] sending file.list", requestId);
+    try {
+      const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.list.result" }>>(
+        { type: "file.list", requestId },
+        requestId,
+      );
+      console.log("[ws] file.list reply", reply);
+      setPaths(reply.paths.slice().sort());
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "request failed";
+      setFileListError(`File list failed: ${message}`);
+      console.error("[ws] file.list failed", err);
+    } finally {
+      setFileListLoading(false);
+    }
+  }, [sendRequest]);
 
   function markChanged(path: string) {
     setRecentlyChanged((prev) => {
@@ -263,6 +291,8 @@ export default function ProjectWorkspace({
     }
   }
 
+  useEffect(() => { handleEventRef.current = handleEvent; });
+
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
@@ -288,25 +318,30 @@ export default function ProjectWorkspace({
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
     const ws = new WebSocket(`${base}/p/${id}`);
     wsRef.current = ws;
-    setWsStatus("connecting");
+    const statusTimer = window.setTimeout(() => {
+      if (wsRef.current === ws && ws.readyState !== WebSocket.OPEN) {
+        setWsStatus("connecting");
+        setFileListLoading(true);
+        setFileListError(null);
+      }
+    }, 0);
     ws.onopen = async () => {
       setWsStatus("open");
-      const requestId = crypto.randomUUID();
-      console.log("[ws] onopen → sending file.list", requestId);
-      try {
-        const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.list.result" }>>(
-          { type: "file.list", requestId },
-          requestId,
-        );
-        console.log("[ws] file.list reply", reply);
-        setPaths(reply.paths.slice().sort());
-      } catch (err) {
-        console.error("[ws] file.list failed", err);
-      }
+      void requestFileList();
+    };
+    ws.onerror = () => {
+      setFileListError((prev) => prev ?? "File list failed: websocket error");
+      setFileListLoading(false);
     };
     ws.onclose = () => {
       console.log("[ws] onclose");
       setWsStatus("closed");
+      setFileListLoading(false);
+      for (const [requestId, entry] of pendingRef.current) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error("ws closed"));
+        pendingRef.current.delete(requestId);
+      }
     };
     ws.onmessage = (ev) => {
       let parsed: ProxyToBrowser;
@@ -319,8 +354,11 @@ export default function ProjectWorkspace({
       console.log("[ws] message", parsed.type, parsed);
       handleEventRef.current(parsed);
     };
-    return () => ws.close();
-  }, [project?.status, id]);
+    return () => {
+      window.clearTimeout(statusTimer);
+      ws.close();
+    };
+  }, [project?.status, id, requestFileList]);
 
   async function onSelectFile(path: string) {
     if (path === selectedPath) return;
@@ -376,7 +414,7 @@ export default function ProjectWorkspace({
       setSaveIndicator("error");
       setSaveError("request timeout");
     }
-  }, [turnInFlight]);
+  }, [sendRequest, turnInFlight]);
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -513,8 +551,11 @@ export default function ProjectWorkspace({
                 <FileTree
                   paths={paths}
                   selectedPath={selectedPath}
+                  loading={fileListLoading}
+                  error={fileListError}
                   recentlyChanged={recentlyChanged}
                   onSelect={onSelectFile}
+                  onRetry={requestFileList}
                 />
               </aside>
               <div className="flex min-w-0 flex-1">
