@@ -80,6 +80,7 @@ export default function ProjectWorkspace({
   const [messages, setMessages] = useState<ChatMessageView[]>([]);
   const [prompt, setPrompt] = useState("");
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
+  const [reviewingActive, setReviewingActive] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const [chatWidthPct, setChatWidthPct] = useState(DEFAULT_CHAT_WIDTH_PCT);
@@ -215,78 +216,97 @@ export default function ProjectWorkspace({
     }
 
     if (ev.type === "agent.status") {
-      if (ev.phase === "done") setTurnInFlight(null);
+      if (ev.phase === "reviewing") setReviewingActive(true);
+      if (ev.phase === "done") {
+        setTurnInFlight(null);
+        setReviewingActive(false);
+      }
       return;
     }
     if (ev.type === "agent.chunk") {
+      const evAgentId = (ev as { agentId?: string }).agentId;
       setMessages((msgs) => {
-        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
-        if (i < 0) {
-          return [
-            ...msgs,
-            {
-              kind: "agent",
-              turnId: ev.turnId,
-              text: ev.delta,
-              streaming: true,
-              tools: [],
-              footer: null,
-            },
-          ];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.kind !== "agent") continue;
+          if (m.turnId !== ev.turnId) break;
+          if (m.agentId === evAgentId) {
+            const next = msgs.slice();
+            next[i] = { ...m, text: m.text + ev.delta };
+            return next;
+          }
+          break;
         }
-        const m = msgs[i];
-        if (m.kind !== "agent") return msgs;
-        const next = msgs.slice();
-        next[i] = { ...m, text: m.text + ev.delta };
-        return next;
+        return [
+          ...msgs,
+          {
+            kind: "agent",
+            turnId: ev.turnId,
+            agentId: evAgentId,
+            text: ev.delta,
+            streaming: true,
+            tools: [],
+            footer: null,
+          },
+        ];
       });
       return;
     }
     if (ev.type === "agent.tool_use") {
+      const evAgentId = (ev as { agentId?: string }).agentId;
       setMessages((msgs) => {
-        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
         const label = summariseTool(ev.tool, ev.input);
-        if (i < 0) {
-          return [
-            ...msgs,
-            {
-              kind: "agent",
-              turnId: ev.turnId,
-              text: "",
-              streaming: true,
-              tools: [label],
-              footer: null,
-            },
-          ];
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.kind !== "agent") continue;
+          if (m.turnId !== ev.turnId) break;
+          if (m.agentId === evAgentId) {
+            const next = msgs.slice();
+            next[i] = { ...m, tools: [...m.tools, label] };
+            return next;
+          }
+          break;
         }
-        const m = msgs[i];
-        if (m.kind !== "agent") return msgs;
-        const next = msgs.slice();
-        next[i] = { ...m, tools: [...m.tools, label] };
-        return next;
+        return [
+          ...msgs,
+          {
+            kind: "agent",
+            turnId: ev.turnId,
+            agentId: evAgentId,
+            text: "",
+            streaming: true,
+            tools: [label],
+            footer: null,
+          },
+        ];
       });
       return;
     }
     if (ev.type === "agent.done") {
       setMessages((msgs) => {
-        const i = msgs.findIndex((m) => m.kind === "agent" && m.turnId === ev.turnId);
         const footer = formatDoneFooter(ev);
-        if (i < 0) return msgs;
-        const m = msgs[i];
-        if (m.kind !== "agent") return msgs;
-        const next = msgs.slice();
-        next[i] = { ...m, streaming: false, footer };
-        return next;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          if (m.kind !== "agent") continue;
+          if (m.turnId !== ev.turnId) break;
+          const next = msgs.slice();
+          next[i] = { ...m, streaming: false, footer };
+          return next;
+        }
+        return msgs;
       });
       setTurnInFlight(null);
+      setReviewingActive(false);
       return;
     }
     if (ev.type === "agent.error") {
+      const evAgentId = (ev as { agentId?: string }).agentId;
       setMessages((msgs) => [
         ...msgs,
-        { kind: "error", turnId: ev.turnId, text: ev.message },
+        { kind: "error", turnId: ev.turnId, agentId: evAgentId, text: ev.message },
       ]);
       setTurnInFlight(null);
+      setReviewingActive(false);
       return;
     }
 
@@ -596,7 +616,13 @@ export default function ProjectWorkspace({
             />
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">
-                {turnInFlight ? "Claude is thinking..." : wsOpen ? "Connected" : "Waiting for websocket"}
+                {turnInFlight
+                  ? reviewingActive
+                    ? "Reviewing..."
+                    : "Claude is thinking..."
+                  : wsOpen
+                    ? "Connected"
+                    : "Waiting for websocket"}
               </span>
               <div className="flex gap-2">
                 {turnInFlight && (

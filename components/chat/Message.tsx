@@ -5,18 +5,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Badge } from "@/components/ui/badge";
+import { summariseAgentLabel } from "@/lib/agents/labels";
 
 export type ChatMessageView =
   | { kind: "user"; turnId: string; text: string }
   | {
       kind: "agent";
       turnId: string;
+      agentId?: string;
       text: string;
       streaming: boolean;
       tools: string[];
       footer: string | null;
     }
-  | { kind: "error"; turnId: string | null; text: string };
+  | { kind: "error"; turnId: string | null; agentId?: string; text: string };
 
 export function Message({ m }: { m: ChatMessageView }) {
   if (m.kind === "user") {
@@ -35,16 +37,24 @@ export function Message({ m }: { m: ChatMessageView }) {
       <li className="rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-red-100">
         <div className="flex items-start gap-2">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          <span className="font-mono text-xs">error: {m.text}</span>
+          <span className="font-mono text-xs">
+            {m.agentId ? `${summariseAgentLabel(m.agentId)} error: ` : "error: "}
+            {m.text}
+          </span>
         </div>
       </li>
     );
   }
+  const label = summariseAgentLabel(m.agentId);
+  const isReviewer = m.agentId === "reviewer";
+  const bubbleClass = isReviewer
+    ? "max-w-[92%] rounded-lg border border-amber-400/30 bg-amber-50/5 px-3 py-2 shadow-sm"
+    : "max-w-[92%] rounded-lg border border-border bg-card px-3 py-2 shadow-sm";
   return (
-    <li className="max-w-[92%] rounded-lg border border-border bg-card px-3 py-2 shadow-sm">
+    <li className={bubbleClass}>
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Bot className="size-3.5" />
-        Claude
+        {label}
       </div>
       {m.tools.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
