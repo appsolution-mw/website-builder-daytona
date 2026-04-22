@@ -58,6 +58,7 @@ export async function handleFileRead(opts: FileReadOptions): Promise<FileReadRes
   } catch {
     return { path: opts.path, error: "io_error" };
   }
+  if (buf.length > MAX_BYTES) return { path: opts.path, error: "too_large" };
 
   const sample = buf.subarray(0, Math.min(BINARY_SAMPLE_BYTES, buf.length));
   let nulls = 0;
@@ -69,7 +70,6 @@ export async function handleFileRead(opts: FileReadOptions): Promise<FileReadRes
   return { path: opts.path, content: buf.toString("utf8") };
 }
 
-// Write handler implemented in Task 5.
 export interface FileWriteResult {
   path: string;
   ok: boolean;
