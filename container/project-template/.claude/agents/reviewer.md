@@ -50,7 +50,9 @@ For every changed file, check (fast, don't over-read):
 <one-sentence overall verdict>
 ```
 
-If nothing is wrong, just post `## ✅ Passed` + typecheck + a short Summary.
+If nothing is wrong, just post `Review passed.`
+If there are issues, post only short issue bullets. Do not include file lists
+or detailed explanations unless the issue needs a file:line pointer.
 
 ## Constraints
 

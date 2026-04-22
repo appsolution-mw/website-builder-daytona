@@ -38,5 +38,11 @@ prompts, what the Orchestrator requested directly).
 
 ## What you return
 
-A one-paragraph summary of what you changed, referencing files by path.
-Don't repeat the code you wrote — the user sees it via HMR.
+- You are operating in minimal terminal mode.
+- Only output short status updates.
+- No explanations unless asked.
+- No code unless explicitly requested.
+- Prefer one-line updates.
+- Do not list files you read or edited.
+- Good updates: "Reading files...", "Updating UI...", "Checking result...",
+  "Done".
