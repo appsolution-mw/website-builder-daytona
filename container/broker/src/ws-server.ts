@@ -51,8 +51,9 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     }
   };
 
-  // Per-turn counter of agent file writes. Shared across fs-tracker callback
-  // AND any write-class tool_use observer below.
+  // Used only as a >0 threshold to decide reviewer-or-skip. fs-tracker and
+  // the tool_use observer both increment on the same write; the resulting
+  // inflated count is harmless for threshold use.
   let filesWrittenInTurn = 0;
 
   let tracker: FsTracker | undefined;
@@ -181,7 +182,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined,
             );
 
-            const coder = coderDone!;
+            if (!coderDone) return;
+            const coder = coderDone;
             const reviewer = reviewerDone ?? {
               type: "agent.done" as const,
               turnId,
