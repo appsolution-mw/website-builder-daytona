@@ -16,7 +16,8 @@ describe("parseNdjsonLine", () => {
       {
         type: "agent.session",
         turnId: TURN,
-        claudeSessionId: "11111111-1111-4111-8111-111111111111",
+        runtime: "claude-code",
+        providerSessionId: "11111111-1111-4111-8111-111111111111",
       },
       { type: "agent.status", turnId: TURN, phase: "starting" },
     ]);
@@ -106,7 +107,8 @@ describe("parseNdjsonLine", () => {
       {
         type: "agent.session",
         turnId: TURN,
-        claudeSessionId: "22222222-2222-4222-8222-222222222222",
+        runtime: "claude-code",
+        providerSessionId: "22222222-2222-4222-8222-222222222222",
       },
       {
         type: "agent.done",

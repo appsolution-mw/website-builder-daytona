@@ -1,7 +1,7 @@
 const KNOWN: Record<string, string> = {
   planner: "Planner",
   explorer: "Explorer",
-  "coder-claude": "Coder",
+  coder: "Coder",
   reviewer: "Reviewer",
 };
 

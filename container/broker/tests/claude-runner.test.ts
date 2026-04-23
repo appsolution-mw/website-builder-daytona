@@ -28,8 +28,8 @@ function makeFakeChild(stdoutLines: string[], exitCode = 0) {
 describe("runClaudeTurn", () => {
   const baseOpts = {
     projectId: "p1",
-    claudeSessionId: "11111111-1111-4111-8111-111111111111",
-    resumeClaudeSession: false,
+    providerSessionId: "11111111-1111-4111-8111-111111111111",
+    resumeSession: false,
     prompt: "change hi",
     turnId: "t-1",
   };
@@ -78,7 +78,7 @@ describe("runClaudeTurn", () => {
     expect(argv).toContain("--verbose");
     expect(argv).toContain("--session-id");
     const sessionIdx = argv.indexOf("--session-id");
-    expect(argv[sessionIdx + 1]).toBe(baseOpts.claudeSessionId);
+    expect(argv[sessionIdx + 1]).toBe(baseOpts.providerSessionId);
     expect(argv).toContain("--model");
     // Claude Code v2.1.117 refuses --dangerously-skip-permissions under root,
     // which containers always run as. Use --permission-mode acceptEdits instead.
@@ -96,13 +96,13 @@ describe("runClaudeTurn", () => {
       ]),
     ) as unknown as SpawnFn;
     await runClaudeTurn(
-      { ...baseOpts, resumeClaudeSession: true, onEvent: () => {} },
+      { ...baseOpts, resumeSession: true, onEvent: () => {} },
       { spawn },
     );
     const mockFn = spawn as unknown as ReturnType<typeof vi.fn>;
     const [, argv] = mockFn.mock.calls[0] as [string, string[], ...unknown[]];
     expect(argv).toContain("--resume");
-    expect(argv[argv.indexOf("--resume") + 1]).toBe(baseOpts.claudeSessionId);
+    expect(argv[argv.indexOf("--resume") + 1]).toBe(baseOpts.providerSessionId);
     expect(argv).not.toContain("--session-id");
   });
 

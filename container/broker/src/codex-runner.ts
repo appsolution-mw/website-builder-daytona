@@ -239,7 +239,7 @@ export async function runCodexTurn(opts: AgentTurnOptions): Promise<void> {
       : codex.startThread({
           workingDirectory: "/workspace/project",
           skipGitRepoCheck: true,
-          model: process.env.CODEX_MODEL || DEFAULT_CODEX_MODEL,
+          model: opts.modelId || process.env.CODEX_MODEL || DEFAULT_CODEX_MODEL,
           modelReasoningEffort: reasoningEffortFromEnv("CODEX_REASONING_EFFORT", "medium"),
           sandboxMode: "workspace-write",
           approvalPolicy: "never",

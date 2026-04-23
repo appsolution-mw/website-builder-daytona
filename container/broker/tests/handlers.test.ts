@@ -24,8 +24,10 @@ describe("broker handlers", () => {
       type: "agent.prompt",
       prompt: "x",
       turnId: "t",
-      claudeSessionId: "33333333-3333-4333-8333-333333333333",
-      resumeClaudeSession: false,
+      runtime: "claude-code",
+      sessionId: "chat-1",
+      providerSessionId: "33333333-3333-4333-8333-333333333333",
+      resumeSession: false,
     })).toBeUndefined();
     expect(handleMessage({ type: "agent.abort", turnId: "t" })).toBeUndefined();
   });

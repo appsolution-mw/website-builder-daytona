@@ -1,6 +1,4 @@
-import type { BrokerToHost } from "@wbd/protocol";
-
-export type AgentRuntime = "claude-code" | "openai-codex";
+import type { AgentRuntime, BrokerToHost } from "@wbd/protocol";
 
 export interface AgentTurnOptions {
   projectId: string;
@@ -8,6 +6,7 @@ export interface AgentTurnOptions {
   resumeSession: boolean;
   prompt: string;
   turnId: string;
+  modelId?: string;
   onEvent: (event: BrokerToHost) => void;
   signal?: AbortSignal;
 }
@@ -31,6 +30,9 @@ export function agentRuntimeFromEnv(): AgentRuntime {
     .toLowerCase();
   if (raw === "codex" || raw === "openai-codex" || raw === "openai-codex-sdk") {
     return "openai-codex";
+  }
+  if (raw === "vercel-ai" || raw === "vercel-ai-sdk") {
+    return "vercel-ai";
   }
   return "claude-code";
 }

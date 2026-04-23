@@ -39,10 +39,11 @@ function formatTimeout(ms: number): string {
 
 export interface ClaudeRunnerOptions {
   projectId: string;
-  claudeSessionId: string;
-  resumeClaudeSession: boolean;
+  providerSessionId: string;
+  resumeSession: boolean;
   prompt: string;
   turnId: string;
+  modelId?: string;
   onEvent: (event: BrokerToHost) => void;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -88,10 +89,10 @@ export async function runClaudeTurn(
     "--verbose",
     "--append-system-prompt",
     MINIMAL_TERMINAL_PROMPT,
-    opts.resumeClaudeSession ? "--resume" : "--session-id",
-    opts.claudeSessionId,
+    opts.resumeSession ? "--resume" : "--session-id",
+    opts.providerSessionId,
     "--model",
-    MODEL,
+    opts.modelId || process.env.CLAUDE_MODEL || MODEL,
     // --dangerously-skip-permissions is blocked when running as root (Daytona
     // containers run as root).  --permission-mode acceptEdits lets Claude edit
     // files without interactive confirmation, which is equivalent for our

@@ -1,14 +1,17 @@
 import type { AgentProvider } from "./agent-provider";
+import type { AgentRuntime } from "@wbd/protocol";
 import { agentRuntimeFromEnv } from "./agent-provider";
 import { runClaudeTurn, runReviewerPass, type SpawnFn } from "./claude-runner";
 import { runCodexReviewPass, runCodexTurn } from "./codex-runner";
+import { runVercelAiReviewPass, runVercelAiTurn } from "./vercel-ai-runner";
 
 export interface CreateAgentProviderOptions {
   __testSpawn?: SpawnFn;
+  runtime?: AgentRuntime;
 }
 
 export function createAgentProvider(opts: CreateAgentProviderOptions = {}): AgentProvider {
-  const runtime = agentRuntimeFromEnv();
+  const runtime = opts.runtime ?? agentRuntimeFromEnv();
 
   if (runtime === "openai-codex") {
     return {
@@ -18,16 +21,25 @@ export function createAgentProvider(opts: CreateAgentProviderOptions = {}): Agen
     };
   }
 
+  if (runtime === "vercel-ai") {
+    return {
+      runtime,
+      runTurn: (turn) => runVercelAiTurn(turn),
+      runReview: (review) => runVercelAiReviewPass(review),
+    };
+  }
+
   return {
     runtime: "claude-code",
     runTurn: (turn) =>
       runClaudeTurn(
         {
           projectId: turn.projectId,
-          claudeSessionId: turn.sessionId,
-          resumeClaudeSession: turn.resumeSession,
+          providerSessionId: turn.sessionId,
+          resumeSession: turn.resumeSession,
           prompt: turn.prompt,
           turnId: turn.turnId,
+          modelId: turn.modelId,
           onEvent: turn.onEvent,
           signal: turn.signal,
         },

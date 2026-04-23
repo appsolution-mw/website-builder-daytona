@@ -6,14 +6,16 @@ const CLAUDE_SESSION_ID = "22222222-2222-4222-8222-222222222222";
 const promptMsg = (
   prompt: string,
   turnId: string,
-  resumeClaudeSession = false,
+  resumeSession = false,
   attachments?: Array<{ name: string; mimeType: string; dataBase64: string }>,
 ) => ({
   type: "agent.prompt" as const,
   prompt,
   turnId,
-  claudeSessionId: CLAUDE_SESSION_ID,
-  resumeClaudeSession,
+  runtime: "claude-code" as const,
+  sessionId: "chat-session-1",
+  providerSessionId: CLAUDE_SESSION_ID,
+  resumeSession,
   ...(attachments ? { attachments } : {}),
 });
 

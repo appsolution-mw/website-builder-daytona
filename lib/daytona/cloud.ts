@@ -120,6 +120,8 @@ export function createCloudClient(): DaytonaClient {
           CODEX_REASONING_EFFORT: process.env.CODEX_REASONING_EFFORT ?? "",
           CODEX_REVIEWER_REASONING_EFFORT: process.env.CODEX_REVIEWER_REASONING_EFFORT ?? "",
           CODEX_NETWORK_ACCESS: process.env.CODEX_NETWORK_ACCESS ?? "",
+          VERCEL_AI_MODEL: process.env.VERCEL_AI_MODEL ?? "",
+          VERCEL_AI_REVIEWER_MODEL: process.env.VERCEL_AI_REVIEWER_MODEL ?? "",
         },
       });
 

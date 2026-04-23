@@ -11,8 +11,8 @@ describe("summariseAgentLabel", () => {
   it("returns Explorer for 'explorer'", () => {
     expect(summariseAgentLabel("explorer")).toBe("Explorer");
   });
-  it("returns Coder for 'coder-claude'", () => {
-    expect(summariseAgentLabel("coder-claude")).toBe("Coder");
+  it("returns Coder for 'coder'", () => {
+    expect(summariseAgentLabel("coder")).toBe("Coder");
   });
   it("returns Reviewer for 'reviewer'", () => {
     expect(summariseAgentLabel("reviewer")).toBe("Reviewer");

@@ -12,6 +12,7 @@ import type {
 import { handleMessage } from "./handlers";
 import type { SpawnFn } from "./claude-runner";
 import { createAgentProvider } from "./agent-provider-factory";
+import { agentRuntimeFromEnv } from "./agent-provider";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
 import {
   handleFileList,
@@ -204,8 +205,7 @@ async function savePromptAttachments(args: {
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
   const projectRoot = opts.projectRoot ?? "/workspace/project";
   const enableFsTracker = opts.enableFsTracker ?? true;
-  const agentProvider = createAgentProvider({ __testSpawn: opts.__testSpawn });
-  console.log(`[broker] agent runtime=${agentProvider.runtime}`);
+  console.log(`[broker] default agent runtime=${agentRuntimeFromEnv()}`);
 
   const wss = new WebSocketServer({ port: opts.port });
 
@@ -302,11 +302,11 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       const msg = parsed as HostToBroker;
 
       if (msg.type === "agent.prompt") {
-        if (!msg.claudeSessionId) {
+        if (!msg.providerSessionId) {
           send({
             type: "agent.error",
             turnId: msg.turnId,
-            message: "missing claudeSessionId",
+            message: "missing providerSessionId",
           });
           return;
         }
@@ -327,6 +327,10 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         filesWrittenInTurn = 0;
         const projectId = process.env.PROJECT_ID ?? "unknown";
         const turnId = msg.turnId;
+        const agentProvider = createAgentProvider({
+          runtime: msg.runtime,
+          __testSpawn: opts.__testSpawn,
+        });
 
         let coderDone:
           | Extract<BrokerToHost, { type: "agent.done" }>
@@ -352,6 +356,13 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         };
 
         (async () => {
+          send({
+            type: "agent.session",
+            turnId,
+            runtime: msg.runtime,
+            providerSessionId: msg.providerSessionId,
+            ...(msg.modelId ? { modelId: msg.modelId } : {}),
+          });
           const attachmentResult = await savePromptAttachments({
             projectRoot,
             turnId,
@@ -370,10 +381,11 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           await agentProvider.runTurn(
             {
               projectId,
-              sessionId: msg.claudeSessionId,
-              resumeSession: msg.resumeClaudeSession,
+              sessionId: msg.providerSessionId,
+              resumeSession: msg.resumeSession,
               prompt,
               turnId,
+              modelId: msg.modelId,
               onEvent: coderOnEvent,
               signal: ctl.signal,
             },

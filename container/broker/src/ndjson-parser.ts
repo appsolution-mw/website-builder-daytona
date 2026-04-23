@@ -1,5 +1,7 @@
 import type { AgentUsageDetails, BrokerToHost } from "@wbd/protocol";
 
+const RUNTIME = "claude-code" as const;
+
 /**
  * Per-turn mapping from Task tool_use id → sub-agent name.
  * Caller must create a fresh map per turn (via createTaskMap()) and pass the
@@ -78,7 +80,7 @@ export function parseNdjsonLine(
   if (type === "system" && msg.subtype === "init") {
     const events: BrokerToHost[] = [];
     if (typeof msg.session_id === "string") {
-      events.push({ type: "agent.session", turnId, claudeSessionId: msg.session_id });
+      events.push({ type: "agent.session", turnId, runtime: RUNTIME, providerSessionId: msg.session_id });
     }
     events.push({ type: "agent.status", turnId, phase: "starting" });
     return events;
@@ -154,7 +156,7 @@ export function parseNdjsonLine(
       const usage = usageDetails(msg);
       const events: BrokerToHost[] = [];
       if (typeof msg.session_id === "string") {
-        events.push({ type: "agent.session", turnId, claudeSessionId: msg.session_id });
+        events.push({ type: "agent.session", turnId, runtime: RUNTIME, providerSessionId: msg.session_id });
       }
       events.push({
         type: "agent.done",

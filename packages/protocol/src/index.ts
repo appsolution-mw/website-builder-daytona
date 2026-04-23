@@ -9,6 +9,8 @@ export type PromptImageAttachment = {
   dataBase64: string;
 };
 
+export type AgentRuntime = "claude-code" | "openai-codex" | "vercel-ai";
+
 export type AgentUsageLabel = "coder" | "reviewer" | "turn";
 
 export type AgentUsageDetails = {
@@ -44,8 +46,11 @@ export type HostToBroker =
       type: "agent.prompt";
       prompt: string;
       turnId: string;
-      claudeSessionId: string;
-      resumeClaudeSession: boolean;
+      runtime: AgentRuntime;
+      sessionId: string;
+      providerSessionId: string;
+      resumeSession: boolean;
+      modelId?: string;
       attachments?: PromptImageAttachment[];
     }
   | { type: "agent.abort"; turnId: string }
@@ -67,7 +72,9 @@ export type BrokerToHost =
   | {
       type: "agent.session";
       turnId: string;
-      claudeSessionId: string;
+      runtime: AgentRuntime;
+      providerSessionId: string;
+      modelId?: string;
     }
   | { type: "agent.chunk"; turnId: string; delta: string; agentId?: string }
   | {
@@ -121,4 +128,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.8.0" as const;
+export const PROTOCOL_VERSION = "1.9.0" as const;
