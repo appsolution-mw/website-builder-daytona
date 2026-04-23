@@ -35,20 +35,33 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { BrowserToProxy, PromptImageAttachment, ProxyToBrowser } from "@wbd/protocol";
+import type {
+  AgentRuntime,
+  BrowserToProxy,
+  PromptImageAttachment,
+  ProxyToBrowser,
+} from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { runtimeLabel } from "@/lib/agents/runtime";
+
+type RuntimeState = {
+  runtime: AgentRuntime;
+  providerSessionId: string;
+  modelId: string | null;
+  lastUsedAt: string;
+};
 
 type ChatSession = {
   id: string;
   title: string;
-  claudeSessionId: string;
+  defaultRuntime: AgentRuntime;
+  runtimeStates: RuntimeState[];
   createdAt: string;
   lastMessageAt: string;
   _count: { messages: number };
@@ -60,6 +73,9 @@ type DbMessage = {
   content: string;
   turnId: string | null;
   agentId: string | null;
+  runtime: AgentRuntime | null;
+  provider: string | null;
+  modelId: string | null;
   createdAt: string;
 };
 
@@ -67,6 +83,10 @@ type Project = {
   id: string;
   name: string;
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
+  agentRuntime: AgentRuntime;
+  desiredRuntime: AgentRuntime;
+  runtimeSwitchStatus: "IDLE" | "PENDING" | "SWITCHING" | "FAILED";
+  availableRuntimes: Array<{ value: AgentRuntime; label: string; provider: string }>;
   previewUrl: string | null;
   provisioningError: string | null;
   chatSession: ChatSession;
@@ -206,14 +226,53 @@ function messagesFromDb(rows: DbMessage[]): ChatMessageView[] {
         kind: "agent",
         turnId,
         agentId: m.agentId ?? undefined,
+        runtime: m.runtime ?? undefined,
+        modelId: m.modelId,
         text: m.content,
         streaming: false,
         tools: [],
         footer: null,
       };
     }
-    return { kind: "error", turnId, agentId: m.agentId ?? undefined, text: m.content };
+    return {
+      kind: "error",
+      turnId,
+      agentId: m.agentId ?? undefined,
+      runtime: m.runtime ?? undefined,
+      modelId: m.modelId,
+      text: m.content,
+    };
   });
+}
+
+function runtimeStateForSession(session: ChatSession | null, runtime: AgentRuntime): RuntimeState | undefined {
+  return session?.runtimeStates.find((state) => state.runtime === runtime);
+}
+
+function WorkspaceLoadingState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
+      <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 text-center shadow-sm">
+        <Button asChild variant="ghost" className="mb-5 w-fit">
+          <Link href="/">
+            <ArrowLeft />
+            Back
+          </Link>
+        </Button>
+        <div className="mx-auto flex size-14 items-center justify-center rounded-lg border border-border bg-secondary">
+          <Loader2 className="size-6 animate-spin text-primary" />
+        </div>
+        <h1 className="mt-5 text-2xl font-semibold tracking-tight">{title}</h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{description}</p>
+      </section>
+    </main>
+  );
 }
 
 export default function ProjectWorkspace({
@@ -224,9 +283,11 @@ export default function ProjectWorkspace({
   const { id } = use(params);
   const [project, setProject] = useState<Project | null>(null);
   const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "open" | "closed">("idle");
+  const [brokerReadyProjectId, setBrokerReadyProjectId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageView[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  const [selectedRuntime, setSelectedRuntime] = useState<AgentRuntime>("claude-code");
   const [sessionLoading, setSessionLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
@@ -259,6 +320,8 @@ export default function ProjectWorkspace({
   const messagesRef = useRef<ChatMessageView[]>([]);
   const activeSessionRef = useRef<ChatSession | null>(null);
   const draftAttachmentsRef = useRef<DraftImageAttachment[]>([]);
+  const selectedRuntimeRef = useRef<AgentRuntime>("claude-code");
+  const turnRuntimeRef = useRef<Map<string, { runtime: AgentRuntime; modelId: string | null }>>(new Map());
 
   const selectedPathRef = useRef<string | null>(null);
   const fileContentRef = useRef<string | null>(null);
@@ -266,6 +329,7 @@ export default function ProjectWorkspace({
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
   useEffect(() => { draftAttachmentsRef.current = draftAttachments; }, [draftAttachments]);
+  useEffect(() => { selectedRuntimeRef.current = selectedRuntime; }, [selectedRuntime]);
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
@@ -278,6 +342,14 @@ export default function ProjectWorkspace({
       messagesRef.current = next;
       return next;
     });
+  }
+
+  function activateSession(session: ChatSession | null) {
+    activeSessionRef.current = session;
+    setActiveSession(session);
+    if (!session) return;
+    selectedRuntimeRef.current = session.defaultRuntime;
+    setSelectedRuntime(session.defaultRuntime);
   }
 
   function onResizeStart(e: ReactPointerEvent<HTMLDivElement>) {
@@ -349,7 +421,7 @@ export default function ProjectWorkspace({
     const current = activeSessionRef.current;
     if (current) {
       const updated = data.sessions.find((s) => s.id === current.id);
-      if (updated) setActiveSession(updated);
+      if (updated) activateSession(updated);
     }
   }, [id]);
 
@@ -361,7 +433,7 @@ export default function ProjectWorkspace({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { session: ChatSession & { messages: DbMessage[] } };
       const { messages: dbMessages, ...session } = data.session;
-      setActiveSession(session);
+      activateSession(session);
       setChatSessions((prev) => {
         const next = prev.filter((s) => s.id !== session.id);
         return [session, ...next].sort(
@@ -381,11 +453,11 @@ export default function ProjectWorkspace({
     const res = await fetch(`/api/projects/${id}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "New chat" }),
+      body: JSON.stringify({ title: "New chat", runtime: selectedRuntimeRef.current }),
     });
     if (!res.ok) return;
     const data = (await res.json()) as { session: ChatSession };
-    setActiveSession(data.session);
+    activateSession(data.session);
     setChatSessions((prev) => [data.session, ...prev]);
     updateMessages([]);
     setPrompt("");
@@ -399,6 +471,9 @@ export default function ProjectWorkspace({
     content: string;
     turnId?: string | null;
     agentId?: string | null;
+    runtime?: AgentRuntime | null;
+    provider?: string | null;
+    modelId?: string | null;
   }) {
     await fetch(`/api/projects/${id}/sessions/${args.sessionId}/messages`, {
       method: "POST",
@@ -408,21 +483,57 @@ export default function ProjectWorkspace({
     void refreshChatSessions();
   }
 
-  async function syncClaudeSessionId(claudeSessionId: string) {
+  async function syncRuntimeState(runtime: AgentRuntime, providerSessionId: string, modelId?: string) {
     const session = activeSessionRef.current;
-    if (!session || session.claudeSessionId === claudeSessionId) return;
+    if (!session) return;
+    const existingState = runtimeStateForSession(session, runtime);
+    if (
+      existingState &&
+      existingState.providerSessionId === providerSessionId &&
+      existingState.modelId === (modelId ?? existingState.modelId ?? null)
+    ) {
+      return;
+    }
 
-    const nextSession = { ...session, claudeSessionId };
+    const nextState: RuntimeState = {
+      runtime,
+      providerSessionId,
+      modelId: modelId ?? null,
+      lastUsedAt: new Date().toISOString(),
+    };
+    const nextSession = {
+      ...session,
+      runtimeStates: [
+        nextState,
+        ...session.runtimeStates.filter((state) => state.runtime !== runtime),
+      ],
+    };
     activeSessionRef.current = nextSession;
-    setActiveSession(nextSession);
+    activateSession(nextSession);
     setChatSessions((prev) =>
-      prev.map((s) => (s.id === session.id ? { ...s, claudeSessionId } : s)),
+      prev.map((s) =>
+        s.id === session.id
+          ? {
+              ...s,
+              runtimeStates: [
+                nextState,
+                ...s.runtimeStates.filter((state) => state.runtime !== runtime),
+              ],
+            }
+          : s,
+      ),
     );
 
     const res = await fetch(`/api/projects/${id}/sessions/${session.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ claudeSessionId }),
+      body: JSON.stringify({
+        runtimeState: {
+          runtime,
+          providerSessionId,
+          ...(modelId ? { modelId } : {}),
+        },
+      }),
     }).catch(() => null);
     if (res?.ok) {
       void refreshChatSessions();
@@ -443,8 +554,29 @@ export default function ProjectWorkspace({
         content: m.text,
         turnId,
         agentId: m.agentId ?? null,
+        runtime: m.runtime as AgentRuntime | undefined,
+        modelId: m.modelId,
       });
     }
+  }
+
+  async function setSessionDefaultRuntime(runtime: AgentRuntime) {
+    const session = activeSessionRef.current;
+    if (!session || session.defaultRuntime === runtime) {
+      setSelectedRuntime(runtime);
+      return;
+    }
+
+    const nextSession = { ...session, defaultRuntime: runtime };
+    activateSession(nextSession);
+    setSelectedRuntime(runtime);
+    setChatSessions((prev) => prev.map((entry) => (entry.id === session.id ? nextSession : entry)));
+
+    await fetch(`/api/projects/${id}/sessions/${session.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ defaultRuntime: runtime }),
+    }).catch(() => undefined);
   }
 
   function markChanged(path: string) {
@@ -494,7 +626,14 @@ export default function ProjectWorkspace({
     }
 
     if (ev.type === "agent.session") {
-      void syncClaudeSessionId(ev.claudeSessionId);
+      const runtimeMeta = turnRuntimeRef.current.get(ev.turnId);
+      void syncRuntimeState(ev.runtime, ev.providerSessionId, ev.modelId ?? runtimeMeta?.modelId ?? undefined);
+      if (runtimeMeta) {
+        turnRuntimeRef.current.set(ev.turnId, {
+          runtime: ev.runtime,
+          modelId: ev.modelId ?? runtimeMeta.modelId,
+        });
+      }
       return;
     }
 
@@ -508,6 +647,7 @@ export default function ProjectWorkspace({
     }
     if (ev.type === "agent.chunk") {
       const evAgentId = (ev as { agentId?: string }).agentId;
+      const runtimeMeta = turnRuntimeRef.current.get(ev.turnId);
       updateMessages((msgs) => {
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
@@ -515,7 +655,12 @@ export default function ProjectWorkspace({
           if (m.turnId !== ev.turnId) break;
           if (m.agentId === evAgentId) {
             const next = msgs.slice();
-            next[i] = { ...m, text: appendAgentDelta(m.text, ev.delta) };
+            next[i] = {
+              ...m,
+              runtime: runtimeMeta?.runtime ?? m.runtime,
+              modelId: runtimeMeta?.modelId ?? m.modelId ?? null,
+              text: appendAgentDelta(m.text, ev.delta),
+            };
             return next;
           }
           break;
@@ -526,6 +671,8 @@ export default function ProjectWorkspace({
             kind: "agent",
             turnId: ev.turnId,
             agentId: evAgentId,
+            runtime: runtimeMeta?.runtime,
+            modelId: runtimeMeta?.modelId ?? null,
             text: ev.delta,
             streaming: true,
             tools: [],
@@ -537,6 +684,7 @@ export default function ProjectWorkspace({
     }
     if (ev.type === "agent.tool_use") {
       const evAgentId = (ev as { agentId?: string }).agentId;
+      const runtimeMeta = turnRuntimeRef.current.get(ev.turnId);
       updateMessages((msgs) => {
         const label = summariseTool(ev.tool, ev.input);
         for (let i = msgs.length - 1; i >= 0; i--) {
@@ -545,7 +693,12 @@ export default function ProjectWorkspace({
           if (m.turnId !== ev.turnId) break;
           if (m.agentId === evAgentId) {
             const next = msgs.slice();
-            next[i] = { ...m, tools: [...m.tools, label] };
+            next[i] = {
+              ...m,
+              runtime: runtimeMeta?.runtime ?? m.runtime,
+              modelId: runtimeMeta?.modelId ?? m.modelId ?? null,
+              tools: [...m.tools, label],
+            };
             return next;
           }
           break;
@@ -556,6 +709,8 @@ export default function ProjectWorkspace({
             kind: "agent",
             turnId: ev.turnId,
             agentId: evAgentId,
+            runtime: runtimeMeta?.runtime,
+            modelId: runtimeMeta?.modelId ?? null,
             text: "",
             streaming: true,
             tools: [label],
@@ -579,15 +734,24 @@ export default function ProjectWorkspace({
         return msgs;
       });
       persistAgentMessages(ev.turnId);
+      turnRuntimeRef.current.delete(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
       return;
     }
     if (ev.type === "agent.error") {
       const evAgentId = (ev as { agentId?: string }).agentId;
+      const runtimeMeta = turnRuntimeRef.current.get(ev.turnId);
       updateMessages((msgs) => [
         ...msgs,
-        { kind: "error", turnId: ev.turnId, agentId: evAgentId, text: ev.message },
+        {
+          kind: "error",
+          turnId: ev.turnId,
+          agentId: evAgentId,
+          runtime: runtimeMeta?.runtime,
+          modelId: runtimeMeta?.modelId ?? null,
+          text: ev.message,
+        },
       ]);
       const session = activeSessionRef.current;
       if (session) {
@@ -597,8 +761,11 @@ export default function ProjectWorkspace({
           content: ev.message,
           turnId: ev.turnId,
           agentId: evAgentId ?? null,
+          runtime: runtimeMeta?.runtime,
+          modelId: runtimeMeta?.modelId ?? null,
         });
       }
+      turnRuntimeRef.current.delete(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
       return;
@@ -647,7 +814,7 @@ export default function ProjectWorkspace({
       setProject(data.project);
       setChatSessions(data.project.chatSessions);
       const initialSession = data.project.chatSessions[0] ?? data.project.chatSession;
-      setActiveSession(initialSession);
+      activateSession(initialSession);
       if (initialSession && data.project.status !== "PROVISIONING") {
         const sessionRes = await fetch(`/api/projects/${id}/sessions/${initialSession.id}`);
         if (sessionRes.ok && !cancelled) {
@@ -655,7 +822,7 @@ export default function ProjectWorkspace({
             session: ChatSession & { messages: DbMessage[] };
           };
           const { messages: dbMessages, ...session } = sessionData.session;
-          setActiveSession(session);
+          activateSession(session);
           updateMessages(messagesFromDb(dbMessages));
           setDraftAttachments([]);
           setAttachmentError(null);
@@ -687,15 +854,19 @@ export default function ProjectWorkspace({
       currentWs = ws;
       wsRef.current = ws;
       ws.onopen = () => {
+        if (unmounted) return;
         reconnectAttempt = 0;
         setWsStatus("open");
+        setBrokerReadyProjectId(id);
         void requestFileList();
       };
       ws.onerror = () => {
+        if (unmounted) return;
         setFileListError((prev) => prev ?? "File list failed: websocket error");
         setFileListLoading(false);
       };
       ws.onclose = () => {
+        if (unmounted) return;
         setWsStatus("closed");
         setFileListLoading(false);
         for (const [requestId, entry] of pendingRef.current) {
@@ -703,7 +874,6 @@ export default function ProjectWorkspace({
           entry.reject(new Error("ws closed"));
           pendingRef.current.delete(requestId);
         }
-        if (unmounted) return;
         reconnectAttempt += 1;
         const delay = Math.min(1000 * 2 ** Math.min(reconnectAttempt - 1, 4), 10_000);
         console.log(`[ws] close — reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
@@ -865,23 +1035,31 @@ export default function ProjectWorkspace({
     const attachments = draftAttachmentsRef.current;
     const text = prompt.trim() || (attachments.length > 0 ? "Use the attached image as context." : "");
     const session = activeSessionRef.current;
-    const claudeSessionId = session?.claudeSessionId;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight || !session || !claudeSessionId) return;
+    const runtime = selectedRuntimeRef.current;
+    const runtimeState = runtimeStateForSession(session, runtime);
+    const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
+    const modelId = runtimeState?.modelId ?? null;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight || !session) return;
     const turnId = crypto.randomUUID();
-    const resumeClaudeSession = messagesRef.current.length > 0;
+    const resumeSession = Boolean(runtimeState);
+    turnRuntimeRef.current.set(turnId, { runtime, modelId });
     updateMessages((msgs) => [...msgs, { kind: "user", turnId, text, attachments }]);
     void persistChatMessage({
       sessionId: session.id,
       role: "USER",
       content: `${text}${describePersistedImages(attachments)}`,
       turnId,
+      runtime,
     });
     const msg: BrowserToProxy = {
       type: "agent.prompt",
       prompt: text,
       turnId,
-      claudeSessionId,
-      resumeClaudeSession,
+      runtime,
+      sessionId: session.id,
+      providerSessionId,
+      resumeSession,
+      ...(modelId ? { modelId } : {}),
       attachments: imageAttachmentsForPrompt(attachments),
     };
     ws.send(JSON.stringify(msg));
@@ -901,39 +1079,19 @@ export default function ProjectWorkspace({
 
   if (!project) {
     return (
-      <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
-        <div className="w-full max-w-xl rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center gap-3">
-            <Skeleton className="size-11 rounded-lg" />
-            <div className="grid flex-1 gap-2">
-              <Skeleton className="h-5 w-48" />
-              <Skeleton className="h-4 w-72 max-w-full" />
-            </div>
-          </div>
-        </div>
-      </main>
+      <WorkspaceLoadingState
+        title="Opening workspace..."
+        description="Checking project status before the editor loads."
+      />
     );
   }
 
   if (project.status === "PROVISIONING") {
     return (
-      <main className="flex min-h-dvh flex-1 items-center justify-center bg-background p-6">
-        <section className="w-full max-w-xl rounded-lg border border-border bg-card p-6 text-center shadow-sm">
-          <Button asChild variant="ghost" className="mb-5 w-fit">
-            <Link href="/">
-              <ArrowLeft />
-              Back
-            </Link>
-          </Button>
-          <div className="mx-auto flex size-14 items-center justify-center rounded-lg border border-border bg-secondary">
-            <Loader2 className="size-6 animate-spin text-primary" />
-          </div>
-          <h1 className="mt-5 text-2xl font-semibold tracking-tight">Provisioning {project.name}...</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            First boot can take about a minute while the container pulls dependencies.
-          </p>
-        </section>
-      </main>
+      <WorkspaceLoadingState
+        title="Opening workspace..."
+        description="Project services are starting. The workspace will open automatically."
+      />
     );
   }
 
@@ -965,6 +1123,15 @@ export default function ProjectWorkspace({
         )}
         </section>
       </main>
+    );
+  }
+
+  if (brokerReadyProjectId !== id) {
+    return (
+      <WorkspaceLoadingState
+        title="Opening workspace..."
+        description="Project services are almost ready. The workspace will open automatically."
+      />
     );
   }
 
@@ -1025,6 +1192,11 @@ export default function ProjectWorkspace({
               <h2 className="max-w-[12rem] truncate text-sm font-semibold">
                 {activeSession?.title ?? "Chat"}
               </h2>
+              {activeSession && (
+                <Badge variant="outline" className="hidden sm:inline-flex">
+                  {runtimeLabel(selectedRuntime)}
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {turnInFlight && <Badge variant="warning">streaming</Badge>}
@@ -1060,6 +1232,24 @@ export default function ProjectWorkspace({
               </Button>
             ))}
           </div>
+          <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/45 px-3 py-2">
+            {project.availableRuntimes.map((option) => {
+              const active = selectedRuntime === option.value;
+              return (
+                <Button
+                  key={option.value}
+                  type="button"
+                  variant={active ? "secondary" : "ghost"}
+                  size="sm"
+                  disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                  onClick={() => void setSessionDefaultRuntime(option.value)}
+                  className="shrink-0"
+                >
+                  {option.label}
+                </Button>
+              );
+            })}
+          </div>
           <ul
             ref={chatScrollRef}
             onScroll={onChatScroll}
@@ -1069,7 +1259,7 @@ export default function ProjectWorkspace({
               <li className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
                 <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
                   <Bot className="size-4 text-primary" aria-hidden="true" />
-                  Claude is ready
+                  {runtimeLabel(selectedRuntime)} is ready
                 </div>
                 Ask for a change and watch files update in the editor.
               </li>
@@ -1085,7 +1275,7 @@ export default function ProjectWorkspace({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onPaste={onPromptPaste}
-              placeholder="Tell Claude what to change…"
+              placeholder={`Tell ${runtimeLabel(selectedRuntime)} what to change...`}
               rows={3}
               disabled={wsStatus !== "open" || turnInFlight !== null || !activeSession}
               className="min-h-28"
@@ -1131,7 +1321,7 @@ export default function ProjectWorkspace({
                 {turnInFlight
                   ? reviewingActive
                     ? "Reviewing..."
-                    : "Claude is thinking..."
+                    : `${runtimeLabel(selectedRuntime)} is thinking...`
                   : wsOpen
                     ? draftAttachments.length > 0
                       ? `${draftAttachments.length} image${draftAttachments.length === 1 ? "" : "s"} attached`

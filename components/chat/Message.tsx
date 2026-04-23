@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { summariseAgentLabel } from "@/lib/agents/labels";
+import { runtimeLabel } from "@/lib/agents/runtime";
 
 export type ChatImageAttachmentView = {
   id: string;
@@ -20,12 +21,21 @@ export type ChatMessageView =
       kind: "agent";
       turnId: string;
       agentId?: string;
+      runtime?: string;
+      modelId?: string | null;
       text: string;
       streaming: boolean;
       tools: string[];
       footer: string | null;
     }
-  | { kind: "error"; turnId: string | null; agentId?: string; text: string };
+  | {
+      kind: "error";
+      turnId: string | null;
+      agentId?: string;
+      runtime?: string;
+      modelId?: string | null;
+      text: string;
+    };
 
 function ActivityDots() {
   return (
@@ -112,6 +122,12 @@ export function Message({ m }: { m: ChatMessageView }) {
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Bot className="size-3.5" />
         {label}
+        {m.runtime && (
+          <span className="rounded border border-border px-1.5 py-0.5 text-[11px]">
+            {runtimeLabel(m.runtime)}
+            {m.modelId ? ` · ${m.modelId}` : ""}
+          </span>
+        )}
       </div>
       <div className="text-sm leading-6 text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:text-primary [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:overflow-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-background [&_pre]:p-3 [&_pre]:text-xs [&_pre]:text-blue-50 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_ul]:list-disc [&_ul]:pl-5">
         {m.text.trim().length > 0 && (
