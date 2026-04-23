@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/db/client";
+import { isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
 
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const TITLE_FROM_PROMPT_MAX = 56;
@@ -36,6 +37,9 @@ export async function POST(
     content?: unknown;
     turnId?: unknown;
     agentId?: unknown;
+    runtime?: unknown;
+    provider?: unknown;
+    modelId?: unknown;
   };
   const role = body.role === "USER" || body.role === "AGENT" || body.role === "SYSTEM"
     ? body.role
@@ -47,6 +51,11 @@ export async function POST(
 
   const turnId = typeof body.turnId === "string" && body.turnId ? body.turnId : null;
   const agentId = typeof body.agentId === "string" && body.agentId ? body.agentId : null;
+  const runtime = typeof body.runtime === "string" && isAgentRuntime(body.runtime)
+    ? protocolRuntimeToDb(body.runtime)
+    : null;
+  const provider = typeof body.provider === "string" && body.provider ? body.provider : null;
+  const modelId = typeof body.modelId === "string" && body.modelId ? body.modelId : null;
   const now = new Date();
   const shouldRetitle =
     role === "USER" &&
@@ -62,6 +71,9 @@ export async function POST(
         content,
         turnId,
         agentId,
+        runtime,
+        provider,
+        modelId,
       },
       select: {
         id: true,
@@ -69,6 +81,9 @@ export async function POST(
         content: true,
         turnId: true,
         agentId: true,
+        runtime: true,
+        provider: true,
+        modelId: true,
         createdAt: true,
       },
     }),

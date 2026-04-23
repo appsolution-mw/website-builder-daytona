@@ -19,6 +19,10 @@ model Project {
   owner                User          @relation(fields: [ownerId], references: [id])
   name                 String
   status               ProjectStatus @default(PROVISIONING)
+  agentRuntime         AgentRuntime  @default(CLAUDE_CODE)
+  desiredRuntime       AgentRuntime  @default(CLAUDE_CODE)
+  runtimeSwitchStatus  RuntimeSwitchStatus @default(IDLE)
+  runtimeGeneration    Int           @default(1)
   createdAt            DateTime      @default(now())
   lastActive           DateTime      @default(now())
 
@@ -29,6 +33,7 @@ model Project {
   provisioningError    String?
 
   sessions             Session[]
+  sessionRuntimeStates SessionRuntimeState[]
   messages             Message[]
   tokenUsages          TokenUsage[]
 
@@ -44,27 +49,31 @@ enum ProjectStatus {
 }
 
 model Session {
-  id              String    @id @default(cuid())
-  projectId       String
-  project         Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  claudeSessionId String    @unique
-  title           String    @default("untitled")
-  createdAt       DateTime  @default(now())
-  lastMessageAt   DateTime  @default(now())
-  messages        Message[]
+  id               String    @id @default(cuid())
+  projectId        String
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title            String    @default("untitled")
+  defaultRuntime   AgentRuntime @default(CLAUDE_CODE)
+  createdAt        DateTime  @default(now())
+  lastMessageAt    DateTime  @default(now())
+  messages         Message[]
+  runtimeStates    SessionRuntimeState[]
 }
 
 model Message {
-  id        String      @id @default(cuid())
+  id        String       @id @default(cuid())
   projectId String
-  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sessionId String?
-  session   Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session   Session?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   turnId    String?
   agentId   String?
+  runtime   AgentRuntime?
+  provider  String?
+  modelId   String?
   role      MessageRole
   content   String
-  createdAt DateTime    @default(now())
+  createdAt DateTime     @default(now())
 
   @@index([projectId, createdAt])
   @@index([sessionId, createdAt])
@@ -76,6 +85,9 @@ model TokenUsage {
   project                  Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   turnId                   String
   label                    TokenUsageLabel
+  runtime                  AgentRuntime?
+  provider                 String?
+  modelId                  String?
   durationMs               Int             @default(0)
   inputTokens              Int             @default(0)
   outputTokens             Int             @default(0)
@@ -97,6 +109,25 @@ model TokenUsage {
   @@index([projectId, turnId])
 }
 
+model SessionRuntimeState {
+  id                String       @id @default(cuid())
+  projectId         String
+  project           Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId         String
+  session           Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  runtime           AgentRuntime
+  providerSessionId String
+  modelId           String?
+  resumeState       Json?
+  lastUsedAt        DateTime     @default(now())
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([sessionId, runtime])
+  @@unique([runtime, providerSessionId])
+  @@index([projectId, sessionId])
+}
+
 enum TokenUsageLabel {
   CODER
   REVIEWER
@@ -107,4 +138,17 @@ enum MessageRole {
   USER
   AGENT
   SYSTEM
+}
+
+enum AgentRuntime {
+  CLAUDE_CODE
+  OPENAI_CODEX
+  VERCEL_AI
+}
+
+enum RuntimeSwitchStatus {
+  IDLE
+  PENDING
+  SWITCHING
+  FAILED
 }

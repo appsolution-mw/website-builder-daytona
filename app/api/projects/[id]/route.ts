@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { createDaytonaClient } from "@/lib/daytona";
 import { createFakeClient } from "@/lib/daytona/fake";
+import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
+import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
@@ -12,31 +14,33 @@ async function ensureProjectSession(projectId: string) {
   const existing = await prisma.session.findFirst({
     where: { projectId },
     orderBy: { createdAt: "asc" },
-    select: {
-      id: true,
-      title: true,
-      claudeSessionId: true,
-      createdAt: true,
-      lastMessageAt: true,
-      _count: { select: { messages: true } },
-    },
+    select: sessionSelect,
   });
   if (existing) return existing;
 
-  return prisma.session.create({
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { agentRuntime: true },
+  });
+  const session = await prisma.session.create({
     data: {
       projectId,
       title: DEFAULT_SESSION_TITLE,
-      claudeSessionId: randomUUID(),
+      defaultRuntime: project?.agentRuntime ?? "CLAUDE_CODE",
     },
-    select: {
-      id: true,
-      title: true,
-      claudeSessionId: true,
-      createdAt: true,
-      lastMessageAt: true,
-      _count: { select: { messages: true } },
+    select: sessionSelect,
+  });
+  await prisma.sessionRuntimeState.create({
+    data: {
+      projectId,
+      sessionId: session.id,
+      runtime: project?.agentRuntime ?? "CLAUDE_CODE",
+      providerSessionId: randomUUID(),
     },
+  });
+  return prisma.session.findUniqueOrThrow({
+    where: { id: session.id },
+    select: sessionSelect,
   });
 }
 
@@ -44,14 +48,7 @@ async function listProjectSessions(projectId: string) {
   return prisma.session.findMany({
     where: { projectId },
     orderBy: { lastMessageAt: "desc" },
-    select: {
-      id: true,
-      title: true,
-      claudeSessionId: true,
-      createdAt: true,
-      lastMessageAt: true,
-      _count: { select: { messages: true } },
-    },
+    select: sessionSelect,
   });
 }
 
@@ -110,7 +107,16 @@ export async function GET(
   const chatSession = await ensureProjectSession(project.id);
   const chatSessions = await listProjectSessions(project.id);
 
-  return NextResponse.json({ project: { ...project, chatSession, chatSessions } });
+  return NextResponse.json({
+    project: {
+      ...project,
+      agentRuntime: dbRuntimeToProtocol(project.agentRuntime),
+      desiredRuntime: dbRuntimeToProtocol(project.desiredRuntime),
+      availableRuntimes: AGENT_RUNTIME_OPTIONS,
+      chatSession: serializeSession(chatSession),
+      chatSessions: chatSessions.map(serializeSession),
+    },
+  });
 }
 
 export async function DELETE(
