@@ -13,13 +13,18 @@ export function createSimpleScheduler(): Scheduler {
           _count: {
             select: {
               sandboxes: {
-                where: { status: { in: ACTIVE_SANDBOX_STATUSES as unknown as ("SPAWNING" | "RUNNING")[] } },
+                where: { status: { in: [...ACTIVE_SANDBOX_STATUSES] } },
               },
             },
           },
         },
       });
 
+      // Linear scan: at H.1a scale (10–50 workers per spec §10) pulling all
+      // and choosing in memory is fine. For larger pools, push the comparison
+      // to SQL via ORDER BY (capacity - active_count) DESC LIMIT 1.
+      // Tie-break: `>` (not `>=`) keeps the first-encountered worker, which
+      // for cuid-ordered rows means the oldest READY worker wins on a tie.
       let best: { worker: typeof workers[number]; free: number } | null = null;
       for (const w of workers) {
         const free = w.capacity - w._count.sandboxes;
