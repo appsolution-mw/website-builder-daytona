@@ -1,6 +1,11 @@
 import { createDaytonaRuntime } from "./daytona";
 import type { Runtime } from "./types";
 
+// Re-export createDaytonaRuntime so call sites that need to bypass RUNTIME_MODE
+// dispatch (e.g., when the stored sandbox-id requires a specific runtime) can
+// import everything from the same barrel.
+export { createDaytonaRuntime };
+
 export type {
   Runtime,
   SandboxInfo,

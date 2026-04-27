@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { createRuntime } from "@/lib/runtime";
-import { createDaytonaRuntime } from "@/lib/runtime/daytona";
+import { createRuntime, createDaytonaRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
@@ -134,12 +133,12 @@ export async function DELETE(
   }
 
   if (project.daytonaSandboxId) {
-    // Pick runtime by stored sandbox-id shape so a mode change between
-    // provision and destroy can't leak resources or no-op a real destroy.
-    const runtime = project.daytonaSandboxId.startsWith("fake-")
-      ? createDaytonaRuntime("fake")
-      : createRuntime();
     try {
+      // Pick runtime by stored sandbox-id shape so a mode change between
+      // provision and destroy can't leak resources or no-op a real destroy.
+      const runtime = project.daytonaSandboxId.startsWith("fake-")
+        ? createDaytonaRuntime("fake")
+        : createRuntime();
       await runtime.destroyProjectSandbox(project.daytonaSandboxId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
