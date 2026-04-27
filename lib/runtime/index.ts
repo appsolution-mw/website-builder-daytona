@@ -24,19 +24,16 @@ export type {
  *   hetzner-fake    — multi-cloud runtime with FakeProvisioner (Phase H.1c+)
  *   hetzner-cloud   — multi-cloud runtime with HetznerProvisioner (Phase H.1c+)
  *
- * When `RUNTIME_MODE=daytona-*` is set explicitly, we override `DAYTONA_MODE`
- * so the legacy daytona factory picks the right backend without the user
- * needing to set both env vars.
+ * Explicit `RUNTIME_MODE=daytona-*` is forwarded to the daytona factory
+ * directly — no env-var mutation involved.
  */
 export function createRuntime(): Runtime {
   const explicit = process.env.RUNTIME_MODE;
   const mode = explicit ?? `daytona-${process.env.DAYTONA_MODE ?? "cloud"}`;
 
   if (mode === "daytona-cloud" || mode === "daytona-fake") {
-    if (explicit) {
-      process.env.DAYTONA_MODE = mode === "daytona-cloud" ? "cloud" : "fake";
-    }
-    return createDaytonaRuntime();
+    const daytonaMode = mode === "daytona-cloud" ? "cloud" : "fake";
+    return explicit ? createDaytonaRuntime(daytonaMode) : createDaytonaRuntime();
   }
   if (mode === "hetzner-fake" || mode === "hetzner-cloud") {
     throw new Error(

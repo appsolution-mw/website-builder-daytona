@@ -4,12 +4,15 @@ import { createRuntime } from "../index";
 describe("createRuntime factory", () => {
   const originalRuntimeMode = process.env.RUNTIME_MODE;
   const originalDaytonaMode = process.env.DAYTONA_MODE;
+  const originalDaytonaApiKey = process.env.DAYTONA_API_KEY;
 
   afterEach(() => {
     if (originalRuntimeMode === undefined) delete process.env.RUNTIME_MODE;
     else process.env.RUNTIME_MODE = originalRuntimeMode;
     if (originalDaytonaMode === undefined) delete process.env.DAYTONA_MODE;
     else process.env.DAYTONA_MODE = originalDaytonaMode;
+    if (originalDaytonaApiKey === undefined) delete process.env.DAYTONA_API_KEY;
+    else process.env.DAYTONA_API_KEY = originalDaytonaApiKey;
     vi.resetModules();
   });
 
@@ -28,8 +31,22 @@ describe("createRuntime factory", () => {
     expect(r).toBeDefined();
   });
 
+  it("uses RUNTIME_MODE=daytona-cloud when explicit", () => {
+    process.env.RUNTIME_MODE = "daytona-cloud";
+    delete process.env.DAYTONA_MODE;
+    process.env.DAYTONA_API_KEY = "test-dummy-key"; // cloud.ts requires this at construction
+    const r = createRuntime();
+    expect(r).toBeDefined();
+    expect(typeof r.spawnProjectSandbox).toBe("function");
+  });
+
   it("throws for hetzner-* (not yet implemented)", () => {
     process.env.RUNTIME_MODE = "hetzner-fake";
+    expect(() => createRuntime()).toThrowError(/H\.1c\+/);
+  });
+
+  it("throws for RUNTIME_MODE=hetzner-cloud (not yet implemented)", () => {
+    process.env.RUNTIME_MODE = "hetzner-cloud";
     expect(() => createRuntime()).toThrowError(/H\.1c\+/);
   });
 
