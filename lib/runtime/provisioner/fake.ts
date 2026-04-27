@@ -32,10 +32,12 @@ export function createFakeProvisioner(): WorkerProvisioner {
 
     async provision({ region, size, capacity }: ProvisionArgs): Promise<WorkerRecord> {
       const suffix = randomBytes(4).toString("hex");
+      const ipB = (parseInt(suffix.slice(0, 2), 16) % 253) + 1;
+      const ipC = (parseInt(suffix.slice(2, 4), 16) % 253) + 1;
       const row = await prisma.worker.create({
         data: {
           tailscaleHostname: `fake-worker-${suffix}`,
-          tailscaleIp: `100.64.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`,
+          tailscaleIp: `100.64.${ipB}.${ipC}`,
           provider: PROVIDER_ID,
           providerVmId: `fake-${size}-${suffix}`,
           region,
@@ -47,10 +49,10 @@ export function createFakeProvisioner(): WorkerProvisioner {
     },
 
     async destroy(workerId: string): Promise<void> {
-      const existing = await prisma.worker.findUnique({ where: { id: workerId } });
-      if (!existing || existing.provider !== PROVIDER_ID) return;
-      await prisma.worker.update({
-        where: { id: workerId },
+      // updateMany returns { count: 0 } for non-existent / non-fake workers,
+      // making destroy() naturally idempotent in a single round-trip.
+      await prisma.worker.updateMany({
+        where: { id: workerId, provider: PROVIDER_ID },
         data: { status: "DECOMMISSIONED", decommissionedAt: new Date() },
       });
     },
