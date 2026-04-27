@@ -1,10 +1,11 @@
-import type { DaytonaClient } from "./types";
+import type { Runtime } from "../types";
 import { createCloudClient } from "./cloud";
 import { createFakeClient } from "./fake";
 
 export type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
 
-export function createDaytonaClient(): DaytonaClient {
+/** Returns the Daytona-backed Runtime selected by `DAYTONA_MODE`. */
+export function createDaytonaRuntime(): Runtime {
   const mode = process.env.DAYTONA_MODE ?? "cloud";
   switch (mode) {
     case "fake":
@@ -15,3 +16,6 @@ export function createDaytonaClient(): DaytonaClient {
       throw new Error(`Unknown DAYTONA_MODE: ${mode}`);
   }
 }
+
+/** @deprecated Use `createDaytonaRuntime()`. Kept for backward-compat. */
+export const createDaytonaClient = createDaytonaRuntime;
