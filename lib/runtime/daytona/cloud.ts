@@ -1,5 +1,6 @@
 import { Daytona, SandboxState } from "@daytona/sdk";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
+import type { SpawnArgs } from "../types";
 
 const BROKER_PORT = 4000;
 const PREVIEW_PORT = 3000;
@@ -100,7 +101,7 @@ export function createCloudClient(): DaytonaClient {
       cloneToken,
       repoOwner,
       repoName,
-    }): Promise<SandboxInfo> {
+    }: SpawnArgs): Promise<SandboxInfo> {
       // create() blocks until the sandbox is started (default 60s timeout).
       const sandbox = await daytona.create({
         image: BASE_IMAGE,

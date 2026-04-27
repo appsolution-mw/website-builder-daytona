@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startBroker, type BrokerHandle } from "@wbd/broker";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
+import type { SpawnArgs } from "../types";
 
 interface FakeSandbox {
   id: string;
@@ -72,7 +73,7 @@ async function closeServer(server: Server): Promise<void> {
 
 export function createFakeClient(): DaytonaClient {
   return {
-    async spawnProjectSandbox({ projectId }): Promise<SandboxInfo> {
+    async spawnProjectSandbox({ projectId }: SpawnArgs): Promise<SandboxInfo> {
       const projectRoot = await mkdtemp(join(tmpdir(), `wbd-fake-${projectId}-`));
       await cp(PROJECT_TEMPLATE_DIR, projectRoot, { recursive: true });
       const broker = await startBroker({ port: 0, projectRoot });
