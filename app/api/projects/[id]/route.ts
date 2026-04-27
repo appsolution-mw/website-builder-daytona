@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { createDaytonaClient } from "@/lib/daytona";
-import { createFakeClient } from "@/lib/daytona/fake";
+import { createDaytonaClient } from "@/lib/runtime/daytona";
+import { createFakeClient } from "@/lib/runtime/daytona/fake";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 

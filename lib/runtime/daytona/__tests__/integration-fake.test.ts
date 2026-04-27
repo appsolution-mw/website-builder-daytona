@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import WebSocket from "ws";
 import { createFakeClient } from "../fake";
-import { startProxy, type ProxyHandle } from "../../../ws-proxy/src/index";
+import { startProxy, type ProxyHandle } from "../../../../ws-proxy/src/index";
 
 describe("fake Daytona + ws-proxy integration", () => {
   let proxy: ProxyHandle | undefined;

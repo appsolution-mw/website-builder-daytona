@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { createDaytonaClient } from "@/lib/daytona";
+import { createDaytonaClient } from "@/lib/runtime/daytona";
 import {
   AGENT_RUNTIME_OPTIONS,
   dbRuntimeToProtocol,
