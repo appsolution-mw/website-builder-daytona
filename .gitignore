@@ -40,3 +40,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local ad-hoc debug scripts (not for version control)
+container/broker/x.txt
+ws-proxy/broker-direct-test.mjs
+ws-proxy/parallel-test.mjs

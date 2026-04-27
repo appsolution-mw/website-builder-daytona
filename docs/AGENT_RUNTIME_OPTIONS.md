@@ -24,7 +24,7 @@ Wichtige Dateien:
 - `container/broker/src/ws-server.ts`: WebSocket-Protokoll und Turn-Lifecycle
 - `container/broker/src/claude-runner.ts`: bestehender Claude-Code-Runner
 - `container/broker/src/ndjson-parser.ts`: Claude-Code-Stream-Adapter
-- `lib/daytona/cloud.ts`: Container-Env und Bootstrapping
+- `lib/runtime/daytona/cloud.ts`: Container-Env und Bootstrapping
 - `packages/protocol/src/index.ts`: geteiltes Browser/Broker-Protokoll
 
 ## Eingebaute Optionen
