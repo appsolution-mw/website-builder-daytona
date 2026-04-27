@@ -152,3 +152,63 @@ enum RuntimeSwitchStatus {
   SWITCHING
   FAILED
 }
+
+enum WorkerStatus {
+  PROVISIONING
+  READY
+  DRAINING
+  DECOMMISSIONED
+  OFFLINE
+}
+
+enum SandboxLifecycleStatus {
+  SPAWNING
+  RUNNING
+  PAUSED
+  DESTROYED
+}
+
+model Worker {
+  id                String          @id @default(cuid())
+  tailscaleHostname String          @unique
+  tailscaleIp       String
+  provider          String
+  providerVmId      String
+  region            String
+  capacity          Int
+  status            WorkerStatus    @default(PROVISIONING)
+  lastHeartbeatAt   DateTime?
+  createdAt         DateTime        @default(now())
+  decommissionedAt  DateTime?
+  sandboxes         WorkerSandbox[]
+
+  @@index([status])
+  @@index([provider, region])
+}
+
+model WorkerSandbox {
+  id             String                 @id @default(cuid())
+  workerId       String
+  worker         Worker                 @relation(fields: [workerId], references: [id])
+  projectId      String                 @unique
+  containerId    String
+  brokerPort     Int
+  previewPort    Int
+  status         SandboxLifecycleStatus @default(SPAWNING)
+  createdAt      DateTime               @default(now())
+  pausedAt       DateTime?
+  lastActivityAt DateTime               @default(now())
+
+  @@index([workerId])
+  @@index([status])
+}
+
+model SandboxToken {
+  id        String   @id @default(cuid())
+  sandboxId String   @unique
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
