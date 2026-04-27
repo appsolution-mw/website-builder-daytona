@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { createRuntime } from "@/lib/runtime";
+import { createDaytonaRuntime } from "@/lib/runtime/daytona";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
@@ -85,7 +86,9 @@ export async function GET(
     project.daytonaSandboxId?.startsWith("fake-") &&
     !(await isFakePreviewReachable(project.previewUrl))
   ) {
-    const runtime = createRuntime();
+    // Branch only reached for fake-* sandboxes — use fake runtime unconditionally
+    // so a RUNTIME_MODE change between provision and re-spawn can't mismatch.
+    const runtime = createDaytonaRuntime("fake");
     const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
       cloneToken: "",
@@ -131,7 +134,11 @@ export async function DELETE(
   }
 
   if (project.daytonaSandboxId) {
-    const runtime = createRuntime();
+    // Pick runtime by stored sandbox-id shape so a mode change between
+    // provision and destroy can't leak resources or no-op a real destroy.
+    const runtime = project.daytonaSandboxId.startsWith("fake-")
+      ? createDaytonaRuntime("fake")
+      : createRuntime();
     try {
       await runtime.destroyProjectSandbox(project.daytonaSandboxId);
     } catch (err) {
