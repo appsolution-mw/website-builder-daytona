@@ -30,6 +30,12 @@ export interface SandboxInfo {
   previewUrl: string;
 }
 
+/**
+ * Runtime-facing sandbox status returned by Runtime.getSandboxStatus().
+ * Intentionally distinct from the DB-level `SandboxLifecycleStatus` Prisma
+ * enum (which tracks container lifecycle states). Mapping between the two
+ * lives in HetznerRuntime.
+ */
 export type SandboxStatus =
   | "provisioning"
   | "running"
@@ -53,10 +59,10 @@ export interface WorkerRecord {
   providerVmId: string;
   region: string;         // provider-specific region code
   capacity: number;       // max concurrent sandboxes
-  status: WorkerStatusValue;
+  status: WorkerStatus;
 }
 
-export type WorkerStatusValue =
+export type WorkerStatus =
   | "PROVISIONING"
   | "READY"
   | "DRAINING"
