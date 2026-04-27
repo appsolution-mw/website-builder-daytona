@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { createDaytonaClient } from "@/lib/runtime/daytona";
-import { createFakeClient } from "@/lib/runtime/daytona/fake";
+import { createRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
@@ -86,8 +85,8 @@ export async function GET(
     project.daytonaSandboxId?.startsWith("fake-") &&
     !(await isFakePreviewReachable(project.previewUrl))
   ) {
-    const daytona = createFakeClient();
-    const info = await daytona.spawnProjectSandbox({
+    const runtime = createRuntime();
+    const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
       cloneToken: "",
       repoOwner: "",
@@ -132,11 +131,9 @@ export async function DELETE(
   }
 
   if (project.daytonaSandboxId) {
-    const daytona = project.daytonaSandboxId.startsWith("fake-")
-      ? createFakeClient()
-      : createDaytonaClient();
+    const runtime = createRuntime();
     try {
-      await daytona.destroyProjectSandbox(project.daytonaSandboxId);
+      await runtime.destroyProjectSandbox(project.daytonaSandboxId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[api] destroy sandbox ${project.daytonaSandboxId} failed: ${message}`);

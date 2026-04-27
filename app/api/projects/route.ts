@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
-import { createDaytonaClient } from "@/lib/runtime/daytona";
+import { createRuntime } from "@/lib/runtime";
 import {
   AGENT_RUNTIME_OPTIONS,
   dbRuntimeToProtocol,
@@ -129,10 +129,10 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const daytona = createDaytonaClient();
+  const sandboxRuntime = createRuntime();
   try {
     const info = await Promise.race([
-      daytona.spawnProjectSandbox({
+      sandboxRuntime.spawnProjectSandbox({
         projectId: project.id,
         cloneToken,
         repoOwner,
