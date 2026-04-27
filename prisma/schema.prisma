@@ -189,7 +189,7 @@ model Worker {
 model WorkerSandbox {
   id             String                 @id @default(cuid())
   workerId       String
-  worker         Worker                 @relation(fields: [workerId], references: [id])
+  worker         Worker                 @relation(fields: [workerId], references: [id], onDelete: Restrict)
   projectId      String                 @unique
   containerId    String
   brokerPort     Int
