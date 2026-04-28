@@ -9,7 +9,7 @@ export type PromptImageAttachment = {
   dataBase64: string;
 };
 
-export type AgentRuntime = "claude-code" | "openai-codex" | "vercel-ai";
+export type AgentRuntime = "claude-code" | "openai-codex" | "vercel-ai" | "openhands";
 
 export type AgentUsageLabel = "coder" | "reviewer" | "turn";
 
@@ -128,4 +128,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.9.0" as const;
+export const PROTOCOL_VERSION = "1.10.0" as const;
