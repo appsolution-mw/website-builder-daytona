@@ -35,5 +35,8 @@ export function agentRuntimeFromEnv(): AgentRuntime {
   if (raw === "vercel-ai" || raw === "vercel-ai-sdk") {
     return "vercel-ai";
   }
+  if (raw === "openhands" || raw === "open-hands" || raw === "openhands-sdk") {
+    return "openhands";
+  }
   return "claude-code";
 }

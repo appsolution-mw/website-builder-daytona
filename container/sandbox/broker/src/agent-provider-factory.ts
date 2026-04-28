@@ -3,6 +3,7 @@ import type { AgentRuntime } from "@wbd/protocol";
 import { agentRuntimeFromEnv } from "./agent-provider";
 import { runClaudeTurn, runReviewerPass, type SpawnFn } from "./claude-runner";
 import { runCodexReviewPass, runCodexTurn } from "./codex-runner";
+import { runOpenHandsReviewPass, runOpenHandsTurn } from "./openhands-runner";
 import { runVercelAiReviewPass, runVercelAiTurn } from "./vercel-ai-runner";
 
 export interface CreateAgentProviderOptions {
@@ -26,6 +27,15 @@ export function createAgentProvider(opts: CreateAgentProviderOptions = {}): Agen
       runtime,
       runTurn: (turn) => runVercelAiTurn(turn),
       runReview: (review) => runVercelAiReviewPass(review),
+    };
+  }
+
+  if (runtime === "openhands") {
+    return {
+      runtime,
+      runTurn: (turn) => runOpenHandsTurn(turn, opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined),
+      runReview: (review) =>
+        runOpenHandsReviewPass(review, opts.__testSpawn ? { spawn: opts.__testSpawn } : undefined),
     };
   }
 
