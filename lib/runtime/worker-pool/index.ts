@@ -4,6 +4,10 @@ import { createAgentClient } from "./agent-client";
 import { createWorkerPoolRuntime } from "./runtime";
 import type { Runtime, WorkerRecord } from "../types";
 import type { AgentClient } from "./types";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
 
 export interface CreateLocalWorkerPoolRuntimeArgs {
   sandboxImage?: string;
@@ -19,8 +23,9 @@ export interface CreateLocalWorkerPoolRuntimeArgs {
  *     can authenticate the chosen agent runtime (claude-code / codex / etc.)
  */
 export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeArgs = {}): Runtime {
-  const sandboxImage = args.sandboxImage ?? required("SANDBOX_IMAGE");
-  const hmacSecret = args.hmacSecret ?? required("WORKER_AGENT_HMAC_SECRET");
+  const runtimeEnv = collectRuntimeEnv();
+  const sandboxImage = args.sandboxImage ?? required("SANDBOX_IMAGE", runtimeEnv);
+  const hmacSecret = args.hmacSecret ?? required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
   const scheduler = createSimpleScheduler();
   const provisioner = createFakeProvisioner();
   const agentClientFor = (w: WorkerRecord): AgentClient =>
@@ -30,28 +35,95 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
     provisioner,
     agentClientFor,
     sandboxImage,
-    brokerEnv: () => {
-      const env: Record<string, string> = {};
-      const passthrough = [
-        "AGENT_RUNTIME",
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "OPENAI_API_KEY",
-        "GITHUB_CLONE_TOKEN",
-        "GITHUB_REPO_OWNER",
-        "GITHUB_REPO_NAME",
-      ];
-      for (const k of passthrough) {
-        const v = process.env[k];
-        if (v) env[k] = v;
-      }
-      return env;
-    },
+    brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
   });
 }
 
-function required(name: string): string {
-  const v = process.env[name];
+export function collectBrokerEnv(runtimeEnv: Record<string, string> = collectRuntimeEnv()): Record<string, string> {
+  const env: Record<string, string> = {};
+  const passthrough = [
+    "AGENT_RUNTIME",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_MODEL",
+    "CLAUDE_REVIEWER_MODEL",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_MODEL",
+    "CODEX_REVIEWER_MODEL",
+    "CODEX_REASONING_EFFORT",
+    "CODEX_REVIEWER_REASONING_EFFORT",
+    "CODEX_SANDBOX_MODE",
+    "CODEX_REVIEWER_SANDBOX_MODE",
+    "CODEX_NETWORK_ACCESS",
+    "OPENROUTER_API_KEY",
+    "VERCEL_AI_MODEL",
+    "VERCEL_AI_REVIEWER_MODEL",
+    "GITHUB_CLONE_TOKEN",
+    "GITHUB_REPO_OWNER",
+    "GITHUB_REPO_NAME",
+  ];
+  for (const k of passthrough) {
+    const v = runtimeEnv[k];
+    if (v) env[k] = v;
+  }
+  if (!env.ANTHROPIC_API_KEY && runtimeEnv.OPENROUTER_API_KEY) {
+    env.ANTHROPIC_API_KEY = runtimeEnv.OPENROUTER_API_KEY;
+  }
+  if (!env.ANTHROPIC_BASE_URL && runtimeEnv.OPENROUTER_API_KEY && !runtimeEnv.ANTHROPIC_API_KEY) {
+    env.ANTHROPIC_BASE_URL = OPENROUTER_ANTHROPIC_BASE_URL;
+  }
+  return env;
+}
+
+function collectRuntimeEnv(): Record<string, string> {
+  if (process.env.WBD_DISABLE_ENV_FILE_LOAD === "1") {
+    return processEnvStrings();
+  }
+  return {
+    ...processEnvStrings(),
+    ...readEnvFile(".env"),
+    ...readEnvFile(".env.local"),
+  };
+}
+
+function processEnvStrings(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === "string") env[key] = value;
+  }
+  return env;
+}
+
+function readEnvFile(fileName: string): Record<string, string> {
+  const path = resolve(process.cwd(), fileName);
+  if (!existsSync(path)) return {};
+  const env: Record<string, string> = {};
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    env[key] = unquoteEnvValue(rawValue.trim());
+  }
+  return env;
+}
+
+function unquoteEnvValue(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  const commentStart = value.search(/\s#/);
+  return commentStart === -1 ? value : value.slice(0, commentStart).trimEnd();
+}
+
+function required(name: string, runtimeEnv: Record<string, string>): string {
+  const v = runtimeEnv[name];
   if (!v) throw new Error(`worker-pool runtime requires env: ${name}`);
   return v;
 }

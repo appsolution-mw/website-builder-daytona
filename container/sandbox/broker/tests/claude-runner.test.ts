@@ -1,8 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { Readable, Writable, PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import { runClaudeTurn, runReviewerPass, type ClaudeRunnerDeps, type SpawnFn, type SpawnedChild } from "../src/claude-runner";
 import type { BrokerToHost } from "@wbd/protocol";
+
+const originalEnv = { ...process.env };
+
+afterEach(() => {
+  process.env = { ...originalEnv };
+});
 
 function makeFakeChild(stdoutLines: string[], exitCode = 0) {
   const child = new EventEmitter() as EventEmitter & {
@@ -104,6 +110,34 @@ describe("runClaudeTurn", () => {
     expect(argv).toContain("--resume");
     expect(argv[argv.indexOf("--resume") + 1]).toBe(baseOpts.providerSessionId);
     expect(argv).not.toContain("--session-id");
+  });
+
+  it("routes Claude Code through OpenRouter when only OPENROUTER_API_KEY is configured", async () => {
+    process.env = {
+      ...originalEnv,
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-test",
+      OPENROUTER_API_KEY: "sk-or-v1-test",
+    };
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_BASE_URL;
+
+    const spawn = vi.fn(() =>
+      makeFakeChild([
+        JSON.stringify({ type: "result", subtype: "success", duration_ms: 1 }),
+      ]),
+    ) as unknown as SpawnFn;
+
+    await runClaudeTurn({ ...baseOpts, onEvent: () => {} }, { spawn });
+
+    const mockFn = spawn as unknown as ReturnType<typeof vi.fn>;
+    const [, , options] = mockFn.mock.calls[0] as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv },
+    ];
+    expect(options.env?.ANTHROPIC_API_KEY).toBe("sk-or-v1-test");
+    expect(options.env?.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
   it("emits agent.error when process exits non-zero without a result line", async () => {
@@ -248,6 +282,33 @@ describe("runReviewerPass", () => {
     expect(argv[sessionIdx + 1]).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
+  });
+
+  it("uses CLAUDE_REVIEWER_MODEL when configured", async () => {
+    process.env = { ...originalEnv, CLAUDE_REVIEWER_MODEL: "claude-opus-4-7" };
+    const child = fakeChild();
+    const spawn = vi.fn().mockReturnValue(child) as unknown as SpawnFn;
+
+    const promise = runReviewerPass(
+      {
+        projectId: "proj-1",
+        turnId: "turn-1",
+        onEvent: () => {},
+        timeoutMs: 5_000,
+      },
+      { spawn },
+    );
+
+    child.stdout!.push(
+      JSON.stringify({ type: "result", subtype: "success", duration_ms: 1 }) + "\n",
+    );
+    child.stdout!.push(null);
+    child.emit("close", 0);
+    await promise;
+
+    const [, argv] = (spawn as unknown as { mock: { calls: [string, string[]][] } }).mock.calls[0];
+    const modelIdx = argv.indexOf("--model");
+    expect(argv[modelIdx + 1]).toBe("claude-opus-4-7");
   });
 
   it("tags every emitted event with agentId='reviewer'", async () => {

@@ -6,6 +6,7 @@ describe("createRuntime factory", () => {
   const originalDaytonaMode = process.env.DAYTONA_MODE;
   const originalSandboxImage = process.env.SANDBOX_IMAGE;
   const originalHmac = process.env.WORKER_AGENT_HMAC_SECRET;
+  const originalDisableEnvFileLoad = process.env.WBD_DISABLE_ENV_FILE_LOAD;
 
   afterEach(() => {
     if (originalRuntimeMode === undefined) delete process.env.RUNTIME_MODE;
@@ -16,6 +17,8 @@ describe("createRuntime factory", () => {
     else process.env.SANDBOX_IMAGE = originalSandboxImage;
     if (originalHmac === undefined) delete process.env.WORKER_AGENT_HMAC_SECRET;
     else process.env.WORKER_AGENT_HMAC_SECRET = originalHmac;
+    if (originalDisableEnvFileLoad === undefined) delete process.env.WBD_DISABLE_ENV_FILE_LOAD;
+    else process.env.WBD_DISABLE_ENV_FILE_LOAD = originalDisableEnvFileLoad;
     vi.resetModules();
   });
 
@@ -42,6 +45,7 @@ describe("createRuntime factory", () => {
 
   it("throws helpful error if worker-pool-local missing env", () => {
     process.env.RUNTIME_MODE = "worker-pool-local";
+    process.env.WBD_DISABLE_ENV_FILE_LOAD = "1";
     delete process.env.SANDBOX_IMAGE;
     delete process.env.WORKER_AGENT_HMAC_SECRET;
     expect(() => createRuntime()).toThrow(/SANDBOX_IMAGE|WORKER_AGENT_HMAC_SECRET/);

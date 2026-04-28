@@ -35,6 +35,27 @@ Default und bestehender Pfad. Der Container installiert weiterhin
 `@anthropic-ai/claude-code`, nutzt `claude --print --output-format stream-json`
 und fuehrt nach Schreiboperationen den vorhandenen Reviewer-Pass aus.
 
+Konfiguration ueber OpenRouter:
+
+```env
+AGENT_RUNTIME=claude-code
+OPENROUTER_API_KEY=sk-or-v1-...
+ANTHROPIC_BASE_URL=https://openrouter.ai/api
+CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_REVIEWER_MODEL=claude-sonnet-4-6
+```
+
+Der Broker startet weiterhin die Claude Code CLI. Wenn `OPENROUTER_API_KEY`
+gesetzt ist und `ANTHROPIC_API_KEY` leer bleibt, setzt der Runtime-Layer fuer
+den Claude-Code-Prozess automatisch `ANTHROPIC_API_KEY=OPENROUTER_API_KEY` und
+`ANTHROPIC_BASE_URL=https://openrouter.ai/api`. Damit spricht Claude Code gegen
+OpenRouter's Anthropic-kompatible API, ohne den CLI-Pfad zu ersetzen. Wer direkt
+ein Anthropic-Konto verwenden will, setzt stattdessen `ANTHROPIC_API_KEY`; dieser
+Wert wird nicht durch `OPENROUTER_API_KEY` ueberschrieben. Fuer direkte
+Anthropic-Nutzung muss `ANTHROPIC_BASE_URL` leer bleiben. Bei OpenRouter-Spawns
+entfernt der Broker `CLAUDE_CODE_OAUTH_TOKEN` aus der Child-Process-Umgebung,
+damit Claude Code nicht versehentlich OAuth statt des Gateway-API-Keys nutzt.
+
 Vorteile:
 
 - Reifste Coding-Agent-Funktionalitaet in diesem Projekt
@@ -63,6 +84,8 @@ CODEX_MODEL=gpt-5.4
 CODEX_REVIEWER_MODEL=gpt-5.4
 CODEX_REASONING_EFFORT=medium
 CODEX_REVIEWER_REASONING_EFFORT=high
+CODEX_SANDBOX_MODE=danger-full-access
+CODEX_REVIEWER_SANDBOX_MODE=danger-full-access
 CODEX_NETWORK_ACCESS=0
 ```
 
@@ -70,6 +93,11 @@ Hinweise:
 
 - Die vorhandene `claudeSessionId` wird vorerst als generische Session-ID fuer
   den Broker-Cache weiterverwendet. Das vermeidet eine Prisma-/UI-Migration.
+- `danger-full-access` vermeidet Codex' innere `bwrap`-Sandbox. Das ist fuer
+  Daytona-/Worker-Container der robuste Default, weil die aeussere Projekt-
+  isolation bereits durch den Container kommt. Auf Hosts mit funktionierenden
+  unprivileged user namespaces kann `CODEX_SANDBOX_MODE=workspace-write` oder
+  `CODEX_REVIEWER_SANDBOX_MODE=read-only` gesetzt werden.
 - Codex-Thread-Resume ist aktuell pro laufendem Broker-Prozess gecached. Eine
   spaetere Migration sollte `claudeSessionId` in `agentSessionId` umbenennen und
   provider-spezifische Thread-IDs speichern.

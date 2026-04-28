@@ -4,8 +4,9 @@ import type { Readable, Writable } from "node:stream";
 import type { BrokerToHost } from "@wbd/protocol";
 import { parseNdjsonLine, createTaskMap } from "./ndjson-parser";
 
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 const MODEL = "claude-sonnet-4-6";
+const OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
 const MINIMAL_TERMINAL_PROMPT = [
   "You are operating in minimal terminal mode.",
   "Only output short status updates.",
@@ -20,7 +21,7 @@ const MINIMAL_TERMINAL_PROMPT = [
 const REVIEWER_MODEL = "claude-sonnet-4-6";
 const REVIEWER_PROMPT =
   "Invoke the reviewer sub-agent on the uncommitted changes from this turn. Output only a short status or concise issue bullets.";
-const REVIEWER_DEFAULT_TIMEOUT_MS = 90 * 1000;
+const REVIEWER_DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
 
 function timeoutFromEnv(name: string, fallbackMs: number): number {
   const raw = process.env[name];
@@ -35,6 +36,29 @@ function formatTimeout(ms: number): string {
   if (mins >= 1) return `${Number.isInteger(mins) ? mins : mins.toFixed(1)} minutes`;
   const secs = ms / 1000;
   return `${Number.isInteger(secs) ? secs : secs.toFixed(1)} seconds`;
+}
+
+function isOpenRouterBaseUrl(value?: string): boolean {
+  return /^https:\/\/openrouter\.ai(?:\/|$)/.test(value ?? "");
+}
+
+function claudeProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = { ...env };
+  const openRouterApiKey = env.OPENROUTER_API_KEY;
+
+  if (!nextEnv.ANTHROPIC_API_KEY && openRouterApiKey) {
+    nextEnv.ANTHROPIC_API_KEY = openRouterApiKey;
+  }
+
+  if (!nextEnv.ANTHROPIC_BASE_URL && openRouterApiKey && !env.ANTHROPIC_API_KEY) {
+    nextEnv.ANTHROPIC_BASE_URL = OPENROUTER_ANTHROPIC_BASE_URL;
+  }
+
+  if (isOpenRouterBaseUrl(nextEnv.ANTHROPIC_BASE_URL)) {
+    delete nextEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  }
+
+  return nextEnv;
 }
 
 export interface ClaudeRunnerOptions {
@@ -103,7 +127,7 @@ export async function runClaudeTurn(
 
   const child: SpawnedChild = spawnFn("claude", argv, {
     cwd: "/workspace/project",
-    env: process.env,
+    env: claudeProcessEnv(),
     stdio: ["pipe", "pipe", "pipe"],
   });
 
@@ -229,7 +253,7 @@ export async function runReviewerPass(
     "--session-id",
     sessionId,
     "--model",
-    REVIEWER_MODEL,
+    process.env.CLAUDE_REVIEWER_MODEL || REVIEWER_MODEL,
     "--permission-mode",
     "acceptEdits",
     "--add-dir",
@@ -238,7 +262,7 @@ export async function runReviewerPass(
 
   const child: SpawnedChild = spawnFn("claude", argv, {
     cwd: "/workspace/project",
-    env: process.env,
+    env: claudeProcessEnv(),
     stdio: ["pipe", "pipe", "pipe"],
   });
 
