@@ -29,12 +29,13 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     "application/json",
     { parseAs: "string" },
     (req, body, done) => {
-      if (!body || body.trim() === "") {
+      const bodyText = typeof body === "string" ? body : body.toString("utf8");
+      if (bodyText.trim() === "") {
         done(null, undefined);
         return;
       }
       try {
-        done(null, JSON.parse(body));
+        done(null, JSON.parse(bodyText));
       } catch (err) {
         done(err as Error, undefined);
       }

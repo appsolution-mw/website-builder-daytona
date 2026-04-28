@@ -44,7 +44,13 @@ export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
       const parsed = text ? safeJson(text) : undefined;
 
       if (!res.ok) {
-        const errorCode = (parsed && (parsed as { error?: string }).error) ?? `http-${res.status}`;
+        const errorCode =
+          typeof parsed === "object" &&
+          parsed !== null &&
+          "error" in parsed &&
+          typeof parsed.error === "string"
+            ? parsed.error
+            : `http-${res.status}`;
         throw new AgentError(res.status, errorCode, `${method} ${path} → ${res.status} ${errorCode}`);
       }
       return parsed as T;
