@@ -25,6 +25,7 @@ function usageDetails(tokensIn: number, tokensOut: number, rawUsage: unknown): A
     webSearchRequests: 0,
     webFetchRequests: 0,
     rawUsage,
+    modelUsage: rawUsage,
   };
 }
 

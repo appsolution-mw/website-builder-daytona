@@ -25,48 +25,68 @@ function isOpenRouterModel(modelId: string): boolean {
 }
 
 function openHandsModel(modelId: string | undefined, envName: string): string {
-  return normalizeOpenHandsModelId(modelId || process.env[envName] || process.env.OPENHANDS_MODEL || DEFAULT_OPENHANDS_MODEL);
+  return normalizeOpenHandsModelId(
+    modelId || process.env[envName] || process.env.OPENHANDS_MODEL || DEFAULT_OPENHANDS_MODEL,
+  );
 }
 
-function bridgeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...env };
+function bridgeEnv(model: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    LLM_MODEL: model,
+    LLM_API_KEY: env.LLM_API_KEY || env.OPENROUTER_API_KEY || "",
+    LLM_BASE_URL: env.OPENHANDS_BASE_URL || env.LLM_BASE_URL || "https://openrouter.ai/api/v1",
+    OPENHANDS_MAX_ITERATIONS: env.OPENHANDS_MAX_ITERATIONS || "30",
+    OPENHANDS_ENABLE_PUBLIC_SKILLS: env.OPENHANDS_ENABLE_PUBLIC_SKILLS || "0",
+  };
 }
 
 function spawnBridge(args: {
   sessionId: string;
   prompt: string;
   model: string;
-  resumeSession?: boolean;
   deps: OpenHandsRunnerDeps;
 }): SpawnedChild {
   const spawnFn: OpenHandsSpawnFn = args.deps.spawn ?? (nodeSpawn as unknown as OpenHandsSpawnFn);
   const argv = [
     OPENHANDS_BRIDGE_PATH,
-    "--session-id",
+    "--session",
     args.sessionId,
-    "--prompt",
-    args.prompt,
+    "--workspace",
+    "/workspace/project",
     "--model",
     args.model,
-    ...(args.resumeSession ? ["--resume"] : []),
+    "--prompt",
+    args.prompt,
   ];
 
   return spawnFn("python3", argv, {
     cwd: "/workspace/project",
-    env: bridgeEnv(),
+    env: bridgeEnv(args.model),
     stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
-function emitMissingOpenRouterKey(opts: {
+function bridgeApiKeyAvailable(): boolean {
+  return Boolean(process.env.LLM_API_KEY || process.env.OPENROUTER_API_KEY);
+}
+
+function missingApiKeyMessage(model: string): string {
+  return isOpenRouterModel(model)
+    ? "openhands runtime requires OPENROUTER_API_KEY or LLM_API_KEY for OpenRouter models."
+    : "openhands runtime requires LLM_API_KEY or OPENROUTER_API_KEY.";
+}
+
+function emitMissingApiKey(opts: {
   turnId: string;
   onEvent: (event: BrokerToHost) => void;
+  model: string;
   agentId?: string;
 }): void {
   opts.onEvent({
     type: "agent.error",
     turnId: opts.turnId,
-    message: "openhands runtime requires OPENROUTER_API_KEY for OpenRouter models.",
+    message: missingApiKeyMessage(opts.model),
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
   });
 }
@@ -105,11 +125,13 @@ async function runBridge(args: {
     setTimeout(() => args.child.kill("SIGKILL"), 2000).unref();
   };
 
+  let onAbort: (() => void) | undefined;
   if (args.signal) {
-    args.signal.addEventListener("abort", () => {
+    onAbort = () => {
       aborted = true;
       killChild();
-    });
+    };
+    args.signal.addEventListener("abort", onAbort);
   }
 
   let buffer = "";
@@ -135,6 +157,7 @@ async function runBridge(args: {
     const finish = () => {
       if (resolved) return;
       resolved = true;
+      if (args.signal && onAbort) args.signal.removeEventListener("abort", onAbort);
       resolve();
     };
 
@@ -154,11 +177,13 @@ async function runBridge(args: {
           costUsd: 0,
           exitCode: -1,
         });
-      } else if (!sawTerminal && code !== 0 && code !== null) {
+      } else if (!sawTerminal) {
         emit({
           type: "agent.error",
           turnId: args.turnId,
-          message: `openhands bridge exited with code ${code}${stderrTail ? `\n${stderrTail}` : ""}`,
+          message: `openhands bridge exited without terminal event (code ${code ?? "unknown"})${
+            stderrTail ? `\n${stderrTail}` : ""
+          }`,
         });
       }
       finish();
@@ -183,8 +208,8 @@ export async function runOpenHandsTurn(
 ): Promise<void> {
   const model = openHandsModel(opts.modelId, "OPENHANDS_MODEL");
 
-  if (isOpenRouterModel(model) && !process.env.OPENROUTER_API_KEY) {
-    emitMissingOpenRouterKey(opts);
+  if (!bridgeApiKeyAvailable()) {
+    emitMissingApiKey({ ...opts, model });
     return;
   }
 
@@ -192,7 +217,6 @@ export async function runOpenHandsTurn(
     sessionId: opts.sessionId,
     prompt: opts.prompt,
     model,
-    resumeSession: opts.resumeSession,
     deps,
   });
 
@@ -210,8 +234,8 @@ export async function runOpenHandsReviewPass(
 ): Promise<void> {
   const model = openHandsModel(undefined, "OPENHANDS_REVIEWER_MODEL");
 
-  if (isOpenRouterModel(model) && !process.env.OPENROUTER_API_KEY) {
-    emitMissingOpenRouterKey({ ...opts, agentId: "reviewer" });
+  if (!bridgeApiKeyAvailable()) {
+    emitMissingApiKey({ ...opts, model, agentId: "reviewer" });
     return;
   }
 

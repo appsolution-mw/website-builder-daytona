@@ -54,6 +54,7 @@ describe("parseOpenHandsBridgeLine", () => {
           webSearchRequests: 0,
           webFetchRequests: 0,
           rawUsage: { provider: "openhands" },
+          modelUsage: { provider: "openhands" },
         },
       },
       { type: "agent.error", turnId: "turn-1", message: "boom", agentId: "worker" },
