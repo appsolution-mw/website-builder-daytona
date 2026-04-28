@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+"""JSONL bridge between the TypeScript broker and OpenHands SDK."""
+
+from __future__ import annotations
+
+import argparse
+import inspect
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+
+def emit(event: dict[str, Any]) -> None:
+    print(json.dumps(event, separators=(",", ":")), flush=True)
+
+
+def load_openhands() -> SimpleNamespace:
+    from openhands.sdk import Agent, AgentContext, Conversation, LLM, Tool
+
+    try:
+        from openhands.sdk.conversation import ConversationVisualizerBase
+    except Exception:
+        ConversationVisualizerBase = object
+
+    try:
+        from openhands.sdk.context.skills import load_project_skills, load_skills_from_dir
+    except Exception:
+        load_project_skills = None
+        load_skills_from_dir = None
+
+    try:
+        from openhands.sdk.skills import load_installed_skills
+    except Exception:
+        load_installed_skills = None
+
+    try:
+        from openhands.sdk.subagent import register_file_agents
+    except Exception:
+        register_file_agents = None
+
+    try:
+        from openhands.sdk.tool import register_tool
+    except Exception:
+        register_tool = None
+
+    try:
+        from openhands.tools.delegate import DelegateTool
+    except Exception:
+        DelegateTool = None
+
+    try:
+        from openhands.tools.file_editor import FileEditorTool
+    except Exception:
+        FileEditorTool = None
+
+    try:
+        from openhands.tools.preset.default import register_builtins_agents
+    except Exception:
+        register_builtins_agents = None
+
+    try:
+        from openhands.tools.task_tracker import TaskTrackerTool
+    except Exception:
+        TaskTrackerTool = None
+
+    try:
+        from openhands.tools.terminal import TerminalTool
+    except Exception:
+        TerminalTool = None
+
+    return SimpleNamespace(
+        Agent=Agent,
+        AgentContext=AgentContext,
+        Conversation=Conversation,
+        ConversationVisualizerBase=ConversationVisualizerBase,
+        DelegateTool=DelegateTool,
+        FileEditorTool=FileEditorTool,
+        LLM=LLM,
+        TaskTrackerTool=TaskTrackerTool,
+        TerminalTool=TerminalTool,
+        Tool=Tool,
+        load_installed_skills=load_installed_skills,
+        load_project_skills=load_project_skills,
+        load_skills_from_dir=load_skills_from_dir,
+        register_builtins_agents=register_builtins_agents,
+        register_file_agents=register_file_agents,
+        register_tool=register_tool,
+    )
+
+
+def compact_string(value: Any, limit: int = 1200) -> str:
+    text = value if isinstance(value, str) else str(value)
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def public_attr(obj: Any, name: str) -> Any:
+    try:
+        return getattr(obj, name)
+    except Exception:
+        return None
+
+
+def event_dict(event: Any) -> dict[str, Any]:
+    for method_name in ("model_dump", "dict"):
+        method = public_attr(event, method_name)
+        if callable(method):
+            try:
+                value = method()
+                return value if isinstance(value, dict) else {}
+            except Exception:
+                pass
+    return {}
+
+
+def maybe_await(value: Any) -> Any:
+    if not inspect.isawaitable(value):
+        return value
+
+    import asyncio
+
+    return asyncio.run(value)
+
+
+def instantiate(cls: Any, **kwargs: Any) -> Any:
+    usable = {key: value for key, value in kwargs.items() if value is not None}
+    try:
+        signature = inspect.signature(cls)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None and not any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+    ):
+        usable = {key: value for key, value in usable.items() if key in signature.parameters}
+
+    try:
+        return cls(**usable)
+    except TypeError:
+        minimal = {key: value for key, value in usable.items() if key in {"llm", "tools"}}
+        return cls(**minimal)
+
+
+class JsonlVisualizer:
+    def __init__(self, name: str | None = None, agent_id: str | None = None) -> None:
+        self.name = name
+        self.agent_id = agent_id
+        self._seen_chunks: set[str] = set()
+
+    def initialize(self, state: Any) -> None:
+        self._state = state
+
+    def create_sub_visualizer(self, agent_id: str) -> "JsonlVisualizer":
+        return JsonlVisualizer(name=agent_id, agent_id=agent_id)
+
+    def on_event(self, event: Any) -> None:
+        record = event_dict(event)
+        event_name = type(event).__name__
+
+        if "Action" in event_name or public_attr(event, "tool_name") or record.get("tool_name"):
+            tool_name = (
+                public_attr(event, "tool_name")
+                or record.get("tool_name")
+                or record.get("tool")
+                or record.get("action")
+                or event_name
+            )
+            emit(
+                {
+                    "type": "tool",
+                    "tool": compact_string(tool_name, 160),
+                    "input": record or compact_string(event),
+                    **self._agent_fields(),
+                }
+            )
+            return
+
+        if "Error" in event_name:
+            message = (
+                public_attr(event, "error")
+                or public_attr(event, "message")
+                or record.get("error")
+                or record.get("message")
+                or compact_string(event)
+            )
+            emit({"type": "error", "message": compact_string(message), **self._agent_fields()})
+            return
+
+        text = self._extract_text(event, record)
+        if text:
+            key = f"{event_name}:{text}"
+            if key not in self._seen_chunks:
+                self._seen_chunks.add(key)
+                emit({"type": "chunk", "delta": text, **self._agent_fields()})
+
+    def _agent_fields(self) -> dict[str, str]:
+        return {"agentId": self.agent_id} if self.agent_id else {}
+
+    def _extract_text(self, event: Any, record: dict[str, Any]) -> str:
+        for key in ("delta", "text", "content", "message", "thought"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                return compact_string(value)
+        for key in ("delta", "text", "content", "message", "thought"):
+            value = public_attr(event, key)
+            if isinstance(value, str) and value.strip():
+                return compact_string(value)
+        return ""
+
+
+def append_skills(skills: list[Any], value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, dict):
+        skills.extend(value.values())
+        return
+    if isinstance(value, (list, tuple, set)):
+        skills.extend(value)
+        return
+    skills.append(value)
+
+
+def load_agent_context(mod: SimpleNamespace, workspace: Path) -> Any | None:
+    skills: list[Any] = []
+
+    if mod.load_project_skills is not None:
+        try:
+            append_skills(skills, mod.load_project_skills(workspace_dir=str(workspace)))
+        except Exception:
+            pass
+
+    local_skills = workspace / ".openhands" / "skills"
+    if local_skills.is_dir() and mod.load_skills_from_dir is not None:
+        try:
+            loaded = mod.load_skills_from_dir(str(local_skills))
+            if isinstance(loaded, tuple):
+                for group in loaded:
+                    append_skills(skills, group)
+            else:
+                append_skills(skills, loaded)
+        except Exception:
+            pass
+
+    if os.getenv("OPENHANDS_ENABLE_PUBLIC_SKILLS") == "1" and mod.load_installed_skills is not None:
+        try:
+            append_skills(skills, mod.load_installed_skills())
+        except Exception:
+            pass
+
+    if not skills:
+        return None
+
+    try:
+        return mod.AgentContext(skills=skills)
+    except Exception:
+        return None
+
+
+def tool_name(tool_cls: Any, fallback: str) -> str:
+    value = public_attr(tool_cls, "name")
+    return value if isinstance(value, str) and value else fallback
+
+
+def register_optional_agents(mod: SimpleNamespace, workspace: Path) -> None:
+    if mod.register_file_agents is not None:
+        try:
+            mod.register_file_agents(str(workspace))
+        except Exception:
+            pass
+
+    if mod.register_builtins_agents is not None:
+        try:
+            mod.register_builtins_agents(cli_mode=True)
+        except TypeError:
+            try:
+                mod.register_builtins_agents()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    if mod.DelegateTool is not None and mod.register_tool is not None:
+        try:
+            mod.register_tool("DelegateTool", mod.DelegateTool)
+        except Exception:
+            try:
+                mod.register_tool(tool_name(mod.DelegateTool, "DelegateTool"), mod.DelegateTool)
+            except Exception:
+                pass
+
+
+def build_agent(mod: SimpleNamespace, llm: Any, workspace: Path) -> Any:
+    register_optional_agents(mod, workspace)
+
+    tools = [
+        mod.Tool(name=tool_name(mod.TerminalTool, "TerminalTool")),
+        mod.Tool(name=tool_name(mod.FileEditorTool, "FileEditorTool")),
+        mod.Tool(name=tool_name(mod.TaskTrackerTool, "TaskTrackerTool")),
+    ]
+    if mod.DelegateTool is not None:
+        tools.append(mod.Tool(name=tool_name(mod.DelegateTool, "DelegateTool")))
+
+    return instantiate(
+        mod.Agent,
+        llm=llm,
+        tools=tools,
+        agent_context=load_agent_context(mod, workspace),
+        max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+        max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+    )
+
+
+def positive_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def metric_number(obj: Any, *names: str) -> float:
+    for name in names:
+        value = public_attr(obj, name)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return 0.0
+
+
+def usage_payload(llm: Any, conversation: Any) -> dict[str, Any]:
+    usage: dict[str, Any] = {}
+    for source_name, source in (
+        ("llm_metrics", public_attr(llm, "metrics")),
+        ("conversation_stats", public_attr(conversation, "conversation_stats")),
+    ):
+        if source is None:
+            continue
+        dumped = event_dict(source)
+        usage[source_name] = dumped if dumped else compact_string(source)
+    return usage
+
+
+def done_event(started_at: float, llm: Any, conversation: Any) -> dict[str, Any]:
+    metrics = public_attr(llm, "metrics")
+    stats = public_attr(conversation, "conversation_stats")
+    combined = None
+    get_combined = public_attr(stats, "get_combined_metrics")
+    if callable(get_combined):
+        try:
+            combined = get_combined()
+        except Exception:
+            combined = None
+
+    usage = usage_payload(llm, conversation)
+    token_source = combined or metrics or stats
+    tokens_in = int(metric_number(token_source, "prompt_tokens", "input_tokens", "tokens_in"))
+    tokens_out = int(metric_number(token_source, "completion_tokens", "output_tokens", "tokens_out"))
+    cost = metric_number(combined or metrics, "accumulated_cost", "cost", "cost_usd")
+
+    return {
+        "type": "done",
+        "durationMs": int((time.monotonic() - started_at) * 1000),
+        "tokensIn": tokens_in,
+        "tokensOut": tokens_out,
+        "costUsd": cost,
+        **({"usage": usage} if usage else {}),
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run an OpenHands turn and emit broker JSONL.")
+    parser.add_argument("--session", required=True)
+    parser.add_argument("--workspace", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--prompt", required=True)
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    started_at = time.monotonic()
+    os.environ["LLM_MODEL"] = args.model
+
+    try:
+        emit({"type": "status", "phase": "starting", "detail": f"session {args.session}"})
+        mod = load_openhands()
+        workspace = Path(args.workspace)
+        emit({"type": "status", "phase": "thinking", "detail": "initializing OpenHands"})
+
+        llm = instantiate(
+            mod.LLM,
+            model=args.model,
+            api_key=os.getenv("LLM_API_KEY"),
+            base_url=os.getenv("LLM_BASE_URL") or None,
+            usage_id=args.session,
+        )
+        agent = build_agent(mod, llm, workspace)
+        conversation = instantiate(
+            mod.Conversation,
+            agent=agent,
+            workspace=str(workspace),
+            visualizer=JsonlVisualizer(name="OpenHands"),
+        )
+
+        emit({"type": "status", "phase": "thinking", "detail": "running agent"})
+        maybe_await(conversation.send_message(args.prompt))
+        maybe_await(conversation.run())
+        emit(done_event(started_at, llm, conversation))
+        return 0
+    except Exception as exc:
+        emit({"type": "error", "message": str(exc)})
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
