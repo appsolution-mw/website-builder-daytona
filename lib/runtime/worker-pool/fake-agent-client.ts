@@ -1,0 +1,54 @@
+import type {
+  AgentClient,
+  CreateSandboxRequest,
+  CreateSandboxResponse,
+  SandboxStatusResponse,
+} from "./types";
+
+export interface FakeAgentClientHandles {
+  client: AgentClient;
+  /** Force the next createSandbox to throw with this AgentError-like body. */
+  failNext: (statusCode: number, errorCode: string) => void;
+  /** Inspect what was created. */
+  list(): SandboxStatusResponse[];
+}
+
+export function createFakeAgentClient(): FakeAgentClientHandles {
+  const map = new Map<string, SandboxStatusResponse>();
+  let nextFailure: { statusCode: number; errorCode: string } | null = null;
+  let portCounter = 33000;
+
+  const client: AgentClient = {
+    async createSandbox(req: CreateSandboxRequest): Promise<CreateSandboxResponse> {
+      if (nextFailure) {
+        const f = nextFailure; nextFailure = null;
+        const e = new Error(`fake-fail ${f.errorCode}`) as Error & { statusCode: number; errorCode: string };
+        e.statusCode = f.statusCode; e.errorCode = f.errorCode;
+        throw e;
+      }
+      const broker = portCounter++;
+      const preview = portCounter++;
+      const r: CreateSandboxResponse = {
+        sandboxId: req.sandboxId,
+        containerId: `cid-${req.sandboxId}`,
+        brokerPort: broker, previewPort: preview, status: "spawning",
+      };
+      map.set(req.sandboxId, { ...r, status: "running" });
+      return r;
+    },
+    async destroySandbox(id) { map.delete(id); },
+    async getStatus(id) {
+      return map.get(id) ?? { sandboxId: id, status: "gone" };
+    },
+    async listSandboxes() { return [...map.values()]; },
+    async health() {
+      return { ok: true, dockerVersion: "fake", uptime: 0, count: map.size };
+    },
+  };
+
+  return {
+    client,
+    failNext: (statusCode, errorCode) => { nextFailure = { statusCode, errorCode }; },
+    list: () => [...map.values()],
+  };
+}
