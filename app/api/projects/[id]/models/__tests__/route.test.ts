@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../../../../../../lib/db/client";
 import { GET } from "../route";
 
@@ -9,6 +9,7 @@ const OTHER_PROJECT_ID = "models-route-other-project";
 const MODELS_URL =
   "https://openrouter.ai/api/v1/models?output_modalities=text&supported_parameters=tools";
 
+const originalDevUserId = process.env.DEV_USER_ID;
 process.env.DEV_USER_ID = DEV_USER_ID;
 
 async function cleanDatabase(): Promise<void> {
@@ -22,6 +23,15 @@ async function cleanDatabase(): Promise<void> {
 }
 
 describe("GET /api/projects/[id]/models", () => {
+  afterAll(() => {
+    if (originalDevUserId === undefined) {
+      delete process.env.DEV_USER_ID;
+      return;
+    }
+
+    process.env.DEV_USER_ID = originalDevUserId;
+  });
+
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
