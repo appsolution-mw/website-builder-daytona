@@ -21,7 +21,7 @@ WORKDIR /opt/builder
 RUN corepack enable && corepack prepare pnpm@10 --activate \
  && npm install -g @anthropic-ai/claude-code \
  && apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3 python3-pip \
- && python3 -m pip install --break-system-packages --no-cache-dir openhands-sdk openhands-tools \
+ && python3 -m pip install --break-system-packages --no-cache-dir "openhands-sdk>=1.19,<1.20" "openhands-tools>=1.19,<1.20" \
  && rm -rf /var/lib/apt/lists/*
 
 # Bring in workspace deps and broker source
