@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { AgentRuntime as PrismaAgentRuntime } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { createRuntime } from "@/lib/runtime";
 import {
@@ -35,8 +36,8 @@ function serializeProject(project: {
   id: string;
   name: string;
   status: string;
-  agentRuntime: "CLAUDE_CODE" | "OPENAI_CODEX" | "VERCEL_AI";
-  desiredRuntime: "CLAUDE_CODE" | "OPENAI_CODEX" | "VERCEL_AI";
+  agentRuntime: PrismaAgentRuntime;
+  desiredRuntime: PrismaAgentRuntime;
   runtimeSwitchStatus: string;
   runtimeGeneration: number;
   createdAt: Date;
@@ -46,11 +47,11 @@ function serializeProject(project: {
   sessions?: Array<{
     id: string;
     title: string;
-    defaultRuntime: "CLAUDE_CODE" | "OPENAI_CODEX" | "VERCEL_AI";
+    defaultRuntime: PrismaAgentRuntime;
     createdAt: Date;
     lastMessageAt: Date;
     runtimeStates: Array<{
-      runtime: "CLAUDE_CODE" | "OPENAI_CODEX" | "VERCEL_AI";
+      runtime: PrismaAgentRuntime;
       providerSessionId: string;
       modelId: string | null;
       lastUsedAt: Date;

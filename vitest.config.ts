@@ -12,6 +12,7 @@ const pnpm = resolve(__dirname, "node_modules/.pnpm");
 export default defineConfig({
   resolve: {
     alias: {
+      "@": resolve(__dirname),
       "@openai/codex-sdk": resolve(
         pnpm,
         "@openai+codex-sdk@0.122.0/node_modules/@openai/codex-sdk",
