@@ -43,6 +43,9 @@ describe("OpenHands runner", () => {
     expect(normalizeOpenHandsModelId("openrouter:qwen/qwen3-coder:free")).toBe(
       "openrouter/qwen/qwen3-coder:free",
     );
+    expect(normalizeOpenHandsModelId("  openrouter:qwen/qwen3-coder:free  ")).toBe(
+      "openrouter/qwen/qwen3-coder:free",
+    );
     expect(normalizeOpenHandsModelId(undefined)).toBe("");
   });
 

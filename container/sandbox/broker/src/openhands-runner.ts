@@ -17,7 +17,8 @@ export interface OpenHandsRunnerDeps {
 
 export function normalizeOpenHandsModelId(modelId: string | undefined): string {
   if (!modelId) return "";
-  return modelId.startsWith("openrouter:") ? `openrouter/${modelId.slice("openrouter:".length)}` : modelId;
+  const trimmed = modelId.trim();
+  return trimmed.startsWith("openrouter:") ? `openrouter/${trimmed.slice("openrouter:".length)}` : trimmed;
 }
 
 function isOpenRouterModel(modelId: string): boolean {
