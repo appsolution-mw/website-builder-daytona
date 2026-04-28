@@ -8,6 +8,7 @@
     "dev:next": "next dev",
     "dev:broker": "pnpm -F @wbd/broker dev",
     "dev:proxy": "pnpm -F @wbd/ws-proxy dev",
+    "dev:worker": "bash scripts/start-local-worker-agent.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
