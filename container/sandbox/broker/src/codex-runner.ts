@@ -1,6 +1,7 @@
 import {
   Codex,
   type ModelReasoningEffort,
+  type SandboxMode,
   type Thread,
   type ThreadEvent,
   type ThreadItem,
@@ -9,15 +10,22 @@ import type { AgentUsageDetails, BrokerToHost } from "@wbd/protocol";
 import type { AgentReviewOptions, AgentTurnOptions } from "./agent-provider";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4";
+const DEFAULT_CODEX_SANDBOX_MODE: SandboxMode = "danger-full-access";
 const REVIEWER_PROMPT =
   "Review the uncommitted changes from this turn. Do not edit files. Output only concise issue bullets, or say Passed.";
 
 const threads = new Map<string, Thread>();
 const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 function reasoningEffortFromEnv(name: string, fallback: ModelReasoningEffort): ModelReasoningEffort {
   const value = process.env[name]?.trim().toLowerCase();
   return value && REASONING_EFFORTS.has(value) ? (value as ModelReasoningEffort) : fallback;
+}
+
+export function codexSandboxModeFromEnv(name: string, fallback: SandboxMode): SandboxMode {
+  const value = process.env[name]?.trim();
+  return value && SANDBOX_MODES.has(value) ? (value as SandboxMode) : fallback;
 }
 
 function stringEnv(): Record<string, string> {
@@ -241,7 +249,7 @@ export async function runCodexTurn(opts: AgentTurnOptions): Promise<void> {
           skipGitRepoCheck: true,
           model: opts.modelId || process.env.CODEX_MODEL || DEFAULT_CODEX_MODEL,
           modelReasoningEffort: reasoningEffortFromEnv("CODEX_REASONING_EFFORT", "medium"),
-          sandboxMode: "workspace-write",
+          sandboxMode: codexSandboxModeFromEnv("CODEX_SANDBOX_MODE", DEFAULT_CODEX_SANDBOX_MODE),
           approvalPolicy: "never",
           networkAccessEnabled: process.env.CODEX_NETWORK_ACCESS === "1",
         });
@@ -265,7 +273,10 @@ export async function runCodexReviewPass(opts: AgentReviewOptions): Promise<void
     skipGitRepoCheck: true,
     model: process.env.CODEX_REVIEWER_MODEL || process.env.CODEX_MODEL || DEFAULT_CODEX_MODEL,
     modelReasoningEffort: reasoningEffortFromEnv("CODEX_REVIEWER_REASONING_EFFORT", "high"),
-    sandboxMode: "read-only",
+    sandboxMode: codexSandboxModeFromEnv(
+      "CODEX_REVIEWER_SANDBOX_MODE",
+      codexSandboxModeFromEnv("CODEX_SANDBOX_MODE", DEFAULT_CODEX_SANDBOX_MODE),
+    ),
     approvalPolicy: "never",
     networkAccessEnabled: false,
   });
