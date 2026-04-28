@@ -43,6 +43,7 @@ import type {
   ProxyToBrowser,
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
+import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
@@ -259,6 +260,14 @@ function runtimeStateForSession(session: ChatSession | null, runtime: AgentRunti
   return session?.runtimeStates.find((state) => state.runtime === runtime);
 }
 
+function supportsOpenRouterModelPicker(runtime: AgentRuntime): boolean {
+  return runtime === "openhands" || runtime === "vercel-ai";
+}
+
+function selectedModelForSession(session: ChatSession | null, runtime: AgentRuntime): string | null {
+  return runtimeStateForSession(session, runtime)?.modelId ?? null;
+}
+
 function WorkspaceLoadingState({
   title,
   description,
@@ -298,6 +307,9 @@ export default function ProjectWorkspace({
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [selectedRuntime, setSelectedRuntime] = useState<AgentRuntime>("claude-code");
+  const [openRouterModels, setOpenRouterModels] = useState<ModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
@@ -336,6 +348,8 @@ export default function ProjectWorkspace({
   const draftAttachmentsRef = useRef<DraftImageAttachment[]>([]);
   const selectedRuntimeRef = useRef<AgentRuntime>("claude-code");
   const turnRuntimeRef = useRef<Map<string, { runtime: AgentRuntime; modelId: string | null }>>(new Map());
+  const modelsRequestStartedRef = useRef(false);
+  const mountedRef = useRef(true);
 
   const selectedPathRef = useRef<string | null>(null);
   const fileContentRef = useRef<string | null>(null);
@@ -347,6 +361,12 @@ export default function ProjectWorkspace({
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   function updateMessages(
     updater: ChatMessageView[] | ((prev: ChatMessageView[]) => ChatMessageView[]),
@@ -978,6 +998,29 @@ export default function ProjectWorkspace({
     };
   }, [project?.status, id, requestFileList, loadDevIndicatorSetting]);
 
+  useEffect(() => {
+    if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
+    if (openRouterModels.length > 0 || modelsRequestStartedRef.current) return;
+
+    modelsRequestStartedRef.current = true;
+    async function loadModels() {
+      setModelsLoading(true);
+      setModelsError(null);
+      try {
+        const res = await fetch(`/api/projects/${id}/models`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { models: ModelOption[] };
+        if (mountedRef.current) setOpenRouterModels(data.models);
+      } catch (err) {
+        if (mountedRef.current) setModelsError(err instanceof Error ? err.message : "models unavailable");
+      } finally {
+        if (mountedRef.current) setModelsLoading(false);
+      }
+    }
+
+    void loadModels();
+  }, [id, openRouterModels.length, selectedRuntime]);
+
   async function onSelectFile(path: string) {
     if (path === selectedPath) return;
     setSelectedPath(path);
@@ -1061,6 +1104,16 @@ export default function ProjectWorkspace({
     } finally {
       setDevIndicatorSaving(false);
     }
+  }
+
+  function setSessionRuntimeModel(modelId: string) {
+    const session = activeSessionRef.current;
+    const runtime = selectedRuntimeRef.current;
+    if (!session || !supportsOpenRouterModelPicker(runtime)) return;
+
+    const runtimeState = runtimeStateForSession(session, runtime);
+    const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
+    void syncRuntimeState(runtime, providerSessionId, modelId);
   }
 
   async function addImageFiles(fileList: FileList | File[]) {
@@ -1246,6 +1299,8 @@ export default function ProjectWorkspace({
   const dirty = fileContent !== null && fileContent !== fileContentBase;
   const editorReadOnly = turnInFlight !== null;
   const wsOpen = wsStatus === "open";
+  const showModelPicker = supportsOpenRouterModelPicker(selectedRuntime);
+  const selectedModelId = selectedModelForSession(activeSession, selectedRuntime);
 
   return (
     <main className="fixed inset-0 flex h-dvh flex-col overflow-hidden bg-background">
@@ -1340,23 +1395,41 @@ export default function ProjectWorkspace({
               </Button>
             ))}
           </div>
-          <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/45 px-3 py-2">
-            {project.availableRuntimes.map((option) => {
-              const active = selectedRuntime === option.value;
-              return (
-                <Button
-                  key={option.value}
-                  type="button"
-                  variant={active ? "secondary" : "ghost"}
-                  size="sm"
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border bg-background/45 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+              {project.availableRuntimes.map((option) => {
+                const active = selectedRuntime === option.value;
+                return (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    variant={active ? "secondary" : "ghost"}
+                    size="sm"
+                    disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                    onClick={() => void setSessionDefaultRuntime(option.value)}
+                    className="shrink-0"
+                  >
+                    {option.label}
+                  </Button>
+                );
+              })}
+            </div>
+            {showModelPicker && (
+              <div className="flex min-w-0 items-center gap-2">
+                <ModelPicker
+                  models={openRouterModels}
+                  selectedModelId={selectedModelId}
+                  loading={modelsLoading}
                   disabled={turnInFlight !== null || sessionLoading || !activeSession}
-                  onClick={() => void setSessionDefaultRuntime(option.value)}
-                  className="shrink-0"
-                >
-                  {option.label}
-                </Button>
-              );
-            })}
+                  onSelect={setSessionRuntimeModel}
+                />
+                {modelsError && (
+                  <span className="shrink-0 text-xs text-red-200" title={modelsError}>
+                    Models unavailable
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <ul
             ref={chatScrollRef}
