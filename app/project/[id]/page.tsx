@@ -1430,7 +1430,12 @@ export default function ProjectWorkspace({
                 />
                 {modelsError && (
                   <>
-                    <span className="min-w-0 flex-1 truncate text-xs text-red-200" title={modelsError}>
+                    <span
+                      role="status"
+                      aria-live="polite"
+                      className="min-w-0 flex-1 truncate text-xs text-red-200"
+                      title={modelsError}
+                    >
                       Models unavailable: {modelsError}
                     </span>
                     <Button
