@@ -59,4 +59,28 @@ describe("worker-pool broker env", () => {
       VERCEL_AI_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
     });
   });
+
+  it("passes OpenHands runtime settings into sandboxes", () => {
+    expect(collectBrokerEnv({
+      AGENT_RUNTIME: "openhands",
+      OPENROUTER_API_KEY: "sk-or-v1-test",
+      OPENHANDS_MODEL: "openrouter:qwen/qwen3-coder:free",
+      OPENHANDS_REVIEWER_MODEL: "openrouter:qwen/qwen3-coder:free",
+      OPENHANDS_BASE_URL: "https://openrouter.ai/api/v1",
+      OPENHANDS_MAX_ITERATIONS: "30",
+      OPENHANDS_ENABLE_PUBLIC_SKILLS: "0",
+      LLM_API_KEY: "sk-llm-test",
+      LLM_BASE_URL: "https://openrouter.ai/api/v1",
+    })).toMatchObject({
+      AGENT_RUNTIME: "openhands",
+      OPENROUTER_API_KEY: "sk-or-v1-test",
+      OPENHANDS_MODEL: "openrouter:qwen/qwen3-coder:free",
+      OPENHANDS_REVIEWER_MODEL: "openrouter:qwen/qwen3-coder:free",
+      OPENHANDS_BASE_URL: "https://openrouter.ai/api/v1",
+      OPENHANDS_MAX_ITERATIONS: "30",
+      OPENHANDS_ENABLE_PUBLIC_SKILLS: "0",
+      LLM_API_KEY: "sk-llm-test",
+      LLM_BASE_URL: "https://openrouter.ai/api/v1",
+    });
+  });
 });

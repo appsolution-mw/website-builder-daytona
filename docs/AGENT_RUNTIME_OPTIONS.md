@@ -11,6 +11,8 @@ der Broker ueber `AGENT_RUNTIME` auf eine zweite Runtime umgestellt werden.
 AGENT_RUNTIME=claude-code
 # or
 AGENT_RUNTIME=openai-codex
+# or
+AGENT_RUNTIME=openhands
 ```
 
 ## Bestehende Architektur
@@ -103,6 +105,54 @@ Hinweise:
   provider-spezifische Thread-IDs speichern.
 - Kosten werden bei Codex vorerst als `0` gemeldet, weil der SDK Token-Nutzung,
   aber keine fertig bepreisten Turn-Kosten liefert.
+
+### `openhands`
+
+Neue Runtime ueber die lokale Python-Bridge fuer OpenHands. Der TypeScript-
+Broker bleibt der Prozess-Owner im Container, startet aber fuer Turns den
+OpenHands-Python-Pfad und uebersetzt dessen Ergebnisse wieder in die
+bestehenden `agent.*` Events. Damit kann die Browser-/Broker-Architektur
+unveraendert bleiben, waehrend OpenHands die eigentliche Coding-Agent-Schicht
+stellt.
+
+Konfiguration:
+
+```env
+AGENT_RUNTIME=openhands
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENHANDS_MODEL=openrouter:qwen/qwen3-coder:free
+OPENHANDS_REVIEWER_MODEL=openrouter:qwen/qwen3-coder:free
+OPENHANDS_BASE_URL=https://openrouter.ai/api/v1
+OPENHANDS_MAX_ITERATIONS=30
+OPENHANDS_ENABLE_PUBLIC_SKILLS=0
+# optional generic LiteLLM-compatible env:
+LLM_API_KEY=sk-or-v1-...
+LLM_BASE_URL=https://openrouter.ai/api/v1
+```
+
+Hinweise:
+
+- Model-IDs kommen bevorzugt aus der UI bzw. aus
+  `SessionRuntimeState.modelId`. Wenn dort kein Wert gesetzt ist, nutzt der
+  Broker `OPENHANDS_MODEL`; fuer Reviewer-Turns entsprechend
+  `OPENHANDS_REVIEWER_MODEL`.
+- OpenRouter-Modelle werden als vollstaendige OpenHands/LiteLLM-IDs angegeben,
+  z.B. `openrouter:qwen/qwen3-coder:free`. `OPENHANDS_BASE_URL` zeigt fuer
+  OpenRouter auf `https://openrouter.ai/api/v1`.
+- `OPENHANDS_MAX_ITERATIONS` begrenzt die Anzahl Agent-Schritte pro Turn.
+  `OPENHANDS_ENABLE_PUBLIC_SKILLS=0` ist der konservative Default fuer
+  reproduzierbare Sandbox-Laeufe; bei `1` darf OpenHands zusaetzliche
+  oeffentliche Skills verwenden.
+- Projektkontext kommt weiterhin aus dem Repository, inklusive project
+  `AGENTS.md`. Zusaetzliche OpenHands-Skills koennen optional unter
+  `.openhands/skills` im Projekt abgelegt werden.
+- File-basierte Agents bleiben ein guter Weg, projektspezifische Rollen,
+  Review-Regeln und Spezialfaehigkeiten versioniert mit dem Code zu halten.
+  Der OpenHands-Pfad kann diese Projektdateien zusammen mit den uebrigen
+  Sandbox-Dateien lesen.
+- Sub-Agents und Delegation laufen in OpenHands ueber dessen Agent-/Skill-
+  Mechanismen. Wo verfuegbar, nutzt die Runtime den `DelegateTool` fuer
+  abgegrenzte Teilaufgaben statt alles in einem langen Haupt-Turn zu halten.
 
 ## Recherchierte Optionen
 
