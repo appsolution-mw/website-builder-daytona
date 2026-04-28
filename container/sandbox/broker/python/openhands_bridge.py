@@ -9,13 +9,26 @@ import json
 import os
 import sys
 import time
+import warnings
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+os.environ.setdefault("OPENHANDS_SUPPRESS_BANNER", "1")
+warnings.filterwarnings("ignore", message=r".*authlib\.jose module is deprecated.*")
+try:
+    from authlib.common.errors import AuthlibDeprecationWarning
+
+    warnings.filterwarnings("ignore", category=AuthlibDeprecationWarning)
+except Exception:
+    pass
+
+ORIGINAL_STDOUT = sys.stdout
+
 
 def emit(event: dict[str, Any]) -> None:
-    print(json.dumps(event, separators=(",", ":")), flush=True)
+    print(json.dumps(event, separators=(",", ":")), file=ORIGINAL_STDOUT, flush=True)
 
 
 def load_openhands() -> SimpleNamespace:
@@ -27,7 +40,7 @@ def load_openhands() -> SimpleNamespace:
         ConversationVisualizerBase = object
 
     try:
-        from openhands.sdk.context.skills import load_project_skills, load_skills_from_dir
+        from openhands.sdk.skills import load_project_skills, load_skills_from_dir
     except Exception:
         load_project_skills = None
         load_skills_from_dir = None
@@ -444,31 +457,32 @@ def main() -> int:
 
     try:
         emit({"type": "status", "phase": "starting", "detail": f"session {args.session}"})
-        mod = load_openhands()
-        workspace = Path(args.workspace)
-        emit({"type": "status", "phase": "thinking", "detail": "initializing OpenHands"})
+        with redirect_stdout(sys.stderr):
+            mod = load_openhands()
+            workspace = Path(args.workspace)
+            emit({"type": "status", "phase": "thinking", "detail": "initializing OpenHands"})
 
-        llm = instantiate(
-            mod.LLM,
-            model=args.model,
-            api_key=os.getenv("LLM_API_KEY"),
-            base_url=os.getenv("LLM_BASE_URL") or None,
-            usage_id=args.session,
-        )
-        agent = build_agent(mod, llm, workspace)
-        conversation = instantiate(
-            mod.Conversation,
-            agent=agent,
-            workspace=str(workspace),
-            visualizer=create_visualizer(mod, "OpenHands"),
-            max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
-            max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
-        )
+            llm = instantiate(
+                mod.LLM,
+                model=args.model,
+                api_key=os.getenv("LLM_API_KEY"),
+                base_url=os.getenv("LLM_BASE_URL") or None,
+                usage_id=args.session,
+            )
+            agent = build_agent(mod, llm, workspace)
+            conversation = instantiate(
+                mod.Conversation,
+                agent=agent,
+                workspace=str(workspace),
+                visualizer=create_visualizer(mod, "OpenHands"),
+                max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+                max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+            )
 
-        emit({"type": "status", "phase": "thinking", "detail": "running agent"})
-        maybe_await(conversation.send_message(args.prompt))
-        maybe_await(conversation.run())
-        emit(done_event(started_at, llm, conversation))
+            emit({"type": "status", "phase": "thinking", "detail": "running agent"})
+            maybe_await(conversation.send_message(args.prompt))
+            maybe_await(conversation.run())
+            emit(done_event(started_at, llm, conversation))
         return 0
     except Exception as exc:
         emit({"type": "error", "message": str(exc)})
