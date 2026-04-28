@@ -1,7 +1,7 @@
 # ===== Stage 1: workspace deps for broker =====
 FROM node:24-bookworm-slim AS deps
 WORKDIR /opt/builder
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/protocol/ packages/protocol/
 COPY container/sandbox/broker/package.json container/sandbox/broker/
@@ -10,7 +10,7 @@ RUN pnpm install --filter @wbd/broker --frozen-lockfile
 # ===== Stage 2: project-template deps =====
 FROM node:24-bookworm-slim AS template-deps
 WORKDIR /opt/project-template
-RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY container/sandbox/project-template/package.json ./
 RUN pnpm install --no-frozen-lockfile
 COPY container/sandbox/project-template/ ./
@@ -18,7 +18,7 @@ COPY container/sandbox/project-template/ ./
 # ===== Stage 3: runtime image =====
 FROM node:24-bookworm-slim
 WORKDIR /opt/builder
-RUN corepack enable && corepack prepare pnpm@9 --activate \
+RUN corepack enable && corepack prepare pnpm@10 --activate \
  && npm install -g @anthropic-ai/claude-code \
  && apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*

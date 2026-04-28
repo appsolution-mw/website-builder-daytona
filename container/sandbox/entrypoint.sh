@@ -30,6 +30,18 @@ if [ ! -d /workspace/project ] || [ -z "$(ls -A /workspace/project 2>/dev/null)"
 fi
 
 cd /workspace/project
+
+# Initialise a local git repo so claude-code's reviewer sub-agent has a
+# working tree to diff against on each turn. Persistence across sandbox
+# restarts is Phase 1.4; for now this resets per spawn.
+if [ ! -d .git ]; then
+  echo "[entrypoint] initialising git repo in /workspace/project"
+  git init -q -b main
+  git config user.email "sandbox@wbd.local"
+  git config user.name "wbd sandbox"
+  git add -A
+  git commit -q -m "initial template" || true
+fi
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}"
 PORT="${PREVIEW_PORT}" PROJECT_ID="${PROJECT_ID}" \
   pnpm dev > /workspace/project.log 2>&1 &
