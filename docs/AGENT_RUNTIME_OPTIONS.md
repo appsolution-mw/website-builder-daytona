@@ -1,11 +1,11 @@
 # Agent Runtime Options
 
-Stand: 2026-04-23.
+Stand: 2026-04-29.
 
 ## Ziel
 
 Die bestehende Claude-Code-Containerloesung bleibt der Default. Zusaetzlich kann
-der Broker ueber `AGENT_RUNTIME` auf eine zweite Runtime umgestellt werden.
+der Broker ueber `AGENT_RUNTIME` auf weitere Runtimes umgestellt werden.
 
 ```env
 AGENT_RUNTIME=claude-code
