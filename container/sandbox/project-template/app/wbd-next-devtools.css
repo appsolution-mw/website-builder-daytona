@@ -1,0 +1,5 @@
+nextjs-portal,
+script[data-nextjs-dev-overlay="true"] {
+  display: none !important;
+  pointer-events: none !important;
+}

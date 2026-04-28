@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   // Allow any dev origin: the host serves the iframe at unpredictable
   // hosts/IPs depending on runtime — Daytona preview URLs, 127.0.0.1:<port>
   // (worker-pool-local), and later Caddy-fronted *.preview.<domain> in H.1d.

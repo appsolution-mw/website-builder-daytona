@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Bot,
+  Bug,
   Code2,
   ExternalLink,
   Globe2,
@@ -49,6 +50,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { runtimeLabel } from "@/lib/agents/runtime";
+import {
+  ensureNextDevtoolsCssImport,
+  nextDevIndicatorsEnabled,
+  nextDevtoolsCssContent,
+  setNextDevIndicators,
+} from "@/lib/next-dev-indicators";
 
 type RuntimeState = {
   runtime: AgentRuntime;
@@ -106,6 +113,9 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHAT_IMAGES = 5;
 const MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+const NEXT_LAYOUT_PATH = "app/layout.tsx";
+const NEXT_CONFIG_PATH = "next.config.ts";
+const NEXT_DEVTOOLS_CSS_PATH = "app/wbd-next-devtools.css";
 
 const DEVICE_FRAME: Record<DeviceView, { label: string; Icon: typeof Monitor }> = {
   desktop: { label: "Desktop", Icon: Monitor },
@@ -312,6 +322,10 @@ export default function ProjectWorkspace({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
   const [device, setDevice] = useState<DeviceView>("desktop");
+  const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
+  const [devIndicatorSaving, setDevIndicatorSaving] = useState(false);
+  const [devIndicatorError, setDevIndicatorError] = useState<string | null>(null);
+  const [previewReloadKey, setPreviewReloadKey] = useState(0);
 
   const pendingRef = useRef<
     Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
@@ -412,6 +426,70 @@ export default function ProjectWorkspace({
       setFileListLoading(false);
     }
   }, [sendRequest]);
+
+  const applyDevIndicatorRuntime = useCallback(async (enabled: boolean) => {
+    const res = await fetch(`/api/projects/${id}/next-devtools`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? "runtime update failed");
+    }
+  }, [id]);
+
+  const writeProjectFile = useCallback(async (path: string, content: string) => {
+    const requestId = crypto.randomUUID();
+    const write = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
+      { type: "file.write", requestId, path, content },
+      requestId,
+    );
+    if (!write.ok) throw new Error(write.reason ?? `could not write ${path}`);
+  }, [sendRequest]);
+
+  const syncDevtoolsProjectFiles = useCallback(async (enabled: boolean) => {
+    const layoutRequestId = crypto.randomUUID();
+    const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+      { type: "file.read", requestId: layoutRequestId, path: NEXT_LAYOUT_PATH },
+      layoutRequestId,
+    );
+    if (typeof layout.content === "string") {
+      const nextLayout = ensureNextDevtoolsCssImport(layout.content);
+      if (nextLayout !== layout.content) {
+        await writeProjectFile(NEXT_LAYOUT_PATH, nextLayout);
+        if (selectedPathRef.current === NEXT_LAYOUT_PATH) {
+          setFileContent(nextLayout);
+          setFileContentBase(nextLayout);
+        }
+      }
+    }
+
+    const nextCss = nextDevtoolsCssContent(enabled);
+    await writeProjectFile(NEXT_DEVTOOLS_CSS_PATH, nextCss);
+    if (selectedPathRef.current === NEXT_DEVTOOLS_CSS_PATH) {
+      setFileContent(nextCss);
+      setFileContentBase(nextCss);
+    }
+  }, [sendRequest, writeProjectFile]);
+
+  const loadDevIndicatorSetting = useCallback(async () => {
+    const requestId = crypto.randomUUID();
+    try {
+      const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+        { type: "file.read", requestId, path: NEXT_CONFIG_PATH },
+        requestId,
+      );
+      if (typeof reply.content !== "string") return;
+      const enabled = nextDevIndicatorsEnabled(reply.content);
+      setDevIndicatorEnabled(enabled);
+      setDevIndicatorError(null);
+      void applyDevIndicatorRuntime(enabled).catch(() => undefined);
+      void syncDevtoolsProjectFiles(enabled).catch(() => undefined);
+    } catch {
+      // The preview still works; this only affects the toolbar toggle.
+    }
+  }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles]);
 
   const refreshChatSessions = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}/sessions`);
@@ -859,6 +937,7 @@ export default function ProjectWorkspace({
         setWsStatus("open");
         setBrokerReadyProjectId(id);
         void requestFileList();
+        void loadDevIndicatorSetting();
       };
       ws.onerror = () => {
         if (unmounted) return;
@@ -897,7 +976,7 @@ export default function ProjectWorkspace({
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       currentWs?.close();
     };
-  }, [project?.status, id, requestFileList]);
+  }, [project?.status, id, requestFileList, loadDevIndicatorSetting]);
 
   async function onSelectFile(path: string) {
     if (path === selectedPath) return;
@@ -954,6 +1033,35 @@ export default function ProjectWorkspace({
       setSaveError("request timeout");
     }
   }, [sendRequest, turnInFlight]);
+
+  async function toggleDevIndicator() {
+    if (turnInFlight !== null || devIndicatorSaving) return;
+    const requestId = crypto.randomUUID();
+    setDevIndicatorSaving(true);
+    setDevIndicatorError(null);
+    try {
+      const read = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+        { type: "file.read", requestId, path: NEXT_CONFIG_PATH },
+        requestId,
+      );
+      if (typeof read.content !== "string") throw new Error(read.error ?? "read failed");
+      const nextEnabled = !nextDevIndicatorsEnabled(read.content);
+      const nextConfig = setNextDevIndicators(read.content, nextEnabled);
+      await writeProjectFile(NEXT_CONFIG_PATH, nextConfig);
+      await syncDevtoolsProjectFiles(nextEnabled);
+      await applyDevIndicatorRuntime(nextEnabled);
+      setDevIndicatorEnabled(nextEnabled);
+      if (selectedPathRef.current === NEXT_CONFIG_PATH) {
+        setFileContent(nextConfig);
+        setFileContentBase(nextConfig);
+      }
+      setPreviewReloadKey((key) => key + 1);
+    } catch (err) {
+      setDevIndicatorError(err instanceof Error ? err.message : "failed");
+    } finally {
+      setDevIndicatorSaving(false);
+    }
+  }
 
   async function addImageFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
@@ -1452,6 +1560,25 @@ export default function ProjectWorkspace({
                     );
                   })}
                 </div>
+                <Button
+                  type="button"
+                  onClick={toggleDevIndicator}
+                  variant={devIndicatorEnabled === false ? "ghost" : "secondary"}
+                  size="xs"
+                  disabled={wsStatus !== "open" || turnInFlight !== null || devIndicatorSaving}
+                  aria-pressed={devIndicatorEnabled !== false}
+                  aria-label="Toggle Next.js debug badge"
+                  title={
+                    devIndicatorError
+                      ? `Next badge: ${devIndicatorError}`
+                      : devIndicatorEnabled === false
+                        ? "Show Next.js debug badge"
+                        : "Hide Next.js debug badge"
+                  }
+                >
+                  {devIndicatorSaving ? <Loader2 className="animate-spin" /> : <Bug />}
+                  Debug
+                </Button>
                 <div
                   className="flex min-w-0 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground"
                   title={project.previewUrl}
@@ -1479,6 +1606,7 @@ export default function ProjectWorkspace({
                   )}
                 >
                   <iframe
+                    key={previewReloadKey}
                     src={project.previewUrl}
                     className="h-full w-full border-0 bg-white"
                     sandbox="allow-scripts allow-same-origin allow-forms"

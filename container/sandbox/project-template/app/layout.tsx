@@ -1,3 +1,5 @@
+import "./wbd-next-devtools.css";
+
 export const metadata = { title: "Project Preview" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
