@@ -511,6 +511,24 @@ export default function ProjectWorkspace({
     }
   }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles]);
 
+  const loadOpenRouterModels = useCallback(async (retry = false): Promise<void> => {
+    if (!retry && (openRouterModels.length > 0 || modelsRequestStartedRef.current)) return;
+
+    modelsRequestStartedRef.current = true;
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/models`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { models: ModelOption[] };
+      if (mountedRef.current) setOpenRouterModels(data.models);
+    } catch (err) {
+      if (mountedRef.current) setModelsError(err instanceof Error ? err.message : "models unavailable");
+    } finally {
+      if (mountedRef.current) setModelsLoading(false);
+    }
+  }, [id, openRouterModels.length]);
+
   const refreshChatSessions = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}/sessions`);
     if (!res.ok) return;
@@ -1000,26 +1018,8 @@ export default function ProjectWorkspace({
 
   useEffect(() => {
     if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
-    if (openRouterModels.length > 0 || modelsRequestStartedRef.current) return;
-
-    modelsRequestStartedRef.current = true;
-    async function loadModels() {
-      setModelsLoading(true);
-      setModelsError(null);
-      try {
-        const res = await fetch(`/api/projects/${id}/models`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { models: ModelOption[] };
-        if (mountedRef.current) setOpenRouterModels(data.models);
-      } catch (err) {
-        if (mountedRef.current) setModelsError(err instanceof Error ? err.message : "models unavailable");
-      } finally {
-        if (mountedRef.current) setModelsLoading(false);
-      }
-    }
-
-    void loadModels();
-  }, [id, openRouterModels.length, selectedRuntime]);
+    void loadOpenRouterModels();
+  }, [loadOpenRouterModels, selectedRuntime]);
 
   async function onSelectFile(path: string) {
     if (path === selectedPath) return;
@@ -1114,6 +1114,11 @@ export default function ProjectWorkspace({
     const runtimeState = runtimeStateForSession(session, runtime);
     const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
     void syncRuntimeState(runtime, providerSessionId, modelId);
+  }
+
+  function retryOpenRouterModels() {
+    modelsRequestStartedRef.current = false;
+    void loadOpenRouterModels(true);
   }
 
   async function addImageFiles(fileList: FileList | File[]) {
@@ -1424,9 +1429,21 @@ export default function ProjectWorkspace({
                   onSelect={setSessionRuntimeModel}
                 />
                 {modelsError && (
-                  <span className="shrink-0 text-xs text-red-200" title={modelsError}>
-                    Models unavailable
-                  </span>
+                  <>
+                    <span className="min-w-0 flex-1 truncate text-xs text-red-200" title={modelsError}>
+                      Models unavailable: {modelsError}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      disabled={modelsLoading}
+                      onClick={retryOpenRouterModels}
+                      className="shrink-0"
+                    >
+                      Retry
+                    </Button>
+                  </>
                 )}
               </div>
             )}

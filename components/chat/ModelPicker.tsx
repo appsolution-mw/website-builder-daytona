@@ -104,7 +104,7 @@ export function ModelPicker({
         )}
       </Button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-72 rounded-md border border-border bg-popover p-2 shadow-lg">
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 w-full min-w-0 max-w-full rounded-md border border-border bg-popover p-2 shadow-lg">
           <div className="relative">
             <Search
               className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -120,6 +120,7 @@ export function ModelPicker({
                   setOpen(false);
                 }
               }}
+              aria-label="Search OpenRouter models"
               placeholder="Search models"
               className="h-9 pl-8 text-xs"
             />
@@ -145,7 +146,7 @@ export function ModelPicker({
                         setQuery("");
                       }}
                       className={cn(
-                        "flex min-h-12 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent",
+                        "flex min-h-12 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
                         selected && "bg-accent text-accent-foreground",
                       )}
                     >
