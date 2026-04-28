@@ -16,7 +16,7 @@ interface FakeSandbox {
 }
 
 // Resolve at runtime from the host process cwd (next dev runs from repo root).
-const PROJECT_TEMPLATE_DIR = resolve(process.cwd(), "container/project-template");
+const PROJECT_TEMPLATE_DIR = resolve(process.cwd(), "container/sandbox/project-template");
 
 declare global {
   // Keep fake sandbox handles alive across repeated client factory calls in dev.

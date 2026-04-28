@@ -1,7 +1,8 @@
 packages:
   - "packages/*"
-  - "container/broker"
+  - "container/sandbox/broker"
   - "ws-proxy"
+  - "worker-agent"
 
 ignoredBuiltDependencies:
   - sharp

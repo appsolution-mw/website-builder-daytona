@@ -18,7 +18,7 @@
 #
 # The script:
 #   1. Installs monorepo deps (broker + ws-proxy + shared protocol)
-#   2. Copies container/project-template/ to /workspace/project
+#   2. Copies container/sandbox/project-template/ to /workspace/project
 #   3. Installs project deps (no frozen lockfile — template ships without one)
 #   4. Starts `next dev` in the background on PREVIEW_PORT
 #   5. Execs broker in the foreground on BROKER_PORT
@@ -37,7 +37,7 @@ pnpm install --frozen-lockfile --prod=false
 
 echo "[entrypoint] staging project template..."
 mkdir -p /workspace
-cp -r "${REPO_DIR}/container/project-template" /workspace/project
+cp -r "${REPO_DIR}/container/sandbox/project-template" /workspace/project
 cd /workspace/project
 echo "[entrypoint] installing project deps (no frozen lockfile — template has none)..."
 pnpm install
@@ -50,8 +50,8 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 echo "[entrypoint] copying .claude/ into project…"
-if [ -d "${REPO_DIR}/container/project-template/.claude" ]; then
-  cp -r "${REPO_DIR}/container/project-template/.claude" /workspace/project/.claude
+if [ -d "${REPO_DIR}/container/sandbox/project-template/.claude" ]; then
+  cp -r "${REPO_DIR}/container/sandbox/project-template/.claude" /workspace/project/.claude
 fi
 
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}..."

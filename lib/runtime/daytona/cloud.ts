@@ -23,7 +23,7 @@ function getDaytona(): Daytona {
  *      API works because it only needs HTTPS to api.github.com).
  *   2. Extracts the tarball and normalises the top-level directory to "repo".
  *   3. Enables pnpm via corepack (already present in node:24-alpine).
- *   4. Invokes container/entrypoint.sh in the background, which installs deps
+ *   4. Invokes container/sandbox/entrypoint.sh in the background, which installs deps
  *      and starts both broker and next dev.
  *
  * The command is passed verbatim to sandbox.process.executeCommand.
@@ -69,7 +69,7 @@ function buildBootCommand(args: {
   // `nohup ... & sleep 3`: background the entrypoint, then sleep so the
   // executeCommand session stays alive while nohup starts. No `&&` or `;`
   // between `&` and `sleep` — plain space is the correct POSIX separator.
-  return `${setupSteps} && PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/entrypoint.sh > /workspace/entrypoint.log 2>&1 & sleep 3`;
+  return `${setupSteps} && PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/sandbox/entrypoint.sh > /workspace/entrypoint.log 2>&1 & sleep 3`;
 }
 
 function mapState(state: unknown): SandboxStatus {
