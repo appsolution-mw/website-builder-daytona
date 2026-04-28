@@ -6,6 +6,7 @@ export interface AgentTurnOptions {
   resumeSession: boolean;
   prompt: string;
   turnId: string;
+  projectRoot?: string;
   modelId?: string;
   onEvent: (event: BrokerToHost) => void;
   signal?: AbortSignal;
