@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { fetchOpenRouterModels } from "@/lib/openrouter/models";
 
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
+function devUserId(): string {
+  return process.env.DEV_USER_ID ?? "dev-user";
+}
 
 export async function GET(
   _request: Request,
@@ -10,7 +12,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const project = await prisma.project.findFirst({
-    where: { id, ownerId: DEV_USER_ID },
+    where: { id, ownerId: devUserId() },
     select: { id: true },
   });
   if (!project) {
