@@ -1,6 +1,32 @@
 import { defineConfig } from "vitest/config";
+import { resolve } from "path";
+
+// @wbd/broker is a workspace symlink. Its dependencies (@openai/codex-sdk,
+// @ai-sdk/anthropic, @ai-sdk/openai, ai) are not hoisted to the root
+// node_modules because they are only direct deps of the broker sub-package.
+// When Vite transforms broker source files it resolves from the project root,
+// so it can't find those IDs. We point them directly at the pnpm content store
+// entries that pnpm installed for the broker.
+const pnpm = resolve(__dirname, "node_modules/.pnpm");
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@openai/codex-sdk": resolve(
+        pnpm,
+        "@openai+codex-sdk@0.122.0/node_modules/@openai/codex-sdk",
+      ),
+      "@ai-sdk/anthropic": resolve(
+        pnpm,
+        "@ai-sdk+anthropic@2.0.77_zod@4.3.6/node_modules/@ai-sdk/anthropic",
+      ),
+      "@ai-sdk/openai": resolve(
+        pnpm,
+        "@ai-sdk+openai@2.0.103_zod@4.3.6/node_modules/@ai-sdk/openai",
+      ),
+      ai: resolve(pnpm, "ai@5.0.179_zod@4.3.6/node_modules/ai"),
+    },
+  },
   test: {
     environment: "node",
     include: ["lib/**/__tests__/**/*.test.ts", "app/**/__tests__/**/*.test.ts"],

@@ -4,15 +4,18 @@ import { createRuntime } from "../index";
 describe("createRuntime factory", () => {
   const originalRuntimeMode = process.env.RUNTIME_MODE;
   const originalDaytonaMode = process.env.DAYTONA_MODE;
-  const originalDaytonaApiKey = process.env.DAYTONA_API_KEY;
+  const originalSandboxImage = process.env.SANDBOX_IMAGE;
+  const originalHmac = process.env.WORKER_AGENT_HMAC_SECRET;
 
   afterEach(() => {
     if (originalRuntimeMode === undefined) delete process.env.RUNTIME_MODE;
     else process.env.RUNTIME_MODE = originalRuntimeMode;
     if (originalDaytonaMode === undefined) delete process.env.DAYTONA_MODE;
     else process.env.DAYTONA_MODE = originalDaytonaMode;
-    if (originalDaytonaApiKey === undefined) delete process.env.DAYTONA_API_KEY;
-    else process.env.DAYTONA_API_KEY = originalDaytonaApiKey;
+    if (originalSandboxImage === undefined) delete process.env.SANDBOX_IMAGE;
+    else process.env.SANDBOX_IMAGE = originalSandboxImage;
+    if (originalHmac === undefined) delete process.env.WORKER_AGENT_HMAC_SECRET;
+    else process.env.WORKER_AGENT_HMAC_SECRET = originalHmac;
     vi.resetModules();
   });
 
@@ -20,38 +23,44 @@ describe("createRuntime factory", () => {
     delete process.env.RUNTIME_MODE;
     process.env.DAYTONA_MODE = "fake";
     const r = createRuntime();
-    expect(r).toBeDefined();
     expect(typeof r.spawnProjectSandbox).toBe("function");
   });
 
   it("uses RUNTIME_MODE=daytona-fake when explicit", () => {
     process.env.RUNTIME_MODE = "daytona-fake";
     delete process.env.DAYTONA_MODE;
-    const r = createRuntime();
-    expect(r).toBeDefined();
+    expect(createRuntime()).toBeDefined();
   });
 
-  it("uses RUNTIME_MODE=daytona-cloud when explicit", () => {
-    process.env.RUNTIME_MODE = "daytona-cloud";
-    delete process.env.DAYTONA_MODE;
-    process.env.DAYTONA_API_KEY = "test-dummy-key"; // cloud.ts requires this at construction
+  it("returns WorkerPoolRuntime for worker-pool-local", () => {
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    process.env.SANDBOX_IMAGE = "wbd/sandbox:dev";
+    process.env.WORKER_AGENT_HMAC_SECRET = "x".repeat(32);
     const r = createRuntime();
-    expect(r).toBeDefined();
     expect(typeof r.spawnProjectSandbox).toBe("function");
   });
 
-  it("throws for hetzner-* (not yet implemented)", () => {
-    process.env.RUNTIME_MODE = "hetzner-fake";
-    expect(() => createRuntime()).toThrowError(/H\.1c\+/);
+  it("throws helpful error if worker-pool-local missing env", () => {
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    delete process.env.SANDBOX_IMAGE;
+    delete process.env.WORKER_AGENT_HMAC_SECRET;
+    expect(() => createRuntime()).toThrow(/SANDBOX_IMAGE|WORKER_AGENT_HMAC_SECRET/);
   });
 
-  it("throws for RUNTIME_MODE=hetzner-cloud (not yet implemented)", () => {
+  it("throws for worker-pool-hetzner (not yet implemented)", () => {
+    process.env.RUNTIME_MODE = "worker-pool-hetzner";
+    expect(() => createRuntime()).toThrow(/H\.1c\+/);
+  });
+
+  it("throws for legacy hetzner-fake/hetzner-cloud with rename hint", () => {
+    process.env.RUNTIME_MODE = "hetzner-fake";
+    expect(() => createRuntime()).toThrow(/renamed/);
     process.env.RUNTIME_MODE = "hetzner-cloud";
-    expect(() => createRuntime()).toThrowError(/H\.1c\+/);
+    expect(() => createRuntime()).toThrow(/renamed/);
   });
 
   it("throws for unknown mode", () => {
     process.env.RUNTIME_MODE = "magic-cloud";
-    expect(() => createRuntime()).toThrowError(/Unknown RUNTIME_MODE/);
+    expect(() => createRuntime()).toThrow(/Unknown RUNTIME_MODE/);
   });
 });

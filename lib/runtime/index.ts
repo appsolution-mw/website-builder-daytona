@@ -1,10 +1,9 @@
 import { createDaytonaRuntime } from "./daytona";
+import { createLocalWorkerPoolRuntime } from "./worker-pool";
 import type { Runtime } from "./types";
 
-// Re-export createDaytonaRuntime so call sites that need to bypass RUNTIME_MODE
-// dispatch (e.g., when the stored sandbox-id requires a specific runtime) can
-// import everything from the same barrel.
 export { createDaytonaRuntime };
+export { createLocalWorkerPoolRuntime } from "./worker-pool";
 
 export type {
   Runtime,
@@ -24,13 +23,10 @@ export type {
  * `daytona-${DAYTONA_MODE ?? "cloud"}` so existing deployments keep working.
  *
  * Supported modes:
- *   daytona-cloud   — real Daytona API (existing)
- *   daytona-fake    — in-process local broker (existing)
- *   hetzner-fake    — multi-cloud runtime with FakeProvisioner (Phase H.1c+)
- *   hetzner-cloud   — multi-cloud runtime with HetznerProvisioner (Phase H.1c+)
- *
- * Explicit `RUNTIME_MODE=daytona-*` is forwarded to the daytona factory
- * directly — no env-var mutation involved.
+ *   daytona-cloud      — real Daytona API
+ *   daytona-fake       — in-process local broker
+ *   worker-pool-local  — WorkerPoolRuntime against a locally running worker-agent (H.1b)
+ *   worker-pool-hetzner — reserved for H.1c+, throws today
  */
 export function createRuntime(): Runtime {
   const explicit = process.env.RUNTIME_MODE;
@@ -40,9 +36,18 @@ export function createRuntime(): Runtime {
     const daytonaMode = mode === "daytona-cloud" ? "cloud" : "fake";
     return explicit ? createDaytonaRuntime(daytonaMode) : createDaytonaRuntime();
   }
+  if (mode === "worker-pool-local") {
+    return createLocalWorkerPoolRuntime();
+  }
+  if (mode === "worker-pool-hetzner") {
+    throw new Error(
+      `RUNTIME_MODE='${mode}' is reserved for Phase H.1c+; not implemented in H.1b`,
+    );
+  }
+  // Old reserved names from H.1a — keep throwing helpful errors
   if (mode === "hetzner-fake" || mode === "hetzner-cloud") {
     throw new Error(
-      `RUNTIME_MODE='${mode}' is reserved for Phase H.1c+; not implemented in H.1a`,
+      `RUNTIME_MODE='${mode}' was renamed in H.1b. Use 'worker-pool-local' (now) or 'worker-pool-hetzner' (H.1c+).`,
     );
   }
   throw new Error(`Unknown RUNTIME_MODE: ${mode}`);
