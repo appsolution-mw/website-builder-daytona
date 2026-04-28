@@ -263,10 +263,12 @@ describe("broker ws server", () => {
     );
     expect(reviewing).toBeDefined();
 
-    const reviewerChunk = events.find(
-      (e) => (e as { type?: string; agentId?: string }).type === "agent.chunk" && (e as { agentId?: string }).agentId === "reviewer",
-    );
-    expect(reviewerChunk).toBeDefined();
+    const chunks = events.filter((e) => (e as { type?: string }).type === "agent.chunk");
+    expect(chunks).toEqual([
+      { type: "agent.chunk", turnId: "t1", delta: "Fertig — ich habe die Änderung umgesetzt." },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("wrote x.txt");
+    expect(JSON.stringify(events)).not.toContain("✅ Passed");
 
     const dones = events.filter((e) => (e as { type?: string }).type === "agent.done");
     expect(dones.length).toBe(1);
@@ -336,6 +338,10 @@ describe("broker ws server", () => {
 
     expect(spawns.length).toBe(1);
     expect(events.some((e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing")).toBe(false);
+    const chunks = events.filter((e) => (e as { type?: string }).type === "agent.chunk");
+    expect(chunks).toEqual([
+      { type: "agent.chunk", turnId: "t2", delta: "This project uses Next.js." },
+    ]);
     client.close();
   });
 

@@ -44,6 +44,7 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
 };
+const SIMPLE_CHANGE_SUMMARY = "Fertig — ich habe die Änderung umgesetzt.";
 
 function safeFileName(name: string, mimeType: string, index: number): string {
   const fallbackExt = IMAGE_EXTENSIONS[mimeType] ?? ".png";
@@ -336,10 +337,15 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           | Extract<BrokerToHost, { type: "agent.done" }>
           | null = null;
         let coderErrored = false;
+        const coderChunks: Extract<BrokerToHost, { type: "agent.chunk" }>[] = [];
 
         const coderOnEvent = (event: BrokerToHost) => {
           if (event.type === "agent.tool_use" && WRITE_TOOL_NAMES.has(event.tool)) {
             filesWrittenInTurn++;
+          }
+          if (event.type === "agent.chunk") {
+            coderChunks.push(event);
+            return;
           }
           if (event.type === "agent.done") {
             coderDone = event;
@@ -385,6 +391,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               resumeSession: msg.resumeSession,
               prompt,
               turnId,
+              projectRoot,
               modelId: msg.modelId,
               onEvent: coderOnEvent,
               signal: ctl.signal,
@@ -397,6 +404,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
             if (filesWrittenInTurn === 0) {
               logTokenUsage("turn", projectId, coderDone);
               send(toUsageEvent("turn", coderDone));
+              for (const chunk of coderChunks) send(chunk);
               send(coderDone);
               return;
             }
@@ -412,6 +420,9 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
                 reviewerDone = event;
                 logTokenUsage("reviewer", projectId, event);
                 send(toUsageEvent("reviewer", event));
+                return;
+              }
+              if (event.type === "agent.chunk") {
                 return;
               }
               send(event);
@@ -449,6 +460,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
             } satisfies Extract<BrokerToHost, { type: "agent.done" }>;
             logTokenUsage("turn", projectId, done);
             send(toUsageEvent("turn", done));
+            send({ type: "agent.chunk", turnId, delta: SIMPLE_CHANGE_SUMMARY });
             send(done);
           })
           .catch((err) => {
