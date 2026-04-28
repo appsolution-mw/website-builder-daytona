@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { createRuntime } from "@/lib/runtime";
 import {
@@ -90,10 +89,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
   }
 
-  const cloneToken = process.env.GITHUB_CLONE_TOKEN;
-  const repoOwner = process.env.GITHUB_REPO_OWNER;
-  const repoName = process.env.GITHUB_REPO_NAME;
-  if (!cloneToken || !repoOwner || !repoName) {
+  // GitHub clone vars are only needed by the Daytona path (which downloads
+  // the builder repo as a tarball into the sandbox at boot). The worker-pool
+  // path uses pre-built images and ignores them.
+  const runtimeMode = process.env.RUNTIME_MODE ?? `daytona-${process.env.DAYTONA_MODE ?? "cloud"}`;
+  const needsGitHubVars = runtimeMode.startsWith("daytona-");
+  const cloneToken = process.env.GITHUB_CLONE_TOKEN ?? "";
+  const repoOwner = process.env.GITHUB_REPO_OWNER ?? "";
+  const repoName = process.env.GITHUB_REPO_NAME ?? "";
+  if (needsGitHubVars && (!cloneToken || !repoOwner || !repoName)) {
     return NextResponse.json(
       { error: "server missing GITHUB_CLONE_TOKEN/OWNER/NAME" },
       { status: 500 },
@@ -117,17 +121,11 @@ export async function POST(request: NextRequest) {
     select: projectSelect,
   });
 
-  const chatSession = project.sessions[0];
-  if (chatSession) {
-    await prisma.sessionRuntimeState.create({
-      data: {
-        projectId: project.id,
-        sessionId: chatSession.id,
-        runtime: protocolRuntimeToDb(runtime),
-        providerSessionId: randomUUID(),
-      },
-    });
-  }
+  // Note: SessionRuntimeState is intentionally NOT pre-created here.
+  // The frontend treats "row exists" as "resume an existing claude session";
+  // a fresh sandbox container has no session to resume, so the first turn must
+  // create one. The row is inserted by the broker's `agent.session` event
+  // handler after claude reports the new session_id at the end of turn 1.
 
   const sandboxRuntime = createRuntime();
   try {
