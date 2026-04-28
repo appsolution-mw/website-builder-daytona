@@ -1,5 +1,5 @@
 # ===== Stage 1: workspace deps for broker =====
-FROM node:24-bookworm-slim AS deps
+FROM node:24-trixie-slim AS deps
 WORKDIR /opt/builder
 RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
@@ -8,7 +8,7 @@ COPY container/sandbox/broker/package.json container/sandbox/broker/
 RUN pnpm install --filter @wbd/broker --frozen-lockfile
 
 # ===== Stage 2: project-template deps =====
-FROM node:24-bookworm-slim AS template-deps
+FROM node:24-trixie-slim AS template-deps
 WORKDIR /opt/project-template
 RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY container/sandbox/project-template/package.json ./
@@ -16,7 +16,7 @@ RUN pnpm install --no-frozen-lockfile
 COPY container/sandbox/project-template/ ./
 
 # ===== Stage 3: runtime image =====
-FROM node:24-bookworm-slim
+FROM node:24-trixie-slim
 WORKDIR /opt/builder
 RUN corepack enable && corepack prepare pnpm@10 --activate \
  && npm install -g @anthropic-ai/claude-code \

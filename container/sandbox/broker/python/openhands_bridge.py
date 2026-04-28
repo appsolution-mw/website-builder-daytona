@@ -97,6 +97,30 @@ def compact_string(value: Any, limit: int = 1200) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
+def compact_payload(value: Any, depth: int = 0, limit: int = 1200) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return compact_string(value, limit)
+    if depth >= 4:
+        return compact_string(value, limit)
+    if isinstance(value, dict):
+        compacted: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 24:
+                compacted["..."] = f"{len(value) - index} more keys"
+                break
+            compacted[compact_string(key, 120)] = compact_payload(item, depth + 1, limit)
+        return compacted
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        compacted_items = [compact_payload(item, depth + 1, limit) for item in items[:16]]
+        if len(items) > 16:
+            compacted_items.append(f"{len(items) - 16} more items")
+        return compacted_items
+    return compact_string(value, limit)
+
+
 def public_attr(obj: Any, name: str) -> Any:
     try:
         return getattr(obj, name)
@@ -151,13 +175,22 @@ class JsonlVisualizer:
         self._seen_chunks: set[str] = set()
 
     def initialize(self, state: Any) -> None:
+        try:
+            super().initialize(state)
+            return
+        except AttributeError:
+            pass
+        except Exception:
+            pass
         self._state = state
 
     def create_sub_visualizer(self, agent_id: str) -> "JsonlVisualizer":
-        return JsonlVisualizer(name=agent_id, agent_id=agent_id)
+        return self.__class__(name=agent_id, agent_id=agent_id)
 
     def on_event(self, event: Any) -> None:
-        record = event_dict(event)
+        record = compact_payload(event_dict(event))
+        if not isinstance(record, dict):
+            record = {}
         event_name = type(event).__name__
 
         if "Action" in event_name or public_attr(event, "tool_name") or record.get("tool_name"):
@@ -172,7 +205,7 @@ class JsonlVisualizer:
                 {
                     "type": "tool",
                     "tool": compact_string(tool_name, 160),
-                    "input": record or compact_string(event),
+                    "input": compact_payload(record or event),
                     **self._agent_fields(),
                 }
             )
@@ -223,12 +256,23 @@ def append_skills(skills: list[Any], value: Any) -> None:
     skills.append(value)
 
 
+def load_project_skills_compat(loader: Any, workspace: Path) -> Any:
+    for kwargs in ({"work_dir": str(workspace)}, None, {"workspace_dir": str(workspace)}):
+        try:
+            if kwargs is None:
+                return loader(str(workspace))
+            return loader(**kwargs)
+        except TypeError:
+            continue
+    return None
+
+
 def load_agent_context(mod: SimpleNamespace, workspace: Path) -> Any | None:
     skills: list[Any] = []
 
     if mod.load_project_skills is not None:
         try:
-            append_skills(skills, mod.load_project_skills(workspace_dir=str(workspace)))
+            append_skills(skills, load_project_skills_compat(mod.load_project_skills, workspace))
         except Exception:
             pass
 
@@ -311,6 +355,19 @@ def build_agent(mod: SimpleNamespace, llm: Any, workspace: Path) -> Any:
         max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
         max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
     )
+
+
+def create_visualizer(mod: SimpleNamespace, name: str) -> JsonlVisualizer:
+    base = mod.ConversationVisualizerBase
+    if isinstance(base, type) and base is not object:
+        try:
+            class SdkJsonlVisualizer(JsonlVisualizer, base):
+                pass
+
+            return SdkJsonlVisualizer(name=name)
+        except TypeError:
+            pass
+    return JsonlVisualizer(name=name)
 
 
 def positive_int(value: str | None) -> int | None:
@@ -403,7 +460,9 @@ def main() -> int:
             mod.Conversation,
             agent=agent,
             workspace=str(workspace),
-            visualizer=JsonlVisualizer(name="OpenHands"),
+            visualizer=create_visualizer(mod, "OpenHands"),
+            max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+            max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
         )
 
         emit({"type": "status", "phase": "thinking", "detail": "running agent"})
