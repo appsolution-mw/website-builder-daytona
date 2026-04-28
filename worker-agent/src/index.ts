@@ -23,18 +23,30 @@ async function main() {
   const docker = new Docker();
   const dockerVersion = (await docker.version()).Version;
 
-  // Pre-pull the sandbox image if SANDBOX_IMAGE is set, so /health
-  // signals readiness only after the image is locally available.
+  // Pre-pull the sandbox image if SANDBOX_IMAGE is set and not already
+  // present locally — so /health signals readiness only after the image
+  // is on disk. A locally-built `wbd/*` tag has no upstream registry, so
+  // we skip the pull whenever inspect succeeds.
   const image = process.env.SANDBOX_IMAGE;
   if (image) {
-    console.log(`[worker-agent] pre-pulling ${image}…`);
-    await new Promise<void>((resolve, reject) => {
-      docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
-        if (err) return reject(err);
-        docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()));
+    let alreadyLocal = false;
+    try {
+      await docker.getImage(image).inspect();
+      alreadyLocal = true;
+      console.log(`[worker-agent] sandbox image present locally: ${image}`);
+    } catch {
+      // Not present — fall through to pull.
+    }
+    if (!alreadyLocal) {
+      console.log(`[worker-agent] pre-pulling ${image}…`);
+      await new Promise<void>((resolve, reject) => {
+        docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          if (err) return reject(err);
+          docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()));
+        });
       });
-    });
-    console.log(`[worker-agent] pre-pull done`);
+      console.log(`[worker-agent] pre-pull done`);
+    }
   }
 
   const dockerClient = createDockerClient({

@@ -15,6 +15,8 @@ export interface CreateLocalWorkerPoolRuntimeArgs {
  *   - SimpleScheduler  (DB-backed)
  *   - FakeProvisioner  (in-memory)
  *   - HTTP AgentClient against worker.tailscaleIp:4500
+ *   - brokerEnv passes through agent credentials so the in-container broker
+ *     can authenticate the chosen agent runtime (claude-code / codex / etc.)
  */
 export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeArgs = {}): Runtime {
   const sandboxImage = args.sandboxImage ?? required("SANDBOX_IMAGE");
@@ -23,7 +25,29 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
   const provisioner = createFakeProvisioner();
   const agentClientFor = (w: WorkerRecord): AgentClient =>
     createAgentClient({ baseUrl: `http://${w.tailscaleIp}:4500`, hmacSecret });
-  return createWorkerPoolRuntime({ scheduler, provisioner, agentClientFor, sandboxImage });
+  return createWorkerPoolRuntime({
+    scheduler,
+    provisioner,
+    agentClientFor,
+    sandboxImage,
+    brokerEnv: () => {
+      const env: Record<string, string> = {};
+      const passthrough = [
+        "AGENT_RUNTIME",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "GITHUB_CLONE_TOKEN",
+        "GITHUB_REPO_OWNER",
+        "GITHUB_REPO_NAME",
+      ];
+      for (const k of passthrough) {
+        const v = process.env[k];
+        if (v) env[k] = v;
+      }
+      return env;
+    },
+  });
 }
 
 function required(name: string): string {
