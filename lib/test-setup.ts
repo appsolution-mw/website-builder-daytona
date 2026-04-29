@@ -5,6 +5,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+function unquoteEnvValue(value: string): string {
+  return value.replace(/^['"]|['"]$/g, "");
+}
+
 const envPath = resolve(process.cwd(), ".env");
 try {
   const lines = readFileSync(envPath, "utf8").split("\n");
@@ -14,11 +18,15 @@ try {
     const eqIdx = trimmed.indexOf("=");
     if (eqIdx === -1) continue;
     const key = trimmed.slice(0, eqIdx);
-    const value = trimmed.slice(eqIdx + 1);
+    const value = unquoteEnvValue(trimmed.slice(eqIdx + 1));
     if (!(key in process.env)) {
       process.env[key] = value;
     }
   }
 } catch {
   // .env not present — fine in CI where env vars are injected directly
+}
+
+if (process.env.TEST_DATABASE_URL) {
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 }
