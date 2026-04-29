@@ -117,6 +117,31 @@ const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "i
 const NEXT_LAYOUT_PATH = "app/layout.tsx";
 const NEXT_CONFIG_PATH = "next.config.ts";
 const NEXT_DEVTOOLS_CSS_PATH = "app/wbd-next-devtools.css";
+const PROJECT_AGENTS_PATH = "AGENTS.md";
+const DEFAULT_PROJECT_AGENTS_CONTENT = `# AGENTS.md
+
+## Project Context
+
+- This project is a Next.js 16 App Router application running from \`/workspace/project\`.
+- The preview renders the Next.js app, not a standalone HTML file.
+- User-facing page work belongs in \`app/\`, \`components/\`, \`lib/\`, and \`public/\`.
+- For the main page, edit \`app/page.tsx\` and related styles. Do not create or rely on a root \`index.html\` unless explicitly asked.
+- This is not older Next.js: read the relevant guide in \`node_modules/next/dist/docs/\` before using framework APIs, routes, config, middleware/proxy, or runtime behavior.
+
+## Commands
+
+- Use \`pnpm\`.
+- The sandbox manages the dev server. Do not start a second long-running server unless explicitly asked.
+- Check TypeScript changes with \`pnpm exec tsc --noEmit\` when practical.
+
+## Code Style
+
+- Use TypeScript with strict types.
+- Keep diffs small, focused, and maintainable.
+- Prefer functional React components and App Router patterns.
+- Preserve correct native spelling, including umlauts such as ä, ö, ü, and ß.
+- Animations and parallax effects must be progressive enhancement: primary text, navigation, cards, and CTAs must remain visible in the server-rendered HTML/CSS fallback. Do not leave important content at \`opacity: 0\` waiting for client-side animation or hydration.
+`;
 
 const DEVICE_FRAME: Record<DeviceView, { label: string; Icon: typeof Monitor }> = {
   desktop: { label: "Desktop", Icon: Monitor },
@@ -429,6 +454,39 @@ export default function ProjectWorkspace({
     });
   }, []);
 
+  const ensureProjectAgentsFile = useCallback(async (currentPaths: string[]) => {
+    if (currentPaths.includes(PROJECT_AGENTS_PATH)) return;
+
+    const readRequestId = crypto.randomUUID();
+    const read = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+      { type: "file.read", requestId: readRequestId, path: PROJECT_AGENTS_PATH },
+      readRequestId,
+    );
+    if (typeof read.content === "string") {
+      setPaths((prev) => (
+        prev.includes(PROJECT_AGENTS_PATH) ? prev : [...prev, PROJECT_AGENTS_PATH].sort()
+      ));
+      return;
+    }
+    if (read.error && read.error !== "not_found") return;
+
+    const writeRequestId = crypto.randomUUID();
+    const write = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
+      {
+        type: "file.write",
+        requestId: writeRequestId,
+        path: PROJECT_AGENTS_PATH,
+        content: DEFAULT_PROJECT_AGENTS_CONTENT,
+      },
+      writeRequestId,
+    );
+    if (write.ok) {
+      setPaths((prev) => (
+        prev.includes(PROJECT_AGENTS_PATH) ? prev : [...prev, PROJECT_AGENTS_PATH].sort()
+      ));
+    }
+  }, [sendRequest]);
+
   const requestFileList = useCallback(async () => {
     const requestId = crypto.randomUUID();
     setFileListLoading(true);
@@ -438,14 +496,16 @@ export default function ProjectWorkspace({
         { type: "file.list", requestId },
         requestId,
       );
-      setPaths(reply.paths.slice().sort());
+      const sortedPaths = reply.paths.slice().sort();
+      setPaths(sortedPaths);
+      void ensureProjectAgentsFile(sortedPaths).catch(() => undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : "request failed";
       setFileListError(`File list failed: ${message}`);
     } finally {
       setFileListLoading(false);
     }
-  }, [sendRequest]);
+  }, [ensureProjectAgentsFile, sendRequest]);
 
   const applyDevIndicatorRuntime = useCallback(async (enabled: boolean) => {
     const res = await fetch(`/api/projects/${id}/next-devtools`, {
@@ -1018,7 +1078,13 @@ export default function ProjectWorkspace({
 
   useEffect(() => {
     if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
-    void loadOpenRouterModels();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadOpenRouterModels();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadOpenRouterModels, selectedRuntime]);
 
   async function onSelectFile(path: string) {

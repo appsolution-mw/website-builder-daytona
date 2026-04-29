@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough, type Readable, type Writable } from "node:stream";
 import type { BrokerToHost } from "@wbd/protocol";
 import {
@@ -43,10 +46,45 @@ describe("OpenHands runner", () => {
     expect(normalizeOpenHandsModelId("openrouter:qwen/qwen3-coder:free")).toBe(
       "openrouter/qwen/qwen3-coder:free",
     );
+    expect(normalizeOpenHandsModelId("openrouter:moonshotai/kimi-k2.6")).toBe(
+      "openrouter/moonshotai/kimi-k2.6",
+    );
     expect(normalizeOpenHandsModelId("  openrouter:qwen/qwen3-coder:free  ")).toBe(
       "openrouter/qwen/qwen3-coder:free",
     );
     expect(normalizeOpenHandsModelId(undefined)).toBe("");
+  });
+
+  it("creates default AGENTS.md before starting OpenHands when missing", async () => {
+    process.env.OPENROUTER_API_KEY = "test-key";
+    const projectRoot = await mkdtemp(join(tmpdir(), "openhands-project-"));
+    const spawn = vi.fn(() =>
+      makeFakeChild([
+        JSON.stringify({ type: "done", durationMs: 1, tokensIn: 1, tokensOut: 1, costUsd: 0 }),
+      ]),
+    ) as unknown as OpenHandsSpawnFn;
+
+    try {
+      await runOpenHandsTurn(
+        {
+          projectId: "project-1",
+          sessionId: "session-1",
+          resumeSession: false,
+          prompt: "hello",
+          turnId: "turn-1",
+          modelId: "openrouter:qwen/qwen3-coder:free",
+          projectRoot,
+          onEvent: () => {},
+        },
+        { spawn },
+      );
+
+      const content = await readFile(join(projectRoot, "AGENTS.md"), "utf8");
+      expect(content).toContain("Next.js 16 App Router");
+      expect(content).toContain("Do not create or rely on a root `index.html`");
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it("emits agent.error when an OpenRouter model is selected without a bridge API key", async () => {

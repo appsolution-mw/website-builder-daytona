@@ -1,11 +1,38 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { BrokerToHost } from "@wbd/protocol";
 import type { AgentReviewOptions, AgentTurnOptions } from "./agent-provider";
 import { parseOpenHandsBridgeLine } from "./openhands-bridge-events";
 import type { SpawnFn, SpawnedChild } from "./claude-runner";
 
 const OPENHANDS_BRIDGE_PATH = "/opt/builder/container/sandbox/broker/python/openhands_bridge.py";
+const PROJECT_ROOT = "/workspace/project";
 const DEFAULT_OPENHANDS_MODEL = "openrouter/qwen/qwen3-coder:free";
+const DEFAULT_AGENTS_MD = `# AGENTS.md
+
+## Project Context
+
+- This project is a Next.js 16 App Router application running from \`/workspace/project\`.
+- The preview renders the Next.js app, not a standalone HTML file.
+- User-facing page work belongs in \`app/\`, \`components/\`, \`lib/\`, and \`public/\`.
+- For the main page, edit \`app/page.tsx\` and related styles. Do not create or rely on a root \`index.html\` unless explicitly asked.
+- This is not older Next.js: read the relevant guide in \`node_modules/next/dist/docs/\` before using framework APIs, routes, config, middleware/proxy, or runtime behavior.
+
+## Commands
+
+- Use \`pnpm\`.
+- The sandbox manages the dev server. Do not start a second long-running server unless explicitly asked.
+- Check TypeScript changes with \`pnpm exec tsc --noEmit\` when practical.
+
+## Code Style
+
+- Use TypeScript with strict types.
+- Keep diffs small, focused, and maintainable.
+- Prefer functional React components and App Router patterns.
+- Preserve correct native spelling, including umlauts such as ä, ö, ü, and ß.
+- Animations and parallax effects must be progressive enhancement: primary text, navigation, cards, and CTAs must remain visible in the server-rendered HTML/CSS fallback. Do not leave important content at \`opacity: 0\` waiting for client-side animation or hydration.
+`;
 const REVIEWER_PROMPT =
   "Review the uncommitted changes from this turn. Do not edit files. Output only concise issue bullets, or say Passed.";
 
@@ -54,7 +81,7 @@ function spawnBridge(args: {
     "--session",
     args.sessionId,
     "--workspace",
-    "/workspace/project",
+    PROJECT_ROOT,
     "--model",
     args.model,
     "--prompt",
@@ -62,10 +89,29 @@ function spawnBridge(args: {
   ];
 
   return spawnFn("python3", argv, {
-    cwd: "/workspace/project",
+    cwd: PROJECT_ROOT,
     env: bridgeEnv(args.model),
     stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+async function ensureAgentsMd(projectRoot: string | undefined): Promise<void> {
+  const root = projectRoot || PROJECT_ROOT;
+  const path = join(root, "AGENTS.md");
+
+  try {
+    await readFile(path, "utf8");
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") return;
+  }
+
+  try {
+    await writeFile(path, DEFAULT_AGENTS_MD, "utf8");
+  } catch {
+    // OpenHands can still run without this file; the UI also backfills it when possible.
+  }
 }
 
 function bridgeApiKeyAvailable(): boolean {
@@ -133,6 +179,7 @@ async function runBridge(args: {
       killChild();
     };
     args.signal.addEventListener("abort", onAbort);
+    if (args.signal.aborted) onAbort();
   }
 
   let buffer = "";
@@ -213,6 +260,8 @@ export async function runOpenHandsTurn(
     emitMissingApiKey({ ...opts, model });
     return;
   }
+
+  await ensureAgentsMd(opts.projectRoot);
 
   const child = spawnBridge({
     sessionId: opts.sessionId,
