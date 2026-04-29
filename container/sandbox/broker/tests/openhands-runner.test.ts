@@ -259,7 +259,7 @@ describe("OpenHands runner", () => {
     expect(options.env).toMatchObject({
       LLM_MODEL: "anthropic/claude-sonnet-4-6",
       LLM_API_KEY: "llm-test",
-      LLM_BASE_URL: "https://openhands.example/v1",
+      LLM_BASE_URL: "https://llm.example/v1",
       OPENHANDS_MAX_ITERATIONS: "8",
       OPENHANDS_ENABLE_PUBLIC_SKILLS: "1",
     });

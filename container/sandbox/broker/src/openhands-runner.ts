@@ -36,7 +36,7 @@ function bridgeEnv(model: string, env: NodeJS.ProcessEnv = process.env): NodeJS.
     ...env,
     LLM_MODEL: model,
     LLM_API_KEY: env.LLM_API_KEY || env.OPENROUTER_API_KEY || "",
-    LLM_BASE_URL: env.OPENHANDS_BASE_URL || env.LLM_BASE_URL || "https://openrouter.ai/api/v1",
+    LLM_BASE_URL: env.LLM_BASE_URL || env.OPENHANDS_BASE_URL || "https://openrouter.ai/api/v1",
     OPENHANDS_MAX_ITERATIONS: env.OPENHANDS_MAX_ITERATIONS || "30",
     OPENHANDS_ENABLE_PUBLIC_SKILLS: env.OPENHANDS_ENABLE_PUBLIC_SKILLS || "0",
   };
