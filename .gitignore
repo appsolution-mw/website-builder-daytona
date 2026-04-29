@@ -45,3 +45,6 @@ next-env.d.ts
 container/broker/x.txt
 ws-proxy/broker-direct-test.mjs
 ws-proxy/parallel-test.mjs
+
+# Local git worktrees
+.worktrees/
