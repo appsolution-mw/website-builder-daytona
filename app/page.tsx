@@ -11,6 +11,7 @@ import {
   FolderKanban,
   Loader2,
   Plus,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 
@@ -29,13 +30,25 @@ type Project = {
   previewUrl: string | null;
 };
 
+type OrphanSandbox = {
+  sandboxId: string;
+  containerId?: string;
+  brokerPort?: number;
+  previewPort?: number;
+  status: "spawning" | "running" | "stopped" | "gone";
+};
+
 const POLL_INTERVAL_MS = 3_000;
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [orphanSandboxes, setOrphanSandboxes] = useState<OrphanSandbox[] | null>(null);
   const [name, setName] = useState("");
   const [isCreating, startCreate] = useTransition();
+  const [isRefreshingOrphans, startRefreshOrphans] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
+  const [removingOrphanId, setRemovingOrphanId] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
   async function refresh() {
@@ -47,6 +60,19 @@ export default function Dashboard() {
     } catch (err) {
       setProjects([]);
       setError(err instanceof Error ? err.message : "failed to load");
+    }
+  }
+
+  async function refreshOrphans() {
+    try {
+      const res = await fetch("/api/admin/orphan-sandboxes", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { sandboxes: OrphanSandbox[] };
+      setOrphanSandboxes(data.sandboxes);
+      setOrphanError(null);
+    } catch (err) {
+      setOrphanSandboxes([]);
+      setOrphanError(err instanceof Error ? err.message : "failed to load orphan sandboxes");
     }
   }
 
@@ -65,6 +91,29 @@ export default function Dashboard() {
       }
     }
     loadInitial();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadInitialOrphans() {
+      try {
+        const res = await fetch("/api/admin/orphan-sandboxes", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { sandboxes: OrphanSandbox[] };
+        if (!cancelled) {
+          setOrphanSandboxes(data.sandboxes);
+          setOrphanError(null);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setOrphanSandboxes([]);
+        setOrphanError(err instanceof Error ? err.message : "failed to load orphan sandboxes");
+      }
+    }
+    loadInitialOrphans();
     return () => {
       cancelled = true;
     };
@@ -111,6 +160,29 @@ export default function Dashboard() {
     if (!confirm("Delete this project and destroy its container?")) return;
     await fetch(`/api/projects/${id}`, { method: "DELETE" });
     await refresh();
+    await refreshOrphans();
+  }
+
+  async function removeOrphan(sandboxId: string) {
+    if (!confirm(`Remove orphan sandbox ${sandboxId}?`)) return;
+    setRemovingOrphanId(sandboxId);
+    setOrphanError(null);
+    try {
+      const res = await fetch("/api/admin/orphan-sandboxes", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sandboxId }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      await refreshOrphans();
+    } catch (err) {
+      setOrphanError(err instanceof Error ? err.message : "failed to remove sandbox");
+    } finally {
+      setRemovingOrphanId(null);
+    }
   }
 
   function statusBadge(status: Project["status"]) {
@@ -126,6 +198,16 @@ export default function Dashboard() {
         {status === "PROVISIONING" ? "provisioning…" : status.toLowerCase()}
       </Badge>
     );
+  }
+
+  function sandboxStatusBadge(status: OrphanSandbox["status"]) {
+    const variants: Record<OrphanSandbox["status"], ComponentProps<typeof Badge>["variant"]> = {
+      spawning: "warning",
+      running: "success",
+      stopped: "secondary",
+      gone: "outline",
+    };
+    return <Badge variant={variants[status]}>{status}</Badge>;
   }
 
   const runningCount = projects?.filter((p) => p.status === "RUNNING").length ?? 0;
@@ -214,6 +296,87 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+
+        <section className="overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold">Orphan sandboxes</h2>
+              <p className="text-xs text-muted-foreground">Docker sandboxes that are no longer tracked in the database.</p>
+            </div>
+            <Button
+              type="button"
+              onClick={() => startRefreshOrphans(() => void refreshOrphans())}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Refresh orphan sandboxes"
+            >
+              <RefreshCw className={isRefreshingOrphans ? "animate-spin" : ""} />
+            </Button>
+          </div>
+
+          {orphanError && (
+            <div
+              role="alert"
+              className="m-4 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 p-3 text-sm text-red-200"
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{orphanError}</span>
+            </div>
+          )}
+
+          {orphanSandboxes === null ? (
+            <div className="grid gap-3 p-4">
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : orphanSandboxes.length === 0 ? (
+            <div className="px-4 py-6 text-sm text-muted-foreground">
+              No orphan sandboxes found.
+            </div>
+          ) : (
+            <ul className="divide-y divide-border">
+              {orphanSandboxes.map((sandbox) => (
+                <li
+                  key={sandbox.sandboxId}
+                  className="grid gap-3 px-4 py-3 sm:grid-cols-[1fr_auto]"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-mono text-sm text-foreground">
+                        {sandbox.sandboxId}
+                      </span>
+                      {sandboxStatusBadge(sandbox.status)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {sandbox.containerId && <span>container {sandbox.containerId.slice(0, 12)}</span>}
+                      {sandbox.previewPort && <span>preview :{sandbox.previewPort}</span>}
+                      {sandbox.brokerPort && <span>broker :{sandbox.brokerPort}</span>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 sm:justify-end">
+                    {sandbox.previewPort && sandbox.status === "running" && (
+                      <Button asChild variant="secondary" size="sm">
+                        <a href={`http://127.0.0.1:${sandbox.previewPort}`} target="_blank" rel="noreferrer">
+                          Preview
+                        </a>
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      onClick={() => removeOrphan(sandbox.sandboxId)}
+                      disabled={removingOrphanId === sandbox.sandboxId}
+                      variant="outline"
+                      size="sm"
+                      className="border-destructive/30 text-red-200 hover:bg-destructive/10 hover:text-red-100"
+                    >
+                      {removingOrphanId === sandbox.sandboxId ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                      Remove
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         <section className="overflow-hidden rounded-lg border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
