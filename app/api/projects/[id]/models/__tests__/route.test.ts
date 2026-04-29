@@ -10,6 +10,7 @@ const MODELS_URL =
   "https://openrouter.ai/api/v1/models?output_modalities=text&supported_parameters=tools";
 
 const originalDevUserId = process.env.DEV_USER_ID;
+const originalOpenHandsModel = process.env.OPENHANDS_MODEL;
 process.env.DEV_USER_ID = DEV_USER_ID;
 
 async function cleanDatabase(): Promise<void> {
@@ -26,16 +27,23 @@ describe("GET /api/projects/[id]/models", () => {
   afterAll(() => {
     if (originalDevUserId === undefined) {
       delete process.env.DEV_USER_ID;
+    } else {
+      process.env.DEV_USER_ID = originalDevUserId;
+    }
+
+    if (originalOpenHandsModel === undefined) {
+      delete process.env.OPENHANDS_MODEL;
       return;
     }
 
-    process.env.DEV_USER_ID = originalDevUserId;
+    process.env.OPENHANDS_MODEL = originalOpenHandsModel;
   });
 
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     process.env.DEV_USER_ID = DEV_USER_ID;
+    delete process.env.OPENHANDS_MODEL;
     await cleanDatabase();
     await prisma.user.create({
       data: { id: DEV_USER_ID, email: "models-route-user@example.com" },
@@ -114,6 +122,66 @@ describe("GET /api/projects/[id]/models", () => {
           contextLength: 1048576,
           promptPrice: "0",
           completionPrice: "0",
+          supportedParameters: ["tools"],
+        },
+      ],
+    });
+  });
+
+  it("prepends configured OpenHands model from env", async () => {
+    process.env.OPENHANDS_MODEL = "openai/qwen3.6-max-preview";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
+
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+      params: Promise.resolve({ id: PROJECT_ID }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      models: [
+        {
+          id: "openai/qwen3.6-max-preview",
+          label: "Configured: qwen3.6-max-preview",
+          contextLength: 0,
+          promptPrice: null,
+          completionPrice: null,
+          supportedParameters: ["tools"],
+        },
+      ],
+    });
+  });
+
+  it("returns configured OpenHands model when OpenRouter fetch fails", async () => {
+    process.env.OPENHANDS_MODEL = "openai/qwen3.6-max-preview";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("bad gateway", { status: 502 })));
+
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+      params: Promise.resolve({ id: PROJECT_ID }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      models: [
+        {
+          id: "openai/qwen3.6-max-preview",
+          label: "Configured: qwen3.6-max-preview",
+          contextLength: 0,
+          promptPrice: null,
+          completionPrice: null,
           supportedParameters: ["tools"],
         },
       ],
