@@ -6,10 +6,19 @@ function devUserId(): string {
   return process.env.DEV_USER_ID ?? "dev-user";
 }
 
-function configuredOpenHandsModels(): OpenRouterModelOption[] {
-  const modelId = process.env.OPENHANDS_MODEL?.trim();
-  if (!modelId) return [];
+function normalizeConfiguredModelId(modelId: string): string {
+  return modelId.startsWith("openrouter/") ? `openrouter:${modelId.slice("openrouter/".length)}` : modelId;
+}
 
+function isOpenRouterModelId(modelId: string): boolean {
+  return modelId.startsWith("openrouter:");
+}
+
+function configuredOpenHandsModels(): OpenRouterModelOption[] {
+  const rawModelId = process.env.OPENHANDS_MODEL?.trim();
+  if (!rawModelId) return [];
+
+  const modelId = normalizeConfiguredModelId(rawModelId);
   const modelName = modelId.split("/").at(-1) || modelId;
   return [
     {
@@ -27,8 +36,12 @@ function mergeModels(
   configured: OpenRouterModelOption[],
   openRouter: OpenRouterModelOption[],
 ): OpenRouterModelOption[] {
+  const openRouterIds = new Set(openRouter.map((model) => model.id));
+  const verifiedConfigured = configured.filter(
+    (model) => !isOpenRouterModelId(model.id) || openRouterIds.has(model.id),
+  );
   const seen = new Set<string>();
-  return [...configured, ...openRouter].filter((model) => {
+  return [...verifiedConfigured, ...openRouter].filter((model) => {
     if (seen.has(model.id)) return false;
     seen.add(model.id);
     return true;

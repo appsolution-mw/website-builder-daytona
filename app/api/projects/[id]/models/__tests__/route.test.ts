@@ -158,6 +158,50 @@ describe("GET /api/projects/[id]/models", () => {
     });
   });
 
+  it("does not prepend unavailable configured OpenRouter models", async () => {
+    process.env.OPENHANDS_MODEL = "openrouter:moonshotai/kimi-k2.6";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({
+        data: [
+          {
+            id: "qwen/qwen3-coder:free",
+            name: "Qwen Coder",
+            context_length: 1048576,
+            architecture: { output_modalities: ["text"] },
+            pricing: { prompt: "0", completion: "0" },
+            supported_parameters: ["tools"],
+          },
+        ],
+      }),
+      { status: 200 },
+    )));
+
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+      params: Promise.resolve({ id: PROJECT_ID }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      models: [
+        {
+          id: "openrouter:qwen/qwen3-coder:free",
+          label: "Qwen Coder",
+          contextLength: 1048576,
+          promptPrice: "0",
+          completionPrice: "0",
+          supportedParameters: ["tools"],
+        },
+      ],
+    });
+  });
+
   it("returns configured OpenHands model when OpenRouter fetch fails", async () => {
     process.env.OPENHANDS_MODEL = "openai/qwen3.6-max-preview";
     await prisma.project.create({
