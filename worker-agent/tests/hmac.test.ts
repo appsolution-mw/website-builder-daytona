@@ -47,8 +47,7 @@ describe("hmac", () => {
       signature: "deadbeef".repeat(8),
       now: new Date(ts),
     });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("signature-mismatch");
+    expect(result).toEqual({ ok: false, reason: "signature-mismatch" });
   });
 
   it("verify rejects timestamps older than 5 minutes", () => {
@@ -58,8 +57,7 @@ describe("hmac", () => {
       secret: SECRET, timestamp: ts, method: "GET", path: "/x", body: "",
       signature: sig, now: new Date(),
     });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("timestamp-out-of-window");
+    expect(result).toEqual({ ok: false, reason: "timestamp-out-of-window" });
   });
 
   it("verify rejects timestamps more than 5 minutes in the future", () => {
@@ -69,8 +67,7 @@ describe("hmac", () => {
       secret: SECRET, timestamp: ts, method: "GET", path: "/x", body: "",
       signature: sig, now: new Date(),
     });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("timestamp-out-of-window");
+    expect(result).toEqual({ ok: false, reason: "timestamp-out-of-window" });
   });
 
   it("verify rejects unparseable timestamps", () => {
@@ -78,7 +75,6 @@ describe("hmac", () => {
       secret: SECRET, timestamp: "not-a-date", method: "GET", path: "/x", body: "",
       signature: "0".repeat(64), now: new Date(),
     });
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe("timestamp-invalid");
+    expect(result).toEqual({ ok: false, reason: "timestamp-invalid" });
   });
 });
