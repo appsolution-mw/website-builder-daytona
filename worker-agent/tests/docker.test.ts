@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import Docker from "dockerode";
 import { createDockerClient, type SandboxSpec } from "../src/docker.js";
 
@@ -76,7 +76,7 @@ describe("docker wrapper", () => {
 
   it("destroySandbox stops + removes the container", async () => {
     const s = spec("d");
-    const r = await client.createSandbox(s);
+    await client.createSandbox(s);
     await client.destroySandbox(s.sandboxId);
     // container should be gone
     const got = await client.getStatus(s.sandboxId);
@@ -85,5 +85,44 @@ describe("docker wrapper", () => {
 
   it("destroySandbox is idempotent for unknown ids", async () => {
     await expect(client.destroySandbox("does-not-exist")).resolves.toBeUndefined();
+  });
+
+  it("does not pick ports already reserved by Docker containers", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const hostPorts: string[] = [];
+    const fakeDocker = {
+      async listContainers() {
+        return [
+          {
+            Ports: [
+              { PrivatePort: 4000, PublicPort: 33001, Type: "tcp" },
+            ],
+          },
+        ];
+      },
+      async createContainer(opts: {
+        HostConfig?: { PortBindings?: Record<string, Array<{ HostPort: string }>> };
+      }) {
+        for (const bindings of Object.values(opts.HostConfig?.PortBindings ?? {})) {
+          for (const binding of bindings) hostPorts.push(binding.HostPort);
+        }
+        return {
+          id: "a".repeat(64),
+          async start() {},
+        };
+      },
+    };
+    const fakeClient = createDockerClient({
+      docker: fakeDocker as unknown as Docker,
+      portRange: { min: 33000, max: 33003 },
+    });
+
+    try {
+      await fakeClient.createSandbox(spec("reserved"));
+    } finally {
+      random.mockRestore();
+    }
+
+    expect(hostPorts).not.toContain("33001");
   });
 });

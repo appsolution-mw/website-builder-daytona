@@ -49,15 +49,30 @@ export function createDockerClient({ docker, portRange }: CreateDockerClientArgs
   const inFlight = new Set<number>();
 
   async function pickTwoFreePorts(): Promise<{ broker: number; preview: number }> {
-    const broker = await pickFreePort({ ...portRange, exclude: new Set(inFlight) });
+    const dockerReserved = await reservedDockerHostPorts();
+    const broker = await pickFreePort({ ...portRange, exclude: new Set([...inFlight, ...dockerReserved]) });
     inFlight.add(broker);
     try {
-      const preview = await pickFreePort({ ...portRange, exclude: new Set([...inFlight]) });
+      const preview = await pickFreePort({
+        ...portRange,
+        exclude: new Set([...inFlight, ...dockerReserved]),
+      });
       inFlight.add(preview);
       return { broker, preview };
     } finally {
       // Released after createContainer completes (caller scope)
     }
+  }
+
+  async function reservedDockerHostPorts(): Promise<Set<number>> {
+    const reserved = new Set<number>();
+    const containers = await docker.listContainers({ all: true });
+    for (const container of containers) {
+      for (const port of container.Ports ?? []) {
+        if (typeof port.PublicPort === "number") reserved.add(port.PublicPort);
+      }
+    }
+    return reserved;
   }
 
   async function findBySandboxId(sandboxId: string) {
@@ -95,7 +110,12 @@ export function createDockerClient({ docker, portRange }: CreateDockerClientArgs
             AutoRemove: false,
           },
         });
-        await create.start();
+        try {
+          await create.start();
+        } catch (err) {
+          await create.remove({ force: true }).catch(() => {});
+          throw err;
+        }
         return {
           sandboxId: spec.sandboxId,
           containerId: create.id,
