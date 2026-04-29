@@ -23,6 +23,8 @@ export interface CreateWorkerPoolRuntimeArgs {
   defaultCapacity?: number;
   /** Forwarded to sandbox container env (optional). */
   brokerEnv?: () => Record<string, string>;
+  /** Hostname clients should use for broker/preview URLs. Defaults to worker.tailscaleIp. */
+  publicHostFor?: (worker: WorkerRecord) => string;
 }
 
 export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runtime {
@@ -76,11 +78,12 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
             expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
           },
         });
+        const publicHost = args.publicHostFor?.(worker) ?? worker.tailscaleIp;
         return {
           sandboxId,
-          brokerUrl: `ws://${worker.tailscaleIp}:${created.brokerPort}/?token=${brokerToken}`,
+          brokerUrl: `ws://${publicHost}:${created.brokerPort}/?token=${brokerToken}`,
           brokerPreviewToken: brokerToken,
-          previewUrl: `http://${worker.tailscaleIp}:${created.previewPort}`,
+          previewUrl: `http://${publicHost}:${created.previewPort}`,
         };
       } catch (err) {
         // Rollback: delete the WorkerSandbox row so retries can proceed cleanly.

@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
+const DEFAULT_WORKER_AGENT_TIMEOUT_MS = 120_000;
 
 export interface CreateLocalWorkerPoolRuntimeArgs {
   sandboxImage?: string;
@@ -18,7 +19,7 @@ export interface CreateLocalWorkerPoolRuntimeArgs {
  * Convenience factory for `RUNTIME_MODE=worker-pool-local`. Wires:
  *   - SimpleScheduler  (DB-backed)
  *   - FakeProvisioner  (in-memory)
- *   - HTTP AgentClient against worker.tailscaleIp:4500
+ *   - HTTP AgentClient against WORKER_AGENT_URL, falling back to worker.tailscaleIp:4500
  *   - brokerEnv passes through agent credentials so the in-container broker
  *     can authenticate the chosen agent runtime (claude-code / codex / etc.)
  */
@@ -26,16 +27,24 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
   const runtimeEnv = collectRuntimeEnv();
   const sandboxImage = args.sandboxImage ?? required("SANDBOX_IMAGE", runtimeEnv);
   const hmacSecret = args.hmacSecret ?? required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
+  const configuredAgentUrl = optionalUrl("WORKER_AGENT_URL", runtimeEnv);
+  const timeoutMs = optionalPositiveInt("WORKER_AGENT_TIMEOUT_MS", runtimeEnv) ??
+    DEFAULT_WORKER_AGENT_TIMEOUT_MS;
   const scheduler = createSimpleScheduler();
   const provisioner = createFakeProvisioner();
   const agentClientFor = (w: WorkerRecord): AgentClient =>
-    createAgentClient({ baseUrl: `http://${w.tailscaleIp}:4500`, hmacSecret });
+    createAgentClient({
+      baseUrl: configuredAgentUrl?.origin ?? `http://${w.tailscaleIp}:4500`,
+      hmacSecret,
+      timeoutMs,
+    });
   return createWorkerPoolRuntime({
     scheduler,
     provisioner,
     agentClientFor,
     sandboxImage,
     brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
+    publicHostFor: configuredAgentUrl ? () => configuredAgentUrl.hostname : undefined,
   });
 }
 
@@ -133,6 +142,26 @@ function required(name: string, runtimeEnv: Record<string, string>): string {
   const v = runtimeEnv[name];
   if (!v) throw new Error(`worker-pool runtime requires env: ${name}`);
   return v;
+}
+
+function optionalUrl(name: string, runtimeEnv: Record<string, string>): URL | null {
+  const value = runtimeEnv[name];
+  if (!value) return null;
+  try {
+    return new URL(value);
+  } catch {
+    throw new Error(`worker-pool runtime requires ${name} to be a valid URL`);
+  }
+}
+
+function optionalPositiveInt(name: string, runtimeEnv: Record<string, string>): number | null {
+  const value = runtimeEnv[name];
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`worker-pool runtime requires ${name} to be a positive integer`);
+  }
+  return parsed;
 }
 
 export { createWorkerPoolRuntime } from "./runtime";

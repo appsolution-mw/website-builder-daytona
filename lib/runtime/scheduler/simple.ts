@@ -1,11 +1,11 @@
 import { prisma } from "../../db/client";
-import type { PickWorkerArgs, Scheduler, WorkerRecord, WorkerStatus } from "../types";
+import type { Scheduler, WorkerRecord, WorkerStatus } from "../types";
 
 const ACTIVE_SANDBOX_STATUSES = ["SPAWNING", "RUNNING"] as const;
 
 export function createSimpleScheduler(): Scheduler {
   return {
-    async pickWorker(_args: PickWorkerArgs): Promise<WorkerRecord | null> {
+    async pickWorker(): Promise<WorkerRecord | null> {
       // Pull all READY workers with their active-sandbox counts in one query.
       const workers = await prisma.worker.findMany({
         where: { status: "READY" },
