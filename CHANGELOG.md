@@ -4,6 +4,15 @@ Projektänderungen werden nach Task-ID gruppiert. Dieses Changelog fasst
 abgeschlossene logische Arbeit zusammen und listet bewusst nicht jeden
 Einzelcommit.
 
+## 2026-05-04
+
+### T-20260504-001 - Turbopack-NFT-Warnung behoben
+
+- Dynamisches Worker-Pool-Env-Dateitracing für Turbopack markiert.
+- Fake-Daytona-Runtime aus dem statischen App-Route-Bundlepfad gelöst und nur
+  noch lazy geladen.
+- `pnpm build` läuft ohne die vorherige Turbopack-NFT-Warnung.
+
 ## 2026-05-03
 
 ### T-20260503-007 - Projekt-Env-Verwaltung umgesetzt

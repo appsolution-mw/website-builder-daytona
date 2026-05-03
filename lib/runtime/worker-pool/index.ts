@@ -113,7 +113,7 @@ function processEnvStrings(): Record<string, string> {
 }
 
 function readEnvFile(fileName: string): Record<string, string> {
-  const path = resolve(process.cwd(), fileName);
+  const path = resolve(/* turbopackIgnore: true */ process.cwd(), fileName);
   if (!existsSync(path)) return {};
   const env: Record<string, string> = {};
   for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
