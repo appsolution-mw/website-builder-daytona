@@ -12,8 +12,12 @@ async function main() {
   const devUserId = process.env.DEV_USER_ID ?? "dev-user";
   await prisma.user.upsert({
     where: { id: devUserId },
-    update: {},
-    create: { id: devUserId, email: "dev@localhost" },
+    update: { name: "Dev User" },
+    create: {
+      id: devUserId,
+      name: "Dev User",
+      email: "dev@localhost",
+    },
   });
   console.log(`Seeded user: ${devUserId}`);
 }
