@@ -1777,7 +1777,7 @@ export default function ProjectWorkspace({
                 />
               </div>
               {envPanelOpen && (
-                <aside className="flex w-[min(24rem,42vw)] min-w-80 shrink-0 flex-col border-l border-border bg-card max-md:absolute max-md:inset-0 max-md:z-20 max-md:w-full max-md:min-w-0 max-md:max-w-none max-md:shadow-lg">
+                <aside className="flex w-[min(24rem,42vw)] min-w-80 shrink-0 flex-col border-l border-border bg-card max-lg:absolute max-lg:inset-0 max-lg:z-20 max-lg:w-full max-lg:min-w-0 max-lg:max-w-none max-lg:shadow-lg">
                   <div className="flex min-h-11 items-center justify-between gap-2 border-b border-border px-3">
                     <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
                       <KeyRound className="size-4 shrink-0 text-primary" aria-hidden="true" />
