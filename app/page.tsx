@@ -9,6 +9,7 @@ import {
   Boxes,
   Clock3,
   FolderKanban,
+  LogOut,
   Loader2,
   Plus,
   RefreshCw,
@@ -20,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { authClient } from "@/lib/auth-client";
 
 type Project = {
   id: string;
@@ -185,6 +187,11 @@ export default function Dashboard() {
     }
   }
 
+  async function signOut() {
+    await authClient.signOut();
+    window.location.assign("/sign-in");
+  }
+
   function statusBadge(status: Project["status"]) {
     const variants: Record<Project["status"], ComponentProps<typeof Badge>["variant"]> = {
       PROVISIONING: "warning",
@@ -234,12 +241,18 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex flex-col gap-3 sm:items-end">
-            <Button asChild variant="outline" size="sm">
-              <Link href="/usage">
-                <BarChart3 />
-                Usage
-              </Link>
-            </Button>
+            <div className="flex gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href="/usage">
+                  <BarChart3 />
+                  Usage
+                </Link>
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={signOut}>
+                <LogOut />
+                Sign out
+              </Button>
+            </div>
             <div className="grid grid-cols-3 gap-2 text-center sm:min-w-80">
               <div className="rounded-lg border border-border bg-card px-3 py-2">
                 <div className="text-lg font-semibold tabular-nums">{runningCount}</div>
