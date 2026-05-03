@@ -367,6 +367,7 @@ export default function ProjectWorkspace({
   const [envSaving, setEnvSaving] = useState(false);
   const [envError, setEnvError] = useState<string | null>(null);
   const [envSyncWarning, setEnvSyncWarning] = useState<string | null>(null);
+  const [envSyncPending, setEnvSyncPending] = useState(false);
   const [tab, setTab] = useState<RightPaneTab>("preview");
   const [device, setDevice] = useState<DeviceView>("desktop");
   const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
@@ -550,6 +551,7 @@ export default function ProjectWorkspace({
       if (typeof data.content !== "string") throw new Error("invalid environment response");
       setEnvContent(data.content);
       setEnvContentBase(data.content);
+      setEnvSyncPending(false);
     } catch (err) {
       setEnvError(err instanceof Error ? err.message : "environment load failed");
     } finally {
@@ -585,6 +587,8 @@ export default function ProjectWorkspace({
 
       try {
         await writeProjectFile(PROJECT_ENV_PATH, data.content);
+        setEnvSyncPending(false);
+        setEnvSyncWarning(null);
         setPaths((prev) => (
           prev.includes(PROJECT_ENV_PATH) ? prev : [...prev, PROJECT_ENV_PATH].sort()
         ));
@@ -595,6 +599,7 @@ export default function ProjectWorkspace({
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "sandbox sync failed";
+        setEnvSyncPending(true);
         setEnvSyncWarning(`Saved to project settings, but .env sync failed: ${message}`);
       }
     } catch (err) {
@@ -1445,6 +1450,7 @@ export default function ProjectWorkspace({
 
   const dirty = fileContent !== null && fileContent !== fileContentBase;
   const envDirty = envContentBase !== null && envContent !== envContentBase;
+  const envSaveEnabled = envDirty || envSyncPending;
   const editorReadOnly = turnInFlight !== null;
   const wsOpen = wsStatus === "open";
   const showModelPicker = supportsOpenRouterModelPicker(selectedRuntime);
@@ -1731,7 +1737,7 @@ export default function ProjectWorkspace({
           tab={tab}
           onTabChange={setTab}
           code={
-            <div className="flex h-full w-full bg-background">
+            <div className="relative flex h-full w-full bg-background">
               <aside className="w-64 shrink-0 overflow-auto border-r border-border bg-card">
                 <div className="flex min-h-11 items-center justify-between border-b border-border px-3">
                   <div className="flex items-center gap-2 text-sm font-medium">
@@ -1771,13 +1777,16 @@ export default function ProjectWorkspace({
                 />
               </div>
               {envPanelOpen && (
-                <aside className="flex w-96 max-w-[42%] shrink-0 flex-col border-l border-border bg-card">
+                <aside className="flex w-[min(24rem,42vw)] min-w-80 shrink-0 flex-col border-l border-border bg-card max-md:absolute max-md:inset-0 max-md:z-20 max-md:w-full max-md:min-w-0 max-md:max-w-none max-md:shadow-lg">
                   <div className="flex min-h-11 items-center justify-between gap-2 border-b border-border px-3">
                     <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
                       <KeyRound className="size-4 shrink-0 text-primary" aria-hidden="true" />
                       <span className="truncate">Env</span>
-                      {envDirty && (
-                        <span className="size-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Unsaved changes" />
+                      {envSaveEnabled && (
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-amber-400"
+                          aria-label={envDirty ? "Unsaved changes" : "Sandbox sync pending"}
+                        />
                       )}
                     </div>
                     <Button
@@ -1821,6 +1830,8 @@ export default function ProjectWorkspace({
                             ? "Saving..."
                             : envDirty
                               ? "Unsaved changes"
+                              : envSyncPending
+                                ? "Sandbox sync pending"
                               : envContentBase === null
                                 ? "Not loaded"
                                 : "Saved"}
@@ -1829,7 +1840,7 @@ export default function ProjectWorkspace({
                         type="button"
                         variant="secondary"
                         size="sm"
-                        disabled={envLoading || envSaving || turnInFlight !== null || !envDirty}
+                        disabled={envLoading || envSaving || turnInFlight !== null || !envSaveEnabled}
                         onClick={() => void saveProjectEnv()}
                       >
                         {envSaving ? <Loader2 className="animate-spin" /> : <Save />}
@@ -1847,6 +1858,8 @@ export default function ProjectWorkspace({
               variant={envPanelOpen ? "secondary" : "ghost"}
               size="xs"
               disabled={wsStatus !== "open"}
+              aria-pressed={envPanelOpen}
+              aria-label="Edit project environment"
               onClick={openEnvPanel}
             >
               <KeyRound />
