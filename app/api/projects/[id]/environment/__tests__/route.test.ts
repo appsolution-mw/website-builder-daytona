@@ -41,14 +41,7 @@ async function createOtherProject(): Promise<void> {
 }
 
 async function createUser(id: string, email: string): Promise<void> {
-  try {
-    await prisma.user.create({ data: { id, email } });
-  } catch {
-    await prisma.$executeRaw`
-      INSERT INTO "User" ("id", "email", "createdAt", "updatedAt")
-      VALUES (${id}, ${email}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `;
-  }
+  await prisma.user.create({ data: { id, email } });
 }
 
 function routeContext(projectId: string): { params: Promise<{ id: string }> } {
@@ -93,6 +86,7 @@ describe("/api/projects/[id]/environment", () => {
     );
 
     expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
     await expect(res.json()).resolves.toEqual({ content: "", updatedAt: null });
   });
 
@@ -104,6 +98,7 @@ describe("/api/projects/[id]/environment", () => {
     const putBody = await putRes.json();
 
     expect(putRes.status).toBe(200);
+    expect(putRes.headers.get("cache-control")).toBe("no-store");
     expect(putBody).toEqual({
       content,
       updatedAt: expect.any(String),
@@ -116,6 +111,7 @@ describe("/api/projects/[id]/environment", () => {
     );
 
     expect(getRes.status).toBe(200);
+    expect(getRes.headers.get("cache-control")).toBe("no-store");
     await expect(getRes.json()).resolves.toEqual({
       content,
       updatedAt: putBody.updatedAt,

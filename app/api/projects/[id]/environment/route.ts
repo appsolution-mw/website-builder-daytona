@@ -7,8 +7,19 @@ type RouteParams = {
   params: Promise<{ id: string }>;
 };
 
+type EnvironmentResponse = {
+  content: string;
+  updatedAt: string | null;
+};
+
 function devUserId(): string {
   return process.env.DEV_USER_ID ?? "dev-user";
+}
+
+function environmentJson(body: EnvironmentResponse): NextResponse {
+  return NextResponse.json(body, {
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
 function contentByteLength(content: string): number {
@@ -44,10 +55,10 @@ export async function GET(
   }
 
   if (!project.environment) {
-    return NextResponse.json({ content: "", updatedAt: null });
+    return environmentJson({ content: "", updatedAt: null });
   }
 
-  return NextResponse.json({
+  return environmentJson({
     content: project.environment.content,
     updatedAt: project.environment.updatedAt.toISOString(),
   });
@@ -83,7 +94,7 @@ export async function PUT(
     select: { content: true, updatedAt: true },
   });
 
-  return NextResponse.json({
+  return environmentJson({
     content: environment.content,
     updatedAt: environment.updatedAt.toISOString(),
   });
