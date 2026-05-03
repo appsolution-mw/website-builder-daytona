@@ -31,11 +31,6 @@ fi
 
 cd /workspace/project
 
-if [ -n "${PROJECT_ENV_B64:-}" ]; then
-  echo "[entrypoint] writing project .env"
-  printf '%s' "${PROJECT_ENV_B64}" | base64 -d > /workspace/project/.env
-fi
-
 # Initialise a local git repo so claude-code's reviewer sub-agent has a
 # working tree to diff against on each turn. Persistence across sandbox
 # restarts is Phase 1.4; for now this resets per spawn.
@@ -47,6 +42,12 @@ if [ ! -d .git ]; then
   git add -A
   git commit -q -m "initial template" || true
 fi
+
+if [ -n "${PROJECT_ENV_B64:-}" ]; then
+  echo "[entrypoint] writing project .env"
+  printf '%s' "${PROJECT_ENV_B64}" | base64 -d > /workspace/project/.env
+fi
+
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}"
 PORT="${PREVIEW_PORT}" PROJECT_ID="${PROJECT_ID}" \
   pnpm dev > /workspace/project.log 2>&1 &
