@@ -1,7 +1,9 @@
 # ===== Stage 1: workspace deps for broker =====
 FROM node:24-trixie-slim AS deps
 WORKDIR /opt/builder
-RUN corepack enable && corepack prepare pnpm@10 --activate
+RUN corepack enable && corepack prepare pnpm@10 --activate \
+ && apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/protocol/ packages/protocol/
 COPY container/sandbox/broker/package.json container/sandbox/broker/

@@ -103,16 +103,13 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       if (!worker) {
         // Worker is gone (decommissioned). Just clean DB.
         await prisma.sandboxToken.deleteMany({ where: { sandboxId } });
-        await prisma.workerSandbox.update({ where: { id: sandboxId }, data: { status: "DESTROYED" } });
+        await prisma.workerSandbox.delete({ where: { id: sandboxId } });
         return;
       }
       const agent = args.agentClientFor(workerRecord(worker));
       await agent.destroySandbox(sandboxId).catch(() => { /* idempotent */ });
       await prisma.sandboxToken.deleteMany({ where: { sandboxId } });
-      await prisma.workerSandbox.update({
-        where: { id: sandboxId },
-        data: { status: "DESTROYED" },
-      });
+      await prisma.workerSandbox.delete({ where: { id: sandboxId } });
     },
 
     async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

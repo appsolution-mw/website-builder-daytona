@@ -56,7 +56,14 @@ export type HostToBroker =
   | { type: "agent.abort"; turnId: string }
   | { type: "file.list"; requestId: string }
   | { type: "file.read"; requestId: string; path: string }
-  | { type: "file.write"; requestId: string; path: string; content: string };
+  | { type: "file.write"; requestId: string; path: string; content: string }
+  | { type: "file.delete"; requestId: string; path: string; cleanupEmptyParents?: boolean }
+  | { type: "terminal.open"; requestId: string; cols: number; rows: number }
+  | { type: "terminal.run"; requestId: string; command: string }
+  | { type: "terminal.input"; requestId: string; data: string }
+  | { type: "terminal.resize"; requestId: string; cols: number; rows: number }
+  | { type: "terminal.close"; requestId: string }
+  | { type: "terminal.abort"; requestId: string };
 
 // Messages from broker → host
 export type BrokerToHost =
@@ -116,6 +123,34 @@ export type BrokerToHost =
       reason?: "locked" | "too_large" | "invalid_path" | "io_error";
     }
   | {
+      type: "file.delete.result";
+      requestId: string;
+      path: string;
+      ok: boolean;
+      reason?: "locked" | "not_found" | "invalid_path" | "io_error";
+    }
+  | {
+      type: "terminal.ready";
+      requestId: string;
+      pid: number;
+      shell: string;
+    }
+  | {
+      type: "terminal.output";
+      requestId: string;
+      stream: "stdout" | "stderr";
+      data: string;
+    }
+  | {
+      type: "terminal.exit";
+      requestId: string;
+      ok: boolean;
+      exitCode: number | null;
+      signal: string | null;
+      reason?: "locked" | "busy" | "invalid_command" | "spawn_error" | "aborted";
+      error?: string;
+    }
+  | {
       type: "file.changed";
       path: string;
       event: "add" | "change" | "unlink";
@@ -128,4 +163,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.10.0" as const;
+export const PROTOCOL_VERSION = "1.12.0" as const;

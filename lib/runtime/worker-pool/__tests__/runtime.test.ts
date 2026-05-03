@@ -165,7 +165,7 @@ describe("WorkerPoolRuntime", () => {
     expect(handles.requests()[0]?.env).not.toHaveProperty("PROJECT_ENV_B64");
   });
 
-  it("destroyProjectSandbox removes container + token, marks DESTROYED", async () => {
+  it("destroyProjectSandbox removes container, token, and reservation row", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const projectId = await project();
@@ -175,10 +175,12 @@ describe("WorkerPoolRuntime", () => {
     await r.destroyProjectSandbox(ws.id);
 
     const after = await prisma.workerSandbox.findUnique({ where: { id: ws.id } });
-    expect(after?.status).toBe("DESTROYED");
+    expect(after).toBeNull();
     const tok = await prisma.sandboxToken.findFirst({ where: { sandboxId: ws.id } });
     expect(tok).toBeNull();
     expect(handles.list()).toHaveLength(0);
+
+    await expect(r.spawnProjectSandbox({ projectId, source: { type: "template" } })).resolves.toBeDefined();
   });
 
   it("destroyProjectSandbox is idempotent for unknown ids", async () => {

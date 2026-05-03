@@ -15,10 +15,18 @@ import { createAgentProvider } from "./agent-provider-factory";
 import { agentRuntimeFromEnv } from "./agent-provider";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
 import {
+  handleFileDelete,
   handleFileList,
   handleFileRead,
   handleFileWrite,
 } from "./fs-handlers";
+import {
+  startInteractiveTerminal,
+  startTerminalCommand,
+  type InteractiveTerminalHandle,
+  type PtySpawnFn,
+  type TerminalCommandHandle,
+} from "./terminal-runner";
 
 export interface BrokerHandle {
   port: number;
@@ -31,12 +39,15 @@ export interface StartBrokerOptions {
   enableFsTracker?: boolean;
   /** Test-only: override child_process.spawn used by claude-runner. */
   __testSpawn?: SpawnFn;
+  /** Test-only: override node-pty spawn used by the interactive terminal. */
+  __testPtySpawn?: PtySpawnFn;
 }
 
 const WRITE_TOOL_NAMES = new Set(["Write", "Edit", "NotebookEdit", "Create"]);
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_TERMINAL_COMMAND_BYTES = 8192;
 const UPLOADS_DIR = ".agent-artifacts/chat-uploads";
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/gif": ".gif",
@@ -259,6 +270,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     let currentTurn:
       | { turnId: string; ctl: AbortController; reviewerCtl: AbortController }
       | null = null;
+    let terminalCommand: TerminalCommandHandle | null = null;
+    let interactiveTerminal: InteractiveTerminalHandle | null = null;
 
     const send = (obj: unknown) => {
       if (socket.readyState === socket.OPEN) {
@@ -289,6 +302,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
 
     socket.on("close", () => {
       clearInterval(pingTimer);
+      terminalCommand?.abort();
+      interactiveTerminal?.close();
     });
 
     socket.on("message", (data) => {
@@ -485,6 +500,123 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         return;
       }
 
+      if (msg.type === "terminal.run") {
+        if (isLocked()) {
+          send({
+            type: "terminal.exit",
+            requestId: msg.requestId,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            reason: "locked",
+          });
+          return;
+        }
+        if (terminalCommand) {
+          send({
+            type: "terminal.exit",
+            requestId: msg.requestId,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            reason: "busy",
+          });
+          return;
+        }
+        const command = typeof msg.command === "string" ? msg.command.trim() : "";
+        if (!command || Buffer.byteLength(command, "utf8") > MAX_TERMINAL_COMMAND_BYTES) {
+          send({
+            type: "terminal.exit",
+            requestId: msg.requestId,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            reason: "invalid_command",
+          });
+          return;
+        }
+
+        const handle = startTerminalCommand({
+          requestId: msg.requestId,
+          command,
+          cwd: projectRoot,
+          onEvent: send,
+        });
+        terminalCommand = handle;
+        handle.done.finally(() => {
+          if (terminalCommand?.requestId === handle.requestId) terminalCommand = null;
+        });
+        return;
+      }
+
+      if (msg.type === "terminal.open") {
+        if (isLocked()) {
+          send({
+            type: "terminal.exit",
+            requestId: msg.requestId,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            reason: "locked",
+          });
+          return;
+        }
+        if (interactiveTerminal) {
+          send({
+            type: "terminal.exit",
+            requestId: msg.requestId,
+            ok: false,
+            exitCode: null,
+            signal: null,
+            reason: "busy",
+          });
+          return;
+        }
+        const handle = startInteractiveTerminal({
+          requestId: msg.requestId,
+          cwd: projectRoot,
+          cols: msg.cols,
+          rows: msg.rows,
+          onEvent: (event) => {
+            if (event.type === "terminal.exit" && interactiveTerminal?.requestId === event.requestId) {
+              interactiveTerminal = null;
+            }
+            send(event);
+          },
+          spawn: opts.__testPtySpawn,
+        });
+        interactiveTerminal = handle;
+        return;
+      }
+
+      if (msg.type === "terminal.input") {
+        if (interactiveTerminal?.requestId === msg.requestId) {
+          interactiveTerminal.write(msg.data);
+        }
+        return;
+      }
+
+      if (msg.type === "terminal.resize") {
+        if (interactiveTerminal?.requestId === msg.requestId) {
+          interactiveTerminal.resize(msg.cols, msg.rows);
+        }
+        return;
+      }
+
+      if (msg.type === "terminal.close") {
+        if (interactiveTerminal?.requestId === msg.requestId) {
+          interactiveTerminal.close();
+        }
+        return;
+      }
+
+      if (msg.type === "terminal.abort") {
+        if (terminalCommand?.requestId === msg.requestId) {
+          terminalCommand.abort();
+        }
+        return;
+      }
+
       if (msg.type === "file.list") {
         if (!tracker) {
           send({ type: "file.list.result", requestId: msg.requestId, paths: [] });
@@ -536,6 +668,34 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           .catch(() => {
             send({
               type: "file.write.result",
+              requestId: msg.requestId,
+              path: msg.path,
+              ok: false,
+              reason: "io_error",
+            });
+          });
+        return;
+      }
+
+      if (msg.type === "file.delete") {
+        handleFileDelete({
+          root: projectRoot,
+          path: msg.path,
+          cleanupEmptyParents: msg.cleanupEmptyParents,
+          isLocked,
+        })
+          .then((r) => {
+            send({
+              type: "file.delete.result",
+              requestId: msg.requestId,
+              path: r.path,
+              ok: r.ok,
+              ...(r.reason ? { reason: r.reason } : {}),
+            });
+          })
+          .catch(() => {
+            send({
+              type: "file.delete.result",
               requestId: msg.requestId,
               path: msg.path,
               ok: false,

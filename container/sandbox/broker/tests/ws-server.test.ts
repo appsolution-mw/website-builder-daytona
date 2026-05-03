@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { startBroker, type BrokerHandle } from "../src/ws-server";
 
@@ -18,6 +19,90 @@ const promptMsg = (
   resumeSession,
   ...(attachments ? { attachments } : {}),
 });
+
+function collectSocketEvents(client: WebSocket): unknown[] {
+  const events: unknown[] = [];
+  client.on("message", (data) => events.push(JSON.parse(data.toString())));
+  return events;
+}
+
+async function waitForEvent<T extends { type?: string }>(
+  events: unknown[],
+  type: string,
+  requestId: string,
+): Promise<T> {
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    const event = events.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        (entry as { type?: string }).type === type &&
+        (entry as { requestId?: string }).requestId === requestId,
+    );
+    if (event) return event as T;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`never saw ${type}`);
+}
+
+function createFakePtySpawn() {
+  const terminals: Array<{
+    file: string;
+    args: string[];
+    options: { cwd?: string; cols?: number; rows?: number };
+    writes: string[];
+    resizes: Array<{ cols: number; rows: number }>;
+    killed: boolean;
+    emitData: (data: string) => void;
+    emitExit: (exitCode: number, signal?: number) => void;
+  }> = [];
+
+  const spawn = (file: string, args: string[], options: { cwd?: string; cols?: number; rows?: number }) => {
+    const emitter = new EventEmitter();
+    const terminal = {
+      file,
+      args,
+      options,
+      writes: [] as string[],
+      resizes: [] as Array<{ cols: number; rows: number }>,
+      killed: false,
+      emitData: (data: string) => emitter.emit("data", data),
+      emitExit: (exitCode: number, signal?: number) => emitter.emit("exit", { exitCode, signal }),
+    };
+    terminals.push(terminal);
+    return {
+      pid: terminals.length,
+      cols: options.cols ?? 80,
+      rows: options.rows ?? 24,
+      process: file,
+      handleFlowControl: false,
+      onData: (listener: (data: string) => void) => {
+        emitter.on("data", listener);
+        return { dispose: () => emitter.off("data", listener) };
+      },
+      onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+        emitter.on("exit", listener);
+        return { dispose: () => emitter.off("exit", listener) };
+      },
+      resize: (cols: number, rows: number) => {
+        terminal.resizes.push({ cols, rows });
+      },
+      clear: () => undefined,
+      write: (data: string | Buffer) => {
+        terminal.writes.push(data.toString());
+      },
+      kill: () => {
+        terminal.killed = true;
+        terminal.emitExit(0);
+      },
+      pause: () => undefined,
+      resume: () => undefined,
+    };
+  };
+
+  return { spawn, terminals };
+}
 
 describe("broker ws server", () => {
   let handle: BrokerHandle | undefined;
@@ -142,6 +227,192 @@ describe("broker ws server", () => {
       content: "hello!",
     });
     client.close();
+  });
+
+  it("responds to file.delete and removes empty parent directories", async () => {
+    const { mkdtemp, writeFile, mkdir, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-delete-"));
+    await mkdir(join(root, "app"), { recursive: true });
+    await writeFile(join(root, "app", "wbd-next-devtools.css"), "stale");
+
+    handle = await startBroker({ port: 0, projectRoot: root, enableFsTracker: false });
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const reply = await new Promise<string>((resolve) => {
+      client.once("message", (data) => resolve(data.toString()));
+      client.send(JSON.stringify({
+        type: "file.delete",
+        requestId: "d1",
+        path: "app/wbd-next-devtools.css",
+        cleanupEmptyParents: true,
+      }));
+    });
+
+    expect(JSON.parse(reply)).toEqual({
+      type: "file.delete.result",
+      requestId: "d1",
+      path: "app/wbd-next-devtools.css",
+      ok: true,
+    });
+    await expect(stat(join(root, "app"))).rejects.toMatchObject({ code: "ENOENT" });
+    client.close();
+  });
+
+  it("runs terminal commands in the project root and streams output", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-terminal-"));
+    await writeFile(join(root, "marker.txt"), "from-project-root");
+
+    handle = await startBroker({ port: 0, projectRoot: root, enableFsTracker: false });
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify({
+      type: "terminal.run",
+      requestId: "term-1",
+      command: "node -e \"const fs=require('fs'); process.stdout.write(fs.readFileSync('marker.txt','utf8')); process.stderr.write('warn');\"",
+    }));
+
+    const start = Date.now();
+    while (Date.now() - start < 2000) {
+      if (events.some((e) => (e as { type?: string }).type === "terminal.exit")) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const outputs = events.filter((e) => (e as { type?: string }).type === "terminal.output") as Array<{
+      stream: "stdout" | "stderr";
+      data: string;
+    }>;
+    expect(outputs.filter((e) => e.stream === "stdout").map((e) => e.data).join("")).toBe("from-project-root");
+    expect(outputs.filter((e) => e.stream === "stderr").map((e) => e.data).join("")).toBe("warn");
+    expect(events.find((e) => (e as { type?: string }).type === "terminal.exit")).toMatchObject({
+      type: "terminal.exit",
+      requestId: "term-1",
+      ok: true,
+      exitCode: 0,
+    });
+    client.close();
+  });
+
+  it("opens an interactive terminal, forwards input, resize, output, and close events", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-pty-"));
+    const fakePty = createFakePtySpawn();
+
+    handle = await startBroker({
+      port: 0,
+      projectRoot: root,
+      enableFsTracker: false,
+      __testPtySpawn: fakePty.spawn,
+    });
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+    const events = collectSocketEvents(client);
+
+    client.send(JSON.stringify({
+      type: "terminal.open",
+      requestId: "pty-1",
+      cols: 100,
+      rows: 30,
+    }));
+
+    await expect(waitForEvent(events, "terminal.ready", "pty-1")).resolves.toMatchObject({
+      type: "terminal.ready",
+      requestId: "pty-1",
+      pid: 1,
+    });
+    expect(fakePty.terminals[0]).toMatchObject({
+      options: {
+        cwd: root,
+        cols: 100,
+        rows: 30,
+      },
+    });
+
+    fakePty.terminals[0].emitData("hello from shell\r\n");
+    await expect(waitForEvent(events, "terminal.output", "pty-1")).resolves.toMatchObject({
+      type: "terminal.output",
+      requestId: "pty-1",
+      stream: "stdout",
+      data: "hello from shell\r\n",
+    });
+
+    client.send(JSON.stringify({ type: "terminal.input", requestId: "pty-1", data: "pwd\r" }));
+    client.send(JSON.stringify({ type: "terminal.resize", requestId: "pty-1", cols: 120, rows: 40 }));
+    client.send(JSON.stringify({ type: "terminal.close", requestId: "pty-1" }));
+
+    const start = Date.now();
+    while (Date.now() - start < 500) {
+      if (fakePty.terminals[0].writes.length > 0 && fakePty.terminals[0].resizes.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    expect(fakePty.terminals[0].writes).toEqual(["pwd\r"]);
+    expect(fakePty.terminals[0].resizes).toEqual([{ cols: 120, rows: 40 }]);
+    expect(fakePty.terminals[0].killed).toBe(true);
+    await expect(waitForEvent(events, "terminal.exit", "pty-1")).resolves.toMatchObject({
+      type: "terminal.exit",
+      requestId: "pty-1",
+      ok: true,
+      exitCode: 0,
+    });
+    client.close();
+  });
+
+  it("refuses terminal.run with reason:locked while a turn is running", async () => {
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const { fakeSpawn } = spawnsSetup([
+      {
+        stdout: [],
+        closeDelayMs: 1000,
+      },
+    ]);
+
+    handle = await startBroker({
+      port: 0,
+      projectRoot: process.cwd(),
+      enableFsTracker: false,
+      __testSpawn: fakeSpawn,
+    });
+    const client = new WebSocket(`ws://localhost:${handle.port}`);
+    await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+    const events: unknown[] = [];
+    client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+    client.send(JSON.stringify(promptMsg("x", "t1")));
+    client.send(JSON.stringify({ type: "terminal.run", requestId: "term-locked", command: "pwd" }));
+
+    const start = Date.now();
+    while (Date.now() - start < 2000) {
+      const exit = events.find(
+        (e) =>
+          (e as { type?: string }).type === "terminal.exit" &&
+          (e as { requestId?: string }).requestId === "term-locked",
+      );
+      if (exit) {
+        expect(exit).toMatchObject({
+          type: "terminal.exit",
+          requestId: "term-locked",
+          ok: false,
+          reason: "locked",
+        });
+        client.close();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error("never saw terminal.exit");
   });
 
   it("refuses file.write with reason:locked while a turn is running", async () => {

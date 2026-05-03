@@ -29,10 +29,13 @@ import {
   Plus,
   RefreshCw,
   Save,
+  ScrollText,
   Send,
   Smartphone,
   Square,
   Tablet,
+  Terminal,
+  Trash2,
   Wifi,
   WifiOff,
   X,
@@ -49,16 +52,23 @@ import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
+import { XtermTerminal, type XtermTerminalStatus } from "@/components/workspace/XtermTerminal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { runtimeLabel } from "@/lib/agents/runtime";
 import {
   ensureNextDevtoolsCssImport,
+  ensurePreviewConsoleBridge,
+  nextConfigContent,
   nextDevIndicatorsEnabled,
   nextDevtoolsCssContent,
+  previewConsoleBridgeContent,
+  resolveNextAppConsoleBridgePaths,
+  resolveNextConfigPath,
   resolveNextAppDevtoolsPaths,
   setNextDevIndicators,
+  staleNextDevtoolsCleanupPaths,
 } from "@/lib/next-dev-indicators";
 
 type RuntimeState = {
@@ -94,6 +104,7 @@ type Project = {
   id: string;
   name: string;
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
+  daytonaSandboxId: string | null;
   agentRuntime: AgentRuntime;
   desiredRuntime: AgentRuntime;
   runtimeSwitchStatus: "IDLE" | "PENDING" | "SWITCHING" | "FAILED";
@@ -107,6 +118,18 @@ type Project = {
 type DeviceView = "desktop" | "tablet" | "mobile";
 
 type DraftImageAttachment = ChatImageAttachmentView & PromptImageAttachment;
+type TerminalProtocolEvent = Extract<
+  ProxyToBrowser,
+  { type: "terminal.ready" | "terminal.output" | "terminal.exit" }
+>;
+type BrowserConsoleLevel = "log" | "info" | "warn" | "error";
+type BrowserConsoleEntry = {
+  id: string;
+  level: BrowserConsoleLevel;
+  values: string[];
+  timestamp: number;
+  url: string;
+};
 
 const POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CHAT_WIDTH_PCT = 28;
@@ -116,10 +139,11 @@ const BADGE_DURATION_MS = 3000;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHAT_IMAGES = 5;
 const MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_CONSOLE_ENTRIES = 500;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-const NEXT_CONFIG_PATH = "next.config.ts";
 const PROJECT_AGENTS_PATH = "AGENTS.md";
 const PROJECT_ENV_PATH = ".env";
+const PREVIEW_CONSOLE_MESSAGE_TYPE = "wbd-preview-console";
 const DEFAULT_PROJECT_AGENTS_CONTENT = `# AGENTS.md
 
 ## Project Context
@@ -159,6 +183,39 @@ function toRelativePath(url: string | null): string {
   } catch {
     return "/";
   }
+}
+
+function timestampLabel(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function isPreviewConsoleMessage(data: unknown): data is {
+  type: typeof PREVIEW_CONSOLE_MESSAGE_TYPE;
+  level: BrowserConsoleLevel;
+  values: string[];
+  timestamp: number;
+  url: string;
+} {
+  if (!data || typeof data !== "object") return false;
+  const value = data as {
+    type?: unknown;
+    level?: unknown;
+    values?: unknown;
+    timestamp?: unknown;
+    url?: unknown;
+  };
+  return (
+    value.type === PREVIEW_CONSOLE_MESSAGE_TYPE &&
+    (value.level === "log" || value.level === "info" || value.level === "warn" || value.level === "error") &&
+    Array.isArray(value.values) &&
+    value.values.every((entry) => typeof entry === "string") &&
+    typeof value.timestamp === "number" &&
+    typeof value.url === "string"
+  );
 }
 
 function formatDoneFooter(d: {
@@ -344,6 +401,9 @@ export default function ProjectWorkspace({
   const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const [reviewingActive, setReviewingActive] = useState(false);
+  const [sandboxRestarting, setSandboxRestarting] = useState(false);
+  const [sandboxRestartError, setSandboxRestartError] = useState<string | null>(null);
+  const [workspaceWs, setWorkspaceWs] = useState<WebSocket | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const chatScrollRef = useRef<HTMLUListElement | null>(null);
@@ -373,6 +433,12 @@ export default function ProjectWorkspace({
   const [devIndicatorSaving, setDevIndicatorSaving] = useState(false);
   const [devIndicatorError, setDevIndicatorError] = useState<string | null>(null);
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [terminalEvent, setTerminalEvent] = useState<{ seq: number; event: TerminalProtocolEvent } | null>(null);
+  const [terminalStatus, setTerminalStatus] = useState<XtermTerminalStatus>("offline");
+  const [terminalClearSignal, setTerminalClearSignal] = useState(0);
+  const [terminalCloseSignal, setTerminalCloseSignal] = useState(0);
+  const [terminalReconnectSignal, setTerminalReconnectSignal] = useState(0);
+  const [consoleEntries, setConsoleEntries] = useState<BrowserConsoleEntry[]>([]);
 
   const pendingRef = useRef<
     Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
@@ -390,6 +456,8 @@ export default function ProjectWorkspace({
   const pathsRef = useRef<string[]>([]);
   const fileContentRef = useRef<string | null>(null);
   const fileContentBaseRef = useRef<string | null>(null);
+  const terminalEventSeqRef = useRef(0);
+  const consoleOutputRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
   useEffect(() => { draftAttachmentsRef.current = draftAttachments; }, [draftAttachments]);
@@ -413,6 +481,16 @@ export default function ProjectWorkspace({
       messagesRef.current = next;
       return next;
     });
+  }
+
+  function appendConsoleEntry(entry: Omit<BrowserConsoleEntry, "id">): void {
+    setConsoleEntries((prev) => [
+      ...prev,
+      {
+        ...entry,
+        id: crypto.randomUUID(),
+      },
+    ].slice(-MAX_CONSOLE_ENTRIES));
   }
 
   function activateSession(session: ChatSession | null) {
@@ -499,7 +577,7 @@ export default function ProjectWorkspace({
     }
   }, [sendRequest]);
 
-  const requestFileList = useCallback(async () => {
+  const requestFileList = useCallback(async (): Promise<string[]> => {
     const requestId = crypto.randomUUID();
     setFileListLoading(true);
     setFileListError(null);
@@ -509,11 +587,14 @@ export default function ProjectWorkspace({
         requestId,
       );
       const sortedPaths = reply.paths.slice().sort();
+      pathsRef.current = sortedPaths;
       setPaths(sortedPaths);
       void ensureProjectAgentsFile(sortedPaths).catch(() => undefined);
+      return sortedPaths;
     } catch (err) {
       const message = err instanceof Error ? err.message : "request failed";
       setFileListError(`File list failed: ${message}`);
+      return [];
     } finally {
       setFileListLoading(false);
     }
@@ -538,6 +619,17 @@ export default function ProjectWorkspace({
       requestId,
     );
     if (!write.ok) throw new Error(write.reason ?? `could not write ${path}`);
+  }, [sendRequest]);
+
+  const deleteProjectFile = useCallback(async (path: string) => {
+    const requestId = crypto.randomUUID();
+    const result = await sendRequest<Extract<ProxyToBrowser, { type: "file.delete.result" }>>(
+      { type: "file.delete", requestId, path, cleanupEmptyParents: true },
+      requestId,
+    );
+    if (!result.ok && result.reason !== "not_found") {
+      throw new Error(result.reason ?? `could not delete ${path}`);
+    }
   }, [sendRequest]);
 
   async function loadProjectEnv(): Promise<void> {
@@ -611,7 +703,9 @@ export default function ProjectWorkspace({
   }
 
   const syncDevtoolsProjectFiles = useCallback(async (enabled: boolean) => {
+    const stalePaths = staleNextDevtoolsCleanupPaths(pathsRef.current);
     const appPaths = resolveNextAppDevtoolsPaths(pathsRef.current);
+    if (!appPaths) return;
     const layoutRequestId = crypto.randomUUID();
     const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
       { type: "file.read", requestId: layoutRequestId, path: appPaths.layoutPath },
@@ -637,25 +731,79 @@ export default function ProjectWorkspace({
       setFileContent(nextCss);
       setFileContentBase(nextCss);
     }
+
+    for (const stalePath of stalePaths) {
+      await deleteProjectFile(stalePath);
+      setPaths((prev) => prev.filter((path) => path !== stalePath));
+      if (selectedPathRef.current === stalePath) {
+        setSelectedPath(null);
+        setFileContent(null);
+        setFileContentBase(null);
+      }
+    }
+  }, [deleteProjectFile, sendRequest, writeProjectFile]);
+
+  const syncPreviewConsoleBridge = useCallback(async () => {
+    const bridgePaths = resolveNextAppConsoleBridgePaths(pathsRef.current);
+    if (!bridgePaths) return;
+
+    const layoutRequestId = crypto.randomUUID();
+    const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
+      { type: "file.read", requestId: layoutRequestId, path: bridgePaths.layoutPath },
+      layoutRequestId,
+    );
+    if (typeof layout.content === "string") {
+      const nextLayout = ensurePreviewConsoleBridge(layout.content);
+      if (nextLayout !== layout.content) {
+        await writeProjectFile(bridgePaths.layoutPath, nextLayout);
+        if (selectedPathRef.current === bridgePaths.layoutPath) {
+          setFileContent(nextLayout);
+          setFileContentBase(nextLayout);
+        }
+      }
+    }
+
+    const bridgeContent = previewConsoleBridgeContent();
+    await writeProjectFile(bridgePaths.componentPath, bridgeContent);
+    setPaths((prev) => (
+      prev.includes(bridgePaths.componentPath) ? prev : [...prev, bridgePaths.componentPath].sort()
+    ));
+    if (selectedPathRef.current === bridgePaths.componentPath) {
+      setFileContent(bridgeContent);
+      setFileContentBase(bridgeContent);
+    }
   }, [sendRequest, writeProjectFile]);
 
   const loadDevIndicatorSetting = useCallback(async () => {
+    const configPath = resolveNextConfigPath(pathsRef.current);
     const requestId = crypto.randomUUID();
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
-        { type: "file.read", requestId, path: NEXT_CONFIG_PATH },
+        { type: "file.read", requestId, path: configPath },
         requestId,
       );
-      if (typeof reply.content !== "string") return;
-      const enabled = nextDevIndicatorsEnabled(reply.content);
+      const currentConfig = typeof reply.content === "string" ? reply.content : nextConfigContent();
+      const nextConfig = setNextDevIndicators(currentConfig, false);
+      if (nextConfig !== reply.content) {
+        await writeProjectFile(configPath, nextConfig);
+        setPaths((prev) => (
+          prev.includes(configPath) ? prev : [...prev, configPath].sort()
+        ));
+        if (selectedPathRef.current === configPath) {
+          setFileContent(nextConfig);
+          setFileContentBase(nextConfig);
+        }
+      }
+      const enabled = nextDevIndicatorsEnabled(nextConfig);
       setDevIndicatorEnabled(enabled);
       setDevIndicatorError(null);
-      void applyDevIndicatorRuntime(enabled).catch(() => undefined);
-      void syncDevtoolsProjectFiles(enabled).catch(() => undefined);
-    } catch {
+      await applyDevIndicatorRuntime(false).catch(() => undefined);
+      await syncDevtoolsProjectFiles(false).catch(() => undefined);
+    } catch (err) {
+      setDevIndicatorError(err instanceof Error ? err.message : "failed");
       // The preview still works; this only affects the toolbar toggle.
     }
-  }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles]);
+  }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles, writeProjectFile]);
 
   const loadOpenRouterModels = useCallback(async (retry = false): Promise<void> => {
     if (!retry && (openRouterModels.length > 0 || modelsRequestStartedRef.current)) return;
@@ -887,6 +1035,24 @@ export default function ProjectWorkspace({
       return;
     }
 
+    if (ev.type === "terminal.output") {
+      terminalEventSeqRef.current += 1;
+      setTerminalEvent({ seq: terminalEventSeqRef.current, event: ev });
+      return;
+    }
+
+    if (ev.type === "terminal.ready") {
+      terminalEventSeqRef.current += 1;
+      setTerminalEvent({ seq: terminalEventSeqRef.current, event: ev });
+      return;
+    }
+
+    if (ev.type === "terminal.exit") {
+      terminalEventSeqRef.current += 1;
+      setTerminalEvent({ seq: terminalEventSeqRef.current, event: ev });
+      return;
+    }
+
     if (ev.type === "agent.session") {
       const runtimeMeta = turnRuntimeRef.current.get(ev.turnId);
       void syncRuntimeState(ev.runtime, ev.providerSessionId, ev.modelId ?? runtimeMeta?.modelId ?? undefined);
@@ -1059,6 +1225,26 @@ export default function ProjectWorkspace({
     el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    const el = consoleOutputRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [consoleEntries]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (!isPreviewConsoleMessage(event.data)) return;
+      appendConsoleEntry({
+        level: event.data.level,
+        values: event.data.values,
+        timestamp: event.data.timestamp,
+        url: event.data.url,
+      });
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
   function onChatScroll(e: React.UIEvent<HTMLUListElement>) {
     const el = e.currentTarget;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1101,6 +1287,49 @@ export default function ProjectWorkspace({
     };
   }, [id]);
 
+  async function reloadProjectSnapshot(): Promise<Project> {
+    const res = await fetch(`/api/projects/${id}`, { cache: "no-store" });
+    const data = (await res.json().catch(() => ({}))) as { project?: Project; error?: string };
+    if (!res.ok || !data.project) {
+      throw new Error(data.error ?? `HTTP ${res.status}`);
+    }
+    setProject(data.project);
+    setChatSessions(data.project.chatSessions);
+    activateSession(data.project.chatSessions[0] ?? data.project.chatSession);
+    return data.project;
+  }
+
+  async function restartSandbox() {
+    if (sandboxRestarting || turnInFlight !== null) return;
+    setSandboxRestarting(true);
+    setSandboxRestartError(null);
+    setBrokerReadyProjectId(null);
+    setWsStatus("idle");
+    setWorkspaceWs(null);
+    wsRef.current?.close();
+    try {
+      const res = await fetch(`/api/projects/${id}/restart`, { method: "POST" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+      if (!res.ok) {
+        throw new Error(data.message ?? data.error ?? `HTTP ${res.status}`);
+      }
+      await reloadProjectSnapshot();
+      setPaths([]);
+      setRecentlyChanged(new Set());
+      setSelectedPath(null);
+      setFileContent(null);
+      setFileContentBase(null);
+      setFileListError(null);
+      setDevIndicatorEnabled(null);
+      setPreviewReloadKey((key) => key + 1);
+    } catch (err) {
+      setSandboxRestartError(err instanceof Error ? err.message : "restart failed");
+      await reloadProjectSnapshot().catch(() => {});
+    } finally {
+      setSandboxRestarting(false);
+    }
+  }
+
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
@@ -1114,14 +1343,18 @@ export default function ProjectWorkspace({
       setWsStatus("connecting");
       const ws = new WebSocket(`${base}/p/${id}`);
       currentWs = ws;
-      wsRef.current = ws;
+        wsRef.current = ws;
       ws.onopen = () => {
         if (unmounted) return;
         reconnectAttempt = 0;
         setWsStatus("open");
+        setWorkspaceWs(ws);
         setBrokerReadyProjectId(id);
-        void requestFileList();
-        void loadDevIndicatorSetting();
+        void (async () => {
+          await requestFileList();
+          await loadDevIndicatorSetting();
+          await syncPreviewConsoleBridge().catch(() => undefined);
+        })();
       };
       ws.onerror = () => {
         if (unmounted) return;
@@ -1131,6 +1364,7 @@ export default function ProjectWorkspace({
       ws.onclose = () => {
         if (unmounted) return;
         setWsStatus("closed");
+        setWorkspaceWs((current) => (current === ws ? null : current));
         setFileListLoading(false);
         for (const [requestId, entry] of pendingRef.current) {
           clearTimeout(entry.timer);
@@ -1158,9 +1392,17 @@ export default function ProjectWorkspace({
     return () => {
       unmounted = true;
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      setWorkspaceWs((current) => (current === currentWs ? null : current));
       currentWs?.close();
     };
-  }, [project?.status, id, requestFileList, loadDevIndicatorSetting]);
+  }, [
+    project?.status,
+    project?.daytonaSandboxId,
+    id,
+    requestFileList,
+    loadDevIndicatorSetting,
+    syncPreviewConsoleBridge,
+  ]);
 
   useEffect(() => {
     if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
@@ -1231,22 +1473,25 @@ export default function ProjectWorkspace({
 
   async function toggleDevIndicator() {
     if (turnInFlight !== null || devIndicatorSaving) return;
+    const configPath = resolveNextConfigPath(pathsRef.current);
     const requestId = crypto.randomUUID();
     setDevIndicatorSaving(true);
     setDevIndicatorError(null);
     try {
       const read = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
-        { type: "file.read", requestId, path: NEXT_CONFIG_PATH },
+        { type: "file.read", requestId, path: configPath },
         requestId,
       );
-      if (typeof read.content !== "string") throw new Error(read.error ?? "read failed");
-      const nextEnabled = !nextDevIndicatorsEnabled(read.content);
-      const nextConfig = setNextDevIndicators(read.content, nextEnabled);
-      await writeProjectFile(NEXT_CONFIG_PATH, nextConfig);
-      await syncDevtoolsProjectFiles(nextEnabled);
-      await applyDevIndicatorRuntime(nextEnabled);
-      setDevIndicatorEnabled(nextEnabled);
-      if (selectedPathRef.current === NEXT_CONFIG_PATH) {
+      const currentConfig = typeof read.content === "string" ? read.content : nextConfigContent();
+      const nextConfig = setNextDevIndicators(currentConfig, false);
+      await writeProjectFile(configPath, nextConfig);
+      await syncDevtoolsProjectFiles(false);
+      await applyDevIndicatorRuntime(false);
+      setDevIndicatorEnabled(false);
+      setPaths((prev) => (
+        prev.includes(configPath) ? prev : [...prev, configPath].sort()
+      ));
+      if (selectedPathRef.current === configPath) {
         setFileContent(nextConfig);
         setFileContentBase(nextConfig);
       }
@@ -1486,6 +1731,26 @@ export default function ProjectWorkspace({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {sandboxRestartError && (
+            <span
+              role="status"
+              className="hidden max-w-xs truncate text-xs text-red-200 sm:inline"
+              title={sandboxRestartError}
+            >
+              {sandboxRestartError}
+            </span>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Restart sandbox"
+            title="Restart sandbox"
+            disabled={sandboxRestarting || turnInFlight !== null}
+            onClick={() => void restartSandbox()}
+          >
+            {sandboxRestarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+          </Button>
           <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
             {turnInFlight ? "agent busy" : "ready"}
           </Badge>
@@ -1857,6 +2122,79 @@ export default function ProjectWorkspace({
               )}
             </div>
           }
+          terminal={
+            tab === "terminal" ? (
+              <div className="flex min-h-0 flex-1 flex-col bg-background">
+                <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3">
+                  <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                    <Terminal className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="truncate">Terminal</span>
+                  </div>
+                  <Badge variant={terminalStatus === "ready" ? "success" : "outline"}>
+                    {terminalStatus}
+                  </Badge>
+                </div>
+                <XtermTerminal
+                  ws={workspaceWs}
+                  wsOpen={wsOpen}
+                  disabled={turnInFlight !== null}
+                  event={terminalEvent}
+                  clearSignal={terminalClearSignal}
+                  closeSignal={terminalCloseSignal}
+                  reconnectSignal={terminalReconnectSignal}
+                  onStatusChange={setTerminalStatus}
+                />
+              </div>
+            ) : null
+          }
+          console={
+            <div className="flex min-h-0 flex-1 flex-col bg-background">
+              <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border bg-card px-3">
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                  <ScrollText className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="truncate">Preview console</span>
+                </div>
+                <Badge variant="outline">{consoleEntries.length}</Badge>
+              </div>
+              <div
+                ref={consoleOutputRef}
+                className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5 [scrollbar-gutter:stable]"
+                aria-live="polite"
+              >
+                {consoleEntries.length === 0 ? (
+                  <div className="text-muted-foreground">No console output yet.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {consoleEntries.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className={cn(
+                          "grid grid-cols-[4.75rem_4rem_minmax(0,1fr)] gap-2 rounded-md border border-border bg-card/45 px-2 py-1.5",
+                          entry.level === "warn" && "border-amber-400/30 text-amber-100",
+                          entry.level === "error" && "border-red-400/30 text-red-100",
+                        )}
+                      >
+                        <span className="select-none text-muted-foreground">
+                          {timestampLabel(entry.timestamp)}
+                        </span>
+                        <span className="select-none uppercase text-muted-foreground">
+                          {entry.level}
+                        </span>
+                        <div className="min-w-0">
+                          <pre className="whitespace-pre-wrap break-words">
+                            {entry.values.join(" ")}
+                          </pre>
+                          <div className="truncate text-[11px] text-muted-foreground" title={entry.url}>
+                            {toRelativePath(entry.url)}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          }
           codeActions={
             <Button
               type="button"
@@ -1869,6 +2207,55 @@ export default function ProjectWorkspace({
             >
               <KeyRound />
               Env
+            </Button>
+          }
+          terminalActions={
+            <>
+              {terminalStatus === "ready" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => setTerminalCloseSignal((value) => value + 1)}
+                >
+                  <Square />
+                  Stop
+                </Button>
+              )}
+              {terminalStatus === "closed" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={!wsOpen || turnInFlight !== null}
+                  onClick={() => setTerminalReconnectSignal((value) => value + 1)}
+                >
+                  <RefreshCw />
+                  Reconnect
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={terminalStatus === "offline"}
+                onClick={() => setTerminalClearSignal((value) => value + 1)}
+              >
+                <Trash2 />
+                Clear
+              </Button>
+            </>
+          }
+          consoleActions={
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={consoleEntries.length === 0}
+              onClick={() => setConsoleEntries([])}
+            >
+              <Trash2 />
+              Clear
             </Button>
           }
           previewActions={
@@ -1912,21 +2299,21 @@ export default function ProjectWorkspace({
                 <Button
                   type="button"
                   onClick={toggleDevIndicator}
-                  variant={devIndicatorEnabled === false ? "ghost" : "secondary"}
+                  variant="ghost"
                   size="xs"
                   disabled={wsStatus !== "open" || turnInFlight !== null || devIndicatorSaving}
-                  aria-pressed={devIndicatorEnabled !== false}
-                  aria-label="Toggle Next.js debug badge"
+                  aria-pressed={false}
+                  aria-label="Ensure Next.js debug badge is hidden"
                   title={
                     devIndicatorError
                       ? `Next badge: ${devIndicatorError}`
                       : devIndicatorEnabled === false
-                        ? "Show Next.js debug badge"
+                        ? "Next.js debug badge is hidden"
                         : "Hide Next.js debug badge"
                   }
                 >
                   {devIndicatorSaving ? <Loader2 className="animate-spin" /> : <Bug />}
-                  Debug
+                  Debug off
                 </Button>
                 <div
                   className="flex min-w-0 max-w-xs items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground"

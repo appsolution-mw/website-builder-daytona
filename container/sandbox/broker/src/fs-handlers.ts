@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rename, stat, unlink } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, rmdir, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FsTracker } from "./fs-tracker";
 
@@ -114,6 +114,64 @@ export async function handleFileWrite(opts: FileWriteOptions): Promise<FileWrite
     }
     return { path: opts.path, ok: false, reason: "io_error" };
   }
+  return { path: opts.path, ok: true };
+}
+
+export interface FileDeleteResult {
+  path: string;
+  ok: boolean;
+  reason?: "locked" | "not_found" | "invalid_path" | "io_error";
+}
+export interface FileDeleteOptions {
+  root: string;
+  path: string;
+  cleanupEmptyParents?: boolean;
+  isLocked: () => boolean;
+}
+
+async function removeEmptyParents(root: string, filePath: string): Promise<void> {
+  let dir = dirname(filePath);
+  while (dir !== root) {
+    const rel = relative(root, dir);
+    if (rel.startsWith("..") || isAbsolute(rel)) return;
+    try {
+      await rmdir(dir);
+    } catch {
+      return;
+    }
+    dir = dirname(dir);
+  }
+}
+
+export async function handleFileDelete(opts: FileDeleteOptions): Promise<FileDeleteResult> {
+  if (opts.isLocked()) {
+    return { path: opts.path, ok: false, reason: "locked" };
+  }
+  const abs = resolveSafe(opts.root, opts.path);
+  if (!abs) return { path: opts.path, ok: false, reason: "invalid_path" };
+
+  try {
+    const st = await stat(abs);
+    if (!st.isFile()) return { path: opts.path, ok: false, reason: "not_found" };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { path: opts.path, ok: false, reason: "not_found" };
+    return { path: opts.path, ok: false, reason: "io_error" };
+  }
+
+  if (opts.isLocked()) {
+    return { path: opts.path, ok: false, reason: "locked" };
+  }
+
+  try {
+    await unlink(abs);
+    if (opts.cleanupEmptyParents) {
+      await removeEmptyParents(resolve(opts.root), abs);
+    }
+  } catch {
+    return { path: opts.path, ok: false, reason: "io_error" };
+  }
+
   return { path: opts.path, ok: true };
 }
 

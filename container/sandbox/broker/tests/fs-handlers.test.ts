@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  handleFileDelete,
   handleFileList,
   handleFileRead,
   handleFileWrite,
@@ -154,6 +155,25 @@ describe("fs-handlers", () => {
       const { readdir } = await import("node:fs/promises");
       const entries = await readdir(root);
       expect(entries.filter((n) => n.startsWith(".tmp-"))).toEqual([]);
+    });
+  });
+
+  describe("handleFileDelete", () => {
+    it("deletes a file and removes empty parent directories when requested", async () => {
+      await mkdir(join(root, "app"), { recursive: true });
+      await writeFile(join(root, "app", "wbd-next-devtools.css"), "stale");
+
+      const r = await handleFileDelete({
+        root,
+        path: "app/wbd-next-devtools.css",
+        cleanupEmptyParents: true,
+        isLocked: () => false,
+      });
+
+      expect(r).toEqual({ path: "app/wbd-next-devtools.css", ok: true });
+      await expect(readFile(join(root, "app", "wbd-next-devtools.css"), "utf8"))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(join(root, "app"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });
