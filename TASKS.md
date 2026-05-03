@@ -1,35 +1,28 @@
-# Tasks
+# TASKS
 
-This file tracks project work with stable task IDs. Use one entry per logical
-task and reference the ID in commits and changelog entries.
+Alle Projektaufgaben werden hier mit stabiler ID, Datum und Status gepflegt.
+Jede ID soll in Plänen, Commits und Changelog-Einträgen referenziert werden.
+Bei rückwirkend aus Git und `docs/superpowers` rekonstruierten Aufgaben steht
+die Git-/Dokumentations-Evidenz in den Notizen.
 
-## T-20260503-001 — Add Project Task And Changelog Workflow
-
-- Date: 2026-05-03
-- Status: Done
-- Scope: Update `AGENTS.md` with project-specific workflow rules and introduce
-  `TASKS.md` plus `CHANGELOG.md` as the canonical lightweight project journal.
-- Plan:
-  - Keep the existing Next.js 16 warning intact.
-  - Adapt only rules that fit this project.
-  - Exclude Polytan-specific Sass, next-intl, tone, and website-content rules.
-  - Document this task in `CHANGELOG.md` after completion.
-- Result:
-  - Added the project task journal and changelog.
-  - Updated `AGENTS.md` with project-specific workflow, verification, Git, and
-    Next.js/runtime rules.
-
-## T-20260503-002 — Add Project Codex Commit Agent Config
-
-- Date: 2026-05-03
-- Status: Done
-- Scope: Review and commit the untracked `.codex/` project configuration.
-- Plan:
-  - Inspect `.codex/` for secrets and unrelated content.
-  - Adapt any copied project names or instructions to `website-builder-daytona`.
-  - Commit the `.codex/` config with matching `TASKS.md` and `CHANGELOG.md`
-    entries.
-- Result:
-  - Added project-local Codex custom-agent configuration for focused commit
-    creation.
-  - Replaced copied Polytan wording with `website-builder-daytona` wording.
+| ID | Datum | Status | Aufgabe | Plan / Skill | Notizen |
+| --- | --- | --- | --- | --- | --- |
+| T-20260422-001 | 2026-04-22 | Done | Phase 1.0 "Broker Hello" umsetzen | `docs/superpowers/plans/2026-04-22-phase-1.0-broker-hello.md`; Superpowers: writing-plans | Git-Tag `phase-1.0-broker-hello` auf `6e710e0`; Host-App, Prisma-Basis, Broker, WS-Proxy, Dashboard und Workspace-Ping umgesetzt. |
+| T-20260422-002 | 2026-04-22 | Done | Phase 1.1 Daytona-Integration umsetzen | `docs/superpowers/specs/2026-04-22-phase-1.1-daytona-integration-design.md`; `docs/superpowers/plans/2026-04-22-phase-1.1-daytona-integration.md` | Git-Tag `phase-1.1-daytona-integration` auf `54cd12e`; Daytona-Fake/Cloud-Client, Sandbox-Felder, Container-Template, Preview und Lifecycle-Endpunkte ergänzt. |
+| T-20260422-003 | 2026-04-22 | Done | Phase 1.2 Claude-Code-Agent im Container integrieren | `docs/superpowers/specs/2026-04-22-phase-1.2-claude-code-agent-design.md`; `docs/superpowers/plans/2026-04-22-phase-1.2-claude-code-agent.md` | Git-Tag `phase-1.2-claude-code-agent` auf `43cb548`; `agent.*`-Protokoll, Claude Runner, Prompt UI und Streaming-Chat umgesetzt. |
+| T-20260422-004 | 2026-04-22 | Done | Phase 1.3 Editor Layer mit Monaco, File Tree und Soft Lock umsetzen | `docs/superpowers/specs/2026-04-22-phase-1.3-editor-layer-design.md`; `docs/superpowers/plans/2026-04-22-phase-1.3-editor-layer.md` | Git-Tag `phase-1.3-editor-layer` auf `6eec222`; `file.*`-Protokoll, Chokidar-Tracking, Read/Write-Handler, Monaco-Editor und Workspace-Integration umgesetzt. |
+| T-20260422-005 | 2026-04-22 | Done | Dashboard- und Workspace-UI mit lokalen UI-Primitives auffrischen | Minimaler UI-Update; Git-Review | Git-Commits `d20489f` und `1ff1bda`; shadcn-orientierte UI-Primitives und überarbeitete Dashboard-/Workspace-Oberflächen ergänzt. |
+| T-20260422-006 | 2026-04-22 | Done | Phase 1.2b Multi-Agent-Team und Reviewer-Pipeline umsetzen | `docs/superpowers/specs/2026-04-22-phase-1.2b-multi-agent-team-design.md`; `docs/superpowers/plans/2026-04-22-phase-1.2b-multi-agent-team.md` | Git-Tag `phase-1.2b-multi-agent-team` auf `991b144`; Agent-Rollen, `agentId`-Tagging, Reviewer-Pass und per-agent Chat UI umgesetzt. |
+| T-20260423-001 | 2026-04-23 | Done | Claude-Sessions und Usage-Telemetrie persistieren | Git-Review; fokussierte Tests | Git-Commits `ad92d67`, `2e14d0e`, `4fc4d3d`; Session-/Usage-Flows getestet und Claude-Konfiguration dokumentiert. |
+| T-20260423-002 | 2026-04-23 | Done | OpenAI-Codex-Agent-Runtime ergänzen und Runtime-Optionen dokumentieren | `docs/AGENT_RUNTIME_OPTIONS.md`; Git-Review | Git-Commits `323b9d1`, `677ff64`; Codex-Runtime und Agent-Runtime-Konfiguration dokumentiert. |
+| T-20260423-003 | 2026-04-23 | Done | Multi-Runtime-Broker, Runtime-State und runtime-aware Workspace-Chat ergänzen | `docs/AGENT_RUNTIME_OPTIONS.md`; Git-Review | Git-Commits `dd8dec0`, `76072cb`, `ca2cb46`, `39142f6`; mehrere Agent-Runtimes im Broker und persisted runtime state ergänzt. |
+| T-20260428-001 | 2026-04-28 | Done | Phase H.1 Hetzner-/Multi-Cloud-Runtime spezifizieren | `docs/superpowers/specs/2026-04-27-phase-h.1-hetzner-runtime-design.md` | Git-Commit `526ae1b`; Design-Spec für Worker, Provisioner, Scheduler, Sandbox-Lifecycle und Sub-Phasen ergänzt. |
+| T-20260428-002 | 2026-04-28 | Done | Phase H.1a Foundation für Runtime-Abstraktion und Worker-Pool umsetzen | `docs/superpowers/plans/2026-04-27-phase-h.1a-foundation.md`; Superpowers: writing-plans | Git-Commits `1307528` bis `b7228a4`; Prisma-Worker-Modelle, Runtime/Scheduler/Provisioner-Interfaces, FakeProvisioner, SimpleScheduler und `createRuntime` umgesetzt. |
+| T-20260428-003 | 2026-04-28 | Done | Phase H.1b Sandbox-Image, Worker-Agent und LocalDocker-Runtime umsetzen | `docs/superpowers/specs/2026-04-28-phase-h.1b-sandbox-image-worker-agent-design.md`; `docs/superpowers/plans/2026-04-28-phase-h.1b-sandbox-image-worker-agent.md` | Git-Tag `phase-h.1b-sandbox-image-worker-agent` auf `bc158c9`; Worker-Agent, HMAC, Docker-Sandbox-Lifecycle, pre-built Sandbox-Image, WorkerPoolRuntime und CI ergänzt. |
+| T-20260428-004 | 2026-04-28 | Done | H.1b-Abschluss und Übergabe für H.1c dokumentieren | `docs/superpowers/HANDOVER-2026-04-28-phase-h.1b-to-h.1c.md` | Git-Commit `8e11524`; Handover, Verification Evidence, Follow-ups und Guardrails für H.1c dokumentiert. |
+| T-20260429-001 | 2026-04-29 | Done | OpenHands-Runtime und OpenRouter-Model-Picker integrieren | `docs/superpowers/specs/2026-04-29-openhands-runtime-openrouter-model-picker-design.md`; `docs/superpowers/plans/2026-04-29-openhands-runtime-openrouter-model-picker.md` | Git-Commits `dcbf09b` bis `da6e167`; OpenHands-Runtime, OpenRouter-Modellkatalog, Model Picker, Python Bridge und Runtime-Dokumentation umgesetzt. |
+| T-20260429-002 | 2026-04-29 | Done | Globale OpenHands Library mit Revisionen, Presets und Session-Snapshots umsetzen | `docs/superpowers/specs/2026-04-29-global-openhands-library-design.md`; `docs/superpowers/plans/2026-04-29-global-openhands-library.md` | Git-Commits `f4ac79e` bis `27d2f10`; Library-Datenmodell, Revision-Service, Import/Export, API, Snapshot-Integration, Preset-Auswahl und Library UI ergänzt. |
+| T-20260430-001 | 2026-04-30 | Done | Runtime-, Worker-Pool- und Test-Stabilisierung nach OpenHands/Library-Integration | Git-Review; fokussierte Tests | Git-Commits `b13e80b` bis `5954f63`; DB-Testisolierung, Modellfilter, orphan sandbox cleanup, Worker-Agent-URL, Docker-Portvergabe, HMAC-Tests und ESLint-Worktree-Ignores korrigiert. |
+| T-20260503-001 | 2026-05-03 | Done | Projektweites Task-Journal und Changelog einführen | Minimaler Dokumentations-Update; Git-Workflow-Abgleich | Git-Commit `ad57a28`; `TASKS.md`, `CHANGELOG.md` und projektweite Workflow-Regeln in `AGENTS.md` ergänzt. |
+| T-20260503-002 | 2026-05-03 | Done | Projektlokalen Codex Git-Commit-Agent konfigurieren | `.codex/config.toml`; `.codex/agents/git-commit-manager.toml` | Git-Commit `0a29656`; Commit-Agent für fokussierte Conventional Commits in `website-builder-daytona` ergänzt. |
+| T-20260503-003 | 2026-05-03 | Done | Task-Journal und Changelog anhand Git-Historie und Superpowers-Dokumenten backfillen | Superpowers: using-superpowers, writing-plans; Git- und Docs-Abgleich | Diese Strukturübersicht ersetzt die ausführlichen Einzelnotizen; `CHANGELOG.md` und `AGENTS.md` wurden passend aktualisiert. |

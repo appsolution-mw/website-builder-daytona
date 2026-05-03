@@ -25,15 +25,24 @@ rule block above intact.
 ## Task Journal
 
 - `TASKS.md` is the source of truth for active and completed work.
-- `CHANGELOG.md` summarizes completed work by task.
+- `TASKS.md` must stay a structural overview table, not a detailed execution
+  log. Use the columns `ID`, `Datum`, `Status`, `Aufgabe`, `Plan / Skill`, and
+  `Notizen`.
+- `CHANGELOG.md` summarizes completed work by task ID.
 - Before every non-trivial task, add or update a `TASKS.md` entry:
   - Use a stable ID in the format `T-YYYYMMDD-001`.
   - Set the status to `Planned` or `In Progress`.
-  - Document the scope and intended approach briefly.
+  - Document the scope and intended approach briefly in one table row.
 - After completing a task:
   - Set the task status to `Done`, or `Blocked` if it cannot be completed.
   - Add a concise `CHANGELOG.md` entry that references the task ID.
 - Reference the task ID in commits and related documentation.
+- For backfilled historical work, derive task rows from Git tags, Git commits,
+  and `docs/superpowers/specs` or `docs/superpowers/plans`. If old commits do
+  not contain a task ID, record the tag or commit range in `Notizen` instead of
+  rewriting history.
+- Keep implementation detail in plans, specs, PRs, and commit history. Do not
+  expand `TASKS.md` into multi-step task plans.
 - Minimal one-command inspections do not need a new task entry. Any code,
   documentation, schema, config, or workflow change does.
 
