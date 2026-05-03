@@ -6,6 +6,14 @@ Einzelcommit.
 
 ## 2026-05-03
 
+### T-20260503-004 - Sub-Agent-Delegation und Reasoning-Auswahl präzisiert
+
+- `AGENTS.md` um eine klare Sub-Agent-Delegationsregel ergänzt.
+- Kriterien ergänzt, wann Arbeit lokal bleiben soll und wann sie auf
+  Sub-Agents verteilt werden muss.
+- Reasoning-Auswahl pro Sub-Agent mit `medium` und `high` nach Komplexität,
+  Risiko und benötigtem Urteilsvermögen definiert.
+
 ### T-20260503-003 - Task-Journal und Changelog backfilled
 
 - `TASKS.md` anhand Git-Tags, Git-Commits und `docs/superpowers` als strukturelle

@@ -46,6 +46,33 @@ rule block above intact.
 - Minimal one-command inspections do not need a new task entry. Any code,
   documentation, schema, config, or workflow change does.
 
+## Sub-Agent Delegation
+
+- Split work across sub-agents whenever the task has independent parts that can
+  be handled in parallel or by focused roles. Good candidates include separate
+  code areas, independent investigations, implementation plus verification, or
+  plan/spec review plus execution.
+- Keep work local when the change is small, tightly coupled, urgent on the
+  critical path, or when delegation would add coordination overhead without
+  improving speed or quality.
+- Decide and state the delegation strategy before implementation for
+  non-trivial work: which parts stay local, which parts go to sub-agents, and
+  why.
+- Give each sub-agent a bounded ownership area, expected output, verification
+  command, and relevant files or docs. Sub-agents are not alone in the codebase;
+  they must not revert unrelated edits and must coordinate with existing
+  changes.
+- Choose reasoning effort per sub-agent based on task complexity:
+  - Use `medium` for bounded implementation, focused codebase questions,
+    mechanical documentation updates, and low-risk verification.
+  - Use `high` for architecture, broad codebase analysis, runtime/broker/DB
+    changes, security-sensitive work, ambiguous requirements, debugging with
+    unclear root cause, or review tasks that require judgment across multiple
+    files.
+- If a sub-agent reports uncertainty, missing context, or a blocker, either
+  provide more context, increase reasoning effort, split the task smaller, or
+  handle the blocker locally. Do not retry the same unclear prompt unchanged.
+
 ## Commands
 
 - Install dependencies with `pnpm install`.
