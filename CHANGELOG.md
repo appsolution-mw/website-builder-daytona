@@ -6,6 +6,15 @@ Einzelcommit.
 
 ## 2026-05-03
 
+### T-20260503-006 - Implementation-Plan für GitHub-Auth-Integration erstellt
+
+- Implementation-Plan für Better Auth, GitHub App, private Repo-Imports,
+  Sandbox-Boot aus Branches und PR-Erstellung ergänzt.
+- Taskfolge mit Sub-Agent-Schnitten, Datei-Zuständigkeiten, Testschritten und
+  Commit-Grenzen dokumentiert.
+- Next.js-16-Route-Handler-/Proxy-Hinweise und die freigegebene Design-Spec als
+  Planungsgrundlage referenziert.
+
 ### T-20260503-005 - Better-Auth- und GitHub-App-Integration geplant
 
 - Design-Spec für Email/Passwort-Login, GitHub Social Login und Better Auth
