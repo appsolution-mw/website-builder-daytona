@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 
 const MAX_ENV_BYTES = 64 * 1024;
 
@@ -12,10 +13,6 @@ type EnvironmentResponse = {
   updatedAt: string | null;
 };
 
-function devUserId(): string {
-  return process.env.DEV_USER_ID ?? "dev-user";
-}
-
 function environmentJson(body: EnvironmentResponse): NextResponse {
   return NextResponse.json(body, {
     headers: { "Cache-Control": "no-store" },
@@ -26,20 +23,23 @@ function contentByteLength(content: string): number {
   return new TextEncoder().encode(content).byteLength;
 }
 
-async function findOwnedProject(projectId: string): Promise<{ id: string } | null> {
+async function findOwnedProject(projectId: string, ownerId: string): Promise<{ id: string } | null> {
   return prisma.project.findFirst({
-    where: { id: projectId, ownerId: devUserId() },
+    where: { id: projectId, ownerId },
     select: { id: true },
   });
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: RouteParams,
 ): Promise<NextResponse> {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
   const project = await prisma.project.findFirst({
-    where: { id, ownerId: devUserId() },
+    where: { id, ownerId: currentUser.user.id },
     select: {
       environment: {
         select: {
@@ -68,8 +68,11 @@ export async function PUT(
   request: Request,
   { params }: RouteParams,
 ): Promise<NextResponse> {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
-  const project = await findOwnedProject(id);
+  const project = await findOwnedProject(id, currentUser.user.id);
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }

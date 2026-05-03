@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createRuntime, createDaytonaRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
 const DEFAULT_SESSION_TITLE = "Main chat";
 
@@ -77,12 +77,15 @@ async function isFakePreviewReachable(previewUrl: string | null): Promise<boolea
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
   let project = await prisma.project.findFirst({
-    where: { id, ownerId: DEV_USER_ID },
+    where: { id, ownerId: currentUser.user.id },
   });
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -130,12 +133,15 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
   const project = await prisma.project.findFirst({
-    where: { id, ownerId: DEV_USER_ID },
+    where: { id, ownerId: currentUser.user.id },
   });
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });

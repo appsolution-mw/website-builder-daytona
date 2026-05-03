@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import {
   ArrowLeft,
   BarChart3,
@@ -12,9 +13,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { currentUserFromServerHeaders } from "@/lib/auth/current-user";
 import { prisma } from "@/lib/db/client";
-
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 
 export const dynamic = "force-dynamic";
 
@@ -77,9 +77,12 @@ function sumProjects(projects: ProjectUsage[]) {
 }
 
 export default async function UsageDashboard() {
+  const currentUser = await currentUserFromServerHeaders();
+  if (!currentUser) redirect("/sign-in");
+
   const [projects, recentTurns] = await Promise.all([
     prisma.project.findMany({
-      where: { ownerId: DEV_USER_ID },
+      where: { ownerId: currentUser.id },
       orderBy: { lastActive: "desc" },
       select: {
         id: true,
@@ -103,7 +106,7 @@ export default async function UsageDashboard() {
     prisma.tokenUsage.findMany({
       where: {
         label: "TURN",
-        project: { ownerId: DEV_USER_ID },
+        project: { ownerId: currentUser.id },
       },
       orderBy: { createdAt: "desc" },
       take: 10,

@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { fetchOpenRouterModels, type OpenRouterModelOption } from "@/lib/openrouter/models";
-
-function devUserId(): string {
-  return process.env.DEV_USER_ID ?? "dev-user";
-}
 
 function normalizeConfiguredModelId(modelId: string): string {
   return modelId.startsWith("openrouter/") ? `openrouter:${modelId.slice("openrouter/".length)}` : modelId;
@@ -49,12 +46,15 @@ function mergeModels(
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
   const project = await prisma.project.findFirst({
-    where: { id, ownerId: devUserId() },
+    where: { id, ownerId: currentUser.user.id },
     select: { id: true },
   });
   if (!project) {

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { AgentRuntime as PrismaAgentRuntime, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createRuntime } from "@/lib/runtime";
 import {
   AGENT_RUNTIME_OPTIONS,
@@ -10,7 +11,6 @@ import {
 } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
 const SANITIZED_PROVISIONING_ERROR = "sandbox provisioning failed";
@@ -75,9 +75,12 @@ function contentByteLength(content: string): number {
   return new TextEncoder().encode(content).byteLength;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const projects = await prisma.project.findMany({
-    where: { ownerId: DEV_USER_ID },
+    where: { ownerId: currentUser.user.id },
     orderBy: { lastActive: "desc" },
     select: projectSelect,
   });
@@ -87,6 +90,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const body = (await request.json().catch(() => ({}))) as {
     name?: unknown;
     runtime?: unknown;
@@ -143,7 +149,7 @@ export async function POST(request: NextRequest) {
       const project = await tx.project.create({
         data: {
           name,
-          ownerId: DEV_USER_ID,
+          ownerId: currentUser.user.id,
           status: "PROVISIONING",
           agentRuntime: protocolRuntimeToDb(runtime),
           desiredRuntime: protocolRuntimeToDb(runtime),

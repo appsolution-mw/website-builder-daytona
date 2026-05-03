@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
-
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
   const project = await prisma.project.findFirst({
-    where: { id, ownerId: DEV_USER_ID },
+    where: { id, ownerId: currentUser.user.id },
     select: { id: true },
   });
   if (!project) {
