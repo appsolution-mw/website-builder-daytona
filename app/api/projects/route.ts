@@ -69,6 +69,14 @@ function serializeProject(project: {
   };
 }
 
+async function projectEnvContent(projectId: string): Promise<string | undefined> {
+  const row = await prisma.projectEnvironment.findUnique({
+    where: { projectId },
+    select: { content: true },
+  });
+  return row?.content || undefined;
+}
+
 export async function GET() {
   const projects = await prisma.project.findMany({
     where: { ownerId: DEV_USER_ID },
@@ -136,6 +144,7 @@ export async function POST(request: NextRequest) {
         cloneToken,
         repoOwner,
         repoName,
+        projectEnvContent: await projectEnvContent(project.id),
       }),
       new Promise<never>((_, reject) =>
         setTimeout(

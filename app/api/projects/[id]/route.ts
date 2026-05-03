@@ -51,6 +51,14 @@ async function listProjectSessions(projectId: string) {
   });
 }
 
+async function projectEnvContent(projectId: string): Promise<string | undefined> {
+  const row = await prisma.projectEnvironment.findUnique({
+    where: { projectId },
+    select: { content: true },
+  });
+  return row?.content || undefined;
+}
+
 async function isFakePreviewReachable(previewUrl: string | null): Promise<boolean> {
   if (!previewUrl) return false;
   const controller = new AbortController();
@@ -93,6 +101,7 @@ export async function GET(
       cloneToken: "",
       repoOwner: "",
       repoName: "",
+      projectEnvContent: await projectEnvContent(project.id),
     });
     project = await prisma.project.update({
       where: { id: project.id },
