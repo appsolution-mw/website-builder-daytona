@@ -123,6 +123,34 @@ describe("WorkerPoolRuntime", () => {
     });
   });
 
+  it("keeps project GitHub source env ahead of legacy global clone env", async () => {
+    const handles = createFakeAgentClient();
+    const r = createWorkerPoolRuntime({
+      ...RUNTIME_ARGS(handles),
+      brokerEnv: () => ({
+        GITHUB_REPO_OWNER: "legacy-owner",
+        GITHUB_REPO_NAME: "legacy-repo",
+      }),
+    });
+
+    await r.spawnProjectSandbox({
+      projectId: await project(),
+      source: {
+        type: "github",
+        installationId: "123",
+        owner: "project-owner",
+        repo: "project-repo",
+        branch: "main",
+        token: "installation-token",
+      },
+    });
+
+    expect(handles.requests()[0]?.env).toMatchObject({
+      GITHUB_REPO_OWNER: "project-owner",
+      GITHUB_REPO_NAME: "project-repo",
+    });
+  });
+
   it("omits project dotenv env when content is empty", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));

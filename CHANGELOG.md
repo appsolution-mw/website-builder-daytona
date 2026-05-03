@@ -6,6 +6,16 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-006 - GitHub-Repo-Quelle im lokalen Worker-Sandbox-Start korrigiert
+
+- Root Cause untersucht: alte globale GitHub-Clone-Env-Werte überschrieben die
+  projektspezifische Repo-Auswahl beim lokalen Worker-Sandbox-Start.
+- Worker-Pool-Runtime so angepasst, dass die gewählte Projektquelle Vorrang vor
+  legacy Broker-Env-Werten hat.
+- Regressionstest für diesen Env-Precedence-Fall ergänzt.
+- Lokales Sandbox-Image neu gebaut und das Paramount-Projekt aus dem gewählten
+  GitHub-Repo neu gespawnt.
+
 ### T-20260504-005 - GitHub-Login ohne öffentliche E-Mail stabilisiert
 
 - `email_not_found` beim GitHub-OAuth-Callback untersucht und auf fehlende

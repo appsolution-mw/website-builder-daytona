@@ -40,8 +40,8 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
-        ...sourceEnv(spawn.source),
         ...args.brokerEnv?.(),
+        ...sourceEnv(spawn.source),
       };
       if (spawn.projectEnvContent) {
         env.PROJECT_ENV_B64 = Buffer.from(spawn.projectEnvContent, "utf8").toString("base64");
