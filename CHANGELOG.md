@@ -6,6 +6,12 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-002 - GitHub-Auth-Env-Platzhalter ergänzt
+
+- Better-Auth- und GitHub-App-Platzhalter in `.env.example` dokumentiert.
+- Dieselben leeren Platzhalter lokal in `.env` ergänzt, ohne echte
+  Secret-Werte einzutragen.
+
 ### T-20260504-001 - Turbopack-NFT-Warnung behoben
 
 - Dynamisches Worker-Pool-Env-Dateitracing für Turbopack markiert.
