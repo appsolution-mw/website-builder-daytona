@@ -36,8 +36,17 @@ model Project {
   sessionRuntimeStates SessionRuntimeState[]
   messages             Message[]
   tokenUsages          TokenUsage[]
+  environment          ProjectEnvironment?
 
   @@index([ownerId])
+}
+
+model ProjectEnvironment {
+  projectId String   @id
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  content   String   @db.Text
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
 }
 
 enum ProjectStatus {
