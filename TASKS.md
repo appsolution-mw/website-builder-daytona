@@ -18,3 +18,18 @@ task and reference the ID in commits and changelog entries.
   - Added the project task journal and changelog.
   - Updated `AGENTS.md` with project-specific workflow, verification, Git, and
     Next.js/runtime rules.
+
+## T-20260503-002 — Add Project Codex Commit Agent Config
+
+- Date: 2026-05-03
+- Status: Done
+- Scope: Review and commit the untracked `.codex/` project configuration.
+- Plan:
+  - Inspect `.codex/` for secrets and unrelated content.
+  - Adapt any copied project names or instructions to `website-builder-daytona`.
+  - Commit the `.codex/` config with matching `TASKS.md` and `CHANGELOG.md`
+    entries.
+- Result:
+  - Added project-local Codex custom-agent configuration for focused commit
+    creation.
+  - Replaced copied Polytan wording with `website-builder-daytona` wording.

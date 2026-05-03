@@ -11,3 +11,9 @@ work; it does not need to list every small diff.
 - Added `CHANGELOG.md` for concise completed-work summaries.
 - Expanded `AGENTS.md` with rules tailored to this project and excluded
   unrelated Polytan-specific Sass, next-intl, tone, and website-content rules.
+
+### T-20260503-002 — Added Project Codex Commit Agent Config
+
+- Added `.codex/config.toml` and `.codex/agents/git-commit-manager.toml`.
+- Adapted the commit-agent wording from the source project to
+  `website-builder-daytona`.
