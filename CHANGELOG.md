@@ -6,6 +6,61 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-014 - Workspace-Terminal auf interaktives xterm.js-PTY umgestellt
+
+- Workspace-Terminal von Command-Formular auf xterm.js-Frontend mit
+  `@xterm/xterm` und Fit-Addon umgestellt.
+- Broker um interaktive `node-pty`-Sessions mit `terminal.open`,
+  `terminal.input`, `terminal.resize` und `terminal.close` erweitert.
+- Sandbox-Image-Build so angepasst, dass `node-pty` nativ gebaut wird; neue
+  Sandboxes starten explizit eine interaktive Bash, wenn `/bin/bash` vorhanden
+  ist.
+- WebSocket-Test deckt PTY-Start, Eingabe, Resize, Output und Close ab.
+
+### T-20260504-013 - Workspace-Terminal und Preview-Console ergänzt
+
+- Broker-Protokoll um `terminal.run`, `terminal.abort`, `terminal.output` und
+  `terminal.exit` ergänzt; Befehle laufen im Sandbox-Projekt-Root und werden
+  während Agent-Turns gelockt.
+- Workspace-Rechtsbereich um `Terminal`- und `Console`-Tabs mit Output,
+  Abbruch-/Clear-Aktionen und begrenztem In-Memory-Verlauf erweitert.
+- Preview-Apps erhalten automatisch eine kleine Client-Bridge, die
+  `console.*`, `error` und `unhandledrejection` per `postMessage` an die
+  Host-Console meldet.
+
+### T-20260504-012 - Sandbox-Neustart per Workspace-UI ergänzt
+
+- Projektbezogenen Restart-Endpunkt ergänzt, der die aktuelle Sandbox zerstört
+  und aus derselben Template- oder GitHub-Quelle neu spawnt.
+- Gespeicherte Projekt-`.env` wird beim Neustart wieder an die Sandbox
+  übergeben; GitHub-Projekte erhalten dafür einen frischen Installation-Token.
+- Workspace-Header um einen Restart-Button mit Ladezustand und Fehlermeldung
+  ergänzt.
+
+### T-20260504-011 - Next-Config-Erkennung für dauerhaft deaktivierte DevIndicators erweitert
+
+- Unterstützte Next-Config-Dateinamen nach Next-Doku berücksichtigt:
+  `next.config.js`, `next.config.mjs` und `next.config.ts`.
+- Workspace-Devtools-Sync erkennt vorhandene Config-Dateien, erstellt bei
+  fehlender Config `next.config.ts` und setzt `devIndicators` immer auf `false`.
+- Debug-Button kann den Zustand nur noch reparieren/auffrischen, nicht mehr auf
+  sichtbar toggeln.
+
+### T-20260504-010 - Veraltete Top-Level-Devtools-Dateien bei `src/app`-Previews bereinigt
+
+- Root Cause des `PageNotFoundError ... route not found /page` behoben:
+  veraltetes `app/wbd-next-devtools.css` wird bei `src/app`-Projekten entfernt.
+- Broker-Protokoll um `file.delete` ergänzt, inklusive Cleanup leerer
+  Parent-Verzeichnisse.
+- Devtools-Sync schreibt erst nach geladener File-Liste und erzeugt ohne
+  bekanntes Layout keinen blinden Top-Level-`app/`-Fallback mehr.
+
+### T-20260504-009 - Doppelte Next.js-Devtools-Anzeige in Projekt-Preview behoben
+
+- Next.js-Dev-Indikator der Host-App deaktiviert, damit neben dem Sandbox-Iframe
+  kein zweites Host-Devtools-Badge erscheint.
+- Regressionstest für die Host-Next-Konfiguration ergänzt.
+
 ### T-20260504-008 - Projekt-Env-Editor in der Workspace-UI sichtbarer gemacht
 
 - `Env`-Button zusätzlich in die Preview-Toolbar aufgenommen, damit
