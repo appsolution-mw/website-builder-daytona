@@ -10,7 +10,6 @@ import {
   Clock3,
   FolderKanban,
   GitBranch,
-  Github,
   LogOut,
   Loader2,
   Plus,
@@ -499,7 +498,7 @@ export default function Dashboard() {
                     size="sm"
                     onClick={() => setSourceType("github")}
                   >
-                    <Github />
+                    <GitBranch />
                     GitHub
                   </Button>
                 </div>
@@ -509,7 +508,7 @@ export default function Dashboard() {
                 <div className="grid gap-3 rounded-lg border border-border bg-secondary/25 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-sm font-medium">
-                      <Github className="size-4" />
+                      <GitBranch className="size-4" />
                       GitHub source
                     </div>
                     <div className="flex gap-2">

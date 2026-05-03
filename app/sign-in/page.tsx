@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState, useTransition } from "react";
-import { Github, Loader2, LockKeyhole, Mail, UserRound } from "lucide-react";
+import { GitBranch, Loader2, LockKeyhole, Mail, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,7 +76,7 @@ export default function SignInPage() {
             disabled={isPending}
             onClick={signInWithGitHub}
           >
-            <Github />
+            <GitBranch />
             Continue with GitHub
           </Button>
 
