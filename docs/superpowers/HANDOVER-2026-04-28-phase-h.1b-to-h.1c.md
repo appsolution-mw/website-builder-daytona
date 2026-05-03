@@ -3,14 +3,14 @@
 **Date:** 2026-04-28  
 **Repo:** `/Volumes/Extern/Projekte/website-builder-daytona`  
 **Current branch:** `main`  
-**Remote state:** `main` pushed to `origin/main` at `bc158c9`  
+**Remote state:** `main` pushed to `origin/main` at `5954f63`  
 **Phase just completed:** H.1b — Pre-built Sandbox-Image + Worker-Agent + LocalDocker-Runtime  
 
 ## Current State
 
-Phase H.1b is implemented, merged to `main`, and pushed.
+Phase H.1b is implemented, merged to `main`, tagged, and pushed.
 
-The local feature branch `feat/phase-h.1b-sandbox-image-worker-agent` was deleted after the merge. The phase tag `phase-h.1b-sandbox-image-worker-agent` has not been created yet.
+The local feature branch `feat/phase-h.1b-sandbox-image-worker-agent` was deleted after the merge. The phase tag `phase-h.1b-sandbox-image-worker-agent` exists locally and on `origin`, pointing at `bc158c9`.
 
 Relevant docs:
 - `docs/superpowers/specs/2026-04-28-phase-h.1b-sandbox-image-worker-agent-design.md`
@@ -73,11 +73,6 @@ Final verification on `main`:
 
 ## Known Follow-Ups
 
-- Create and push optional phase tag:
-  ```bash
-  git tag -a phase-h.1b-sandbox-image-worker-agent -m "Phase H.1b: pre-built sandbox image + worker-agent + WorkerPoolRuntime"
-  git push origin phase-h.1b-sandbox-image-worker-agent
-  ```
 - Docker integration test has a transient host-port race:
   - symptom: Docker reports `Bind for 0.0.0.0:<port> failed: port is already allocated`
   - immediate workaround: rerun `pnpm test`
