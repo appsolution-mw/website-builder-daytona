@@ -6,6 +6,15 @@ Einzelcommit.
 
 ## 2026-05-03
 
+### T-20260503-005 - Better-Auth- und GitHub-App-Integration geplant
+
+- Design-Spec für Email/Passwort-Login, GitHub Social Login und Better Auth
+  erstellt.
+- GitHub App als Repo-Zugriffsschicht für persönliche Accounts und
+  Organisationen festgelegt.
+- Repo-Import, Sandbox-Boot aus Branch und Branch-/Commit-/PR-Flow als erster
+  produktiver Milestone abgegrenzt.
+
 ### T-20260503-004 - Sub-Agent-Delegation und Reasoning-Auswahl präzisiert
 
 - `AGENTS.md` um eine klare Sub-Agent-Delegationsregel ergänzt.

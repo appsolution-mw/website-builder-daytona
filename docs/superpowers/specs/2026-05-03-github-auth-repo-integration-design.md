@@ -1,0 +1,453 @@
+# Better Auth and GitHub App Repo Integration Design
+
+Task ID: T-20260503-005  
+Date: 2026-05-03  
+Status: Approved design, ready for implementation planning
+
+## 1. Goal
+
+Enable real users to sign in to Website Builder Daytona, connect GitHub, import
+existing private or public Next.js repositories from personal accounts and
+organizations, edit them in the existing sandbox workspace, and push changes
+back through a branch and pull request.
+
+The first milestone must be useful end to end, but it must not become a full
+GitHub product clone. The scope is auth, GitHub App installation, repository
+selection, sandbox boot from a selected branch, and pull request creation.
+
+## 2. Decisions
+
+- App authentication uses Better Auth.
+- Users can sign in with email/password and with GitHub social login.
+- GitHub social login is for identity only.
+- Repository access uses a GitHub App installation, not OAuth `repo` scopes or
+  personal access tokens.
+- The GitHub App supports installations on personal accounts and organizations.
+- The app stores GitHub installation and repository metadata, but does not store
+  long-lived clone tokens.
+- GitHub installation access tokens are generated server-side only when needed.
+- Current `DEV_USER_ID` behavior remains only as an explicit local/test fallback
+  until all protected routes are migrated.
+
+## 3. Current Project Context
+
+The app is a Next.js 16 App Router project with Prisma, multiple agent runtimes,
+a sandbox runtime abstraction, a Docker-based worker-agent path, and a Daytona
+Cloud compatibility path.
+
+Current limitations:
+
+- `Project.ownerId` points at the local `User` model, but API routes use a fixed
+  `DEV_USER_ID`.
+- There is no session-aware auth layer.
+- New projects are created from a name only.
+- Daytona Cloud can download a single configured GitHub tarball through
+  `GITHUB_CLONE_TOKEN`, `GITHUB_REPO_OWNER`, and `GITHUB_REPO_NAME`.
+- Worker-pool sandboxes currently seed `/workspace/project` from
+  `/opt/project-template`.
+- The sandbox image already includes `git`, `ca-certificates`, Node, pnpm, agent
+  runtimes, and the broker.
+
+## 4. External References
+
+- Better Auth documents the Next.js App Router handler at
+  `/api/auth/[...all]` and `toNextJsHandler(auth)`.
+- Better Auth documents a Prisma adapter package and schema generation support.
+- Better Auth supports social OAuth providers, including GitHub.
+- GitHub App user access tokens are different from installation access tokens
+  and can be limited by both app permissions and user access.
+- GitHub App installation access tokens are the right primitive for repository
+  access owned by a personal account or organization installation.
+
+References:
+
+- https://better-auth.com/docs/integrations/next
+- https://better-auth.com/docs/adapters/prisma
+- https://better-auth.com/docs/concepts/oauth
+- https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app
+- https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28
+
+## 5. Product Flow
+
+### 5.1 Authentication
+
+Unauthenticated users see a sign-in page with:
+
+- Email/password sign in.
+- Email/password sign up.
+- GitHub sign in.
+
+After sign-in, users land on the dashboard. Protected API routes resolve the
+current user from Better Auth session headers, not from `DEV_USER_ID`.
+
+GitHub social login may use a dedicated OAuth app or the GitHub App's OAuth
+client credentials. In either case, these credentials are only for app sign-in.
+Repository operations must go through GitHub App installation tokens.
+
+### 5.2 GitHub Connection
+
+The dashboard shows a GitHub connection state:
+
+- Not connected: show "Connect GitHub".
+- Connected with no installation: show "Install GitHub App".
+- Connected with installations: show available personal and organization
+  installations.
+
+The install flow redirects to GitHub's GitHub App installation page. The
+callback stores the installation ID, account login, account type, avatar URL,
+repository selection mode, and the user who connected it.
+
+The callback must validate a signed `state` value tied to the current user. It
+must also verify the returned installation through GitHub before persisting it.
+
+### 5.3 Repository Import
+
+The "New project" surface becomes an import workflow:
+
+1. Select a GitHub installation.
+2. Search or page through repositories available to that installation.
+3. Select repository.
+4. Select base branch, defaulting to the GitHub default branch.
+5. Create project.
+
+The app creates a `Project` row with GitHub origin metadata, creates the initial
+chat session, then starts the existing sandbox provisioning flow.
+
+### 5.4 Sandbox Boot
+
+The runtime spawn contract is extended to accept a project source:
+
+- `template`: current fallback behavior.
+- `github`: installation ID, owner, repo, base branch, optional commit SHA, and
+  a short-lived token generated by the host.
+
+Worker-pool sandboxes should receive source metadata and a token through
+environment variables or a small boot manifest. The sandbox entrypoint clones
+the selected repo into `/workspace/project` before starting `pnpm dev` and the
+broker. If no GitHub source exists, it keeps the current template behavior.
+
+Daytona Cloud can keep its tarball download approach temporarily, but the
+per-project token and repo metadata must replace the global
+`GITHUB_CLONE_TOKEN` variables.
+
+### 5.5 Save Back to GitHub
+
+The first save-back flow is explicit and simple:
+
+1. User clicks "Create PR" or "Save to GitHub".
+2. Server asks the sandbox for the current git diff or receives a patch/commit
+   request from a broker endpoint.
+3. Server creates or updates a working branch using a GitHub App installation
+   token.
+4. Server commits changed files.
+5. Server opens a pull request against the selected base branch.
+6. UI shows the PR URL and project GitHub state.
+
+The default branch name should be deterministic and collision-resistant, for
+example `wbd/<project-id>-<short-date>` or `wbd/<project-id>/<slug>`.
+
+## 6. Data Model
+
+Better Auth schema generation should be used for the auth tables, then reviewed
+and merged into `prisma/schema.prisma` with project-specific relations kept
+explicit.
+
+Existing `User` should be aligned with Better Auth rather than duplicated. If
+Better Auth expects lowercase model names or fields that conflict with the
+current model, use Better Auth field/model mapping rather than creating two user
+tables.
+
+New project-specific models:
+
+```prisma
+model GitHubInstallation {
+  id                    String   @id @default(cuid())
+  ownerId               String
+  owner                 User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  installationId        BigInt
+  accountLogin          String
+  accountType           String
+  accountAvatarUrl      String?
+  repositorySelection   String
+  suspendedAt           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  repositories          GitHubRepository[]
+
+  @@unique([ownerId, installationId])
+  @@index([installationId])
+}
+
+model GitHubRepository {
+  id              String             @id @default(cuid())
+  installationId  String
+  installation    GitHubInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  githubRepoId     BigInt
+  ownerLogin       String
+  name             String
+  fullName         String
+  private          Boolean
+  defaultBranch    String
+  lastSyncedAt     DateTime?
+
+  @@unique([installationId, githubRepoId])
+  @@index([fullName])
+}
+```
+
+`Project` should gain source fields:
+
+```prisma
+sourceType           ProjectSourceType @default(TEMPLATE)
+githubInstallationId String?
+githubRepositoryId   String?
+githubOwner          String?
+githubRepo           String?
+githubBaseBranch     String?
+githubWorkingBranch  String?
+githubImportSha      String?
+githubPullRequestUrl String?
+```
+
+Use an enum:
+
+```prisma
+enum ProjectSourceType {
+  TEMPLATE
+  GITHUB
+}
+```
+
+The exact Better Auth table names and relations should be generated from the
+current Better Auth CLI and then normalized to the repository style.
+
+## 7. Server Modules
+
+Add focused modules rather than putting GitHub logic directly in route handlers:
+
+- `lib/auth.ts`: Better Auth server config.
+- `lib/auth-client.ts`: Better Auth React client.
+- `lib/auth/current-user.ts`: server helper that returns the required current
+  user or a 401-compatible result.
+- `lib/github/app.ts`: GitHub App JWT and installation token creation.
+- `lib/github/installations.ts`: installation callback and persistence helpers.
+- `lib/github/repositories.ts`: list/search repos and branches.
+- `lib/github/pull-requests.ts`: branch, commit, and PR operations.
+- `lib/projects/source.ts`: maps project source metadata into runtime spawn
+  input.
+
+Route handlers stay thin and call these modules.
+
+## 8. API Surface
+
+Auth:
+
+- `GET/POST /api/auth/[...all]`: Better Auth handler.
+
+GitHub:
+
+- `GET /api/github/installations`: list connected installations.
+- `GET /api/github/installations/:id/repositories`: list repositories.
+- `GET /api/github/repositories/:id/branches`: list branches.
+- `GET /api/github/callback`: handle GitHub App installation callback.
+- `DELETE /api/github/installations/:id`: disconnect local installation record.
+
+Projects:
+
+- `GET /api/projects`: current user's projects.
+- `POST /api/projects`: create template or GitHub-backed project.
+- `POST /api/projects/:id/pull-request`: create/update branch and PR.
+
+All routes except auth and public callbacks require a valid Better Auth session.
+Every project route must scope queries by `ownerId = currentUser.id`.
+
+## 9. Permissions and Secrets
+
+Environment variables:
+
+```dotenv
+BETTER_AUTH_SECRET=
+BETTER_AUTH_URL=
+GITHUB_OAUTH_CLIENT_ID=
+GITHUB_OAUTH_CLIENT_SECRET=
+GITHUB_APP_ID=
+GITHUB_APP_CLIENT_ID=
+GITHUB_APP_PRIVATE_KEY=
+GITHUB_APP_SLUG=
+GITHUB_WEBHOOK_SECRET=
+```
+
+GitHub App repository permissions for the first milestone:
+
+- Metadata: read.
+- Contents: read/write.
+- Pull requests: read/write.
+
+Do not log tokens, private keys, OAuth codes, installation tokens, or clone URLs
+that contain credentials. Installation tokens should stay in memory for a single
+operation. If caching is added later, cache only encrypted tokens with expiry and
+never expose them to the browser.
+
+## 10. UI Changes
+
+The dashboard remains operational and dense.
+
+New top-level areas:
+
+- Account menu with current user email/name and sign out.
+- GitHub connection status.
+- New project import flow.
+
+The project list should show source metadata:
+
+- Template project.
+- GitHub repo full name and branch.
+- PR status/URL when available.
+
+Project workspace should add a compact GitHub action area:
+
+- Current branch.
+- Dirty state if available.
+- "Create PR" action.
+- Last PR URL.
+- Error state for push/PR failures.
+
+No marketing landing page is needed for this milestone.
+
+## 11. Runtime and Sandbox Contract
+
+Extend `SpawnArgs` to avoid GitHub-specific top-level fields becoming permanent
+runtime clutter:
+
+```ts
+type ProjectSource =
+  | { type: "template" }
+  | {
+      type: "github";
+      installationId: string;
+      owner: string;
+      repo: string;
+      branch: string;
+      commitSha?: string;
+      token: string;
+    };
+
+interface SpawnArgs {
+  projectId: string;
+  source: ProjectSource;
+}
+```
+
+Worker-pool runtime passes source fields to the worker-agent as sandbox env. The
+entrypoint clones `https://x-access-token:<token>@github.com/<owner>/<repo>.git`
+or downloads an archive, then checks out the selected branch. Prefer `git clone`
+for worker-pool because the image already includes `git` and push/PR flows need
+real git history. Daytona Cloud can keep archive download as a temporary
+compatibility path if `git clone` proves unreliable there.
+
+Entrypoint behavior:
+
+- If `PROJECT_SOURCE_TYPE=github`, clone into `/workspace/project`.
+- If clone fails, print a sanitized error and exit non-zero.
+- If source is absent or `template`, keep current template seeding.
+- Configure git user for commits as the app identity.
+- Start `pnpm install` if the imported repo does not have dependencies
+  preinstalled, then start `pnpm dev`.
+
+This may increase cold start time for imported repositories. That is acceptable
+for the first milestone and should be surfaced in provisioning status text.
+
+## 12. Error Handling
+
+User-facing errors should be specific:
+
+- Not signed in.
+- GitHub App not installed.
+- Installation no longer accessible.
+- Repository not accessible.
+- Branch not found.
+- Clone failed.
+- Dependency install failed.
+- No changes to commit.
+- Branch already exists.
+- Pull request already exists.
+- GitHub rate limit or permission denied.
+
+On provisioning failure, keep the existing pattern: mark project as destroyed or
+failed with `provisioningError`, destroy any partially created sandbox, and keep
+the project row visible enough for debugging.
+
+## 13. Testing
+
+Focused tests:
+
+- Better Auth helper returns current user and rejects missing sessions.
+- Project API scopes all reads/writes to the current user.
+- GitHub installation callback persists installations and rejects invalid input.
+- Repository listing maps GitHub API responses to UI DTOs.
+- Runtime spawn builds safe GitHub source env without leaking tokens.
+- Entrypoint clone branch behavior with a local bare git repo fixture.
+- Pull request service creates branch/commit/PR with mocked GitHub API calls.
+- Existing template project creation still works.
+- Existing Daytona and worker-pool runtime tests still pass.
+
+Verification commands for implementation:
+
+- `pnpm lint`
+- `pnpm test:host`
+- `pnpm build`
+- `pnpm test` when worker-agent or package contracts change
+
+DB-backed tests must use `TEST_DATABASE_URL`.
+
+## 14. Milestone Boundaries
+
+Included:
+
+- Better Auth login with email/password and GitHub.
+- Personal and organization GitHub App installations.
+- Private repo listing and branch selection.
+- Project creation from GitHub repo.
+- Sandbox boot from selected repo and branch.
+- Explicit branch/commit/PR creation.
+
+Deferred:
+
+- App-internal teams and roles.
+- Full GitHub webhook sync.
+- Merge conflict UI.
+- GitHub Actions/checks UI.
+- Auto-sync from GitHub after project creation.
+- Multi-remote support.
+- GitHub Enterprise Server.
+- Billing or quota enforcement.
+
+## 15. Implementation Order
+
+1. Add Better Auth dependencies, config, schema, migration, and auth routes.
+2. Replace `DEV_USER_ID` in protected routes with current-session user lookup.
+3. Add sign-in/sign-up/sign-out UI.
+4. Add GitHub App env config, JWT, installation token, and installation records.
+5. Add installation callback and repository/branch listing APIs.
+6. Extend project create DTO and Prisma project source fields.
+7. Extend runtime spawn source contract and sandbox entrypoint clone behavior.
+8. Add dashboard import flow.
+9. Add PR creation service and workspace UI action.
+10. Run focused tests, lint, build, and update docs.
+
+## 16. Open Risks
+
+- Better Auth schema generation may require model/field mapping to preserve the
+  existing `User` relation shape. Resolve this during implementation by
+  generating schema first and reviewing the diff before writing migrations.
+- GitHub App installation callback ownership needs careful validation. The app
+  should not trust a raw installation ID without checking it through GitHub.
+- Imported repositories may not use pnpm. The first milestone should detect
+  package manager from lockfiles and run the matching install command, or fail
+  with a clear message if unsupported.
+- Large private repositories will make sandbox boot slower. Keep the first
+  milestone simple and optimize with shallow clones or pre-warm later.
+- PR creation from sandbox state needs a clear broker or file-sync boundary.
+  Prefer server-owned GitHub writes and pass only sanitized file changes or git
+  operations through an authenticated internal path.
