@@ -6,6 +6,17 @@ Einzelcommit.
 
 ## 2026-05-03
 
+### T-20260503-007 - Projekt-Env-Verwaltung umgesetzt
+
+- Dauerhafte projektbezogene dotenv-Persistenz mit Prisma-Modell, Migration und
+  gecachter-freier Projekt-Env-API ergänzt.
+- Sandbox-Spawns über Worker-Pool, Daytona Cloud und Fake-Runtime um
+  `.env`-Synchronisierung erweitert; Secrets werden nicht in initiale
+  Sandbox-Git-Commits oder Provisioning-Fehler übernommen.
+- Workspace um ein Env-Panel ergänzt, das per Textfeld speichert, die laufende
+  Sandbox über den bestehenden Broker-Dateischreibpfad synchronisiert und
+  Sync-Fehler retrybar hält.
+
 ### T-20260503-006 - Implementation-Plan für GitHub-Auth-Integration erstellt
 
 - Implementation-Plan für Better Auth, GitHub App, private Repo-Imports,
