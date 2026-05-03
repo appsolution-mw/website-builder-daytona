@@ -6,6 +6,14 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-005 - GitHub-Login ohne öffentliche E-Mail stabilisiert
+
+- `email_not_found` beim GitHub-OAuth-Callback untersucht und auf fehlende
+  E-Mail im GitHub-Profil zurückgeführt.
+- Better-Auth-GitHub-Profilmapping ergänzt, das bei privater GitHub-E-Mail eine
+  stabile interne Noreply-Adresse erzeugt.
+- Regressionstest für echte und fehlende GitHub-E-Mails ergänzt.
+
 ### T-20260504-003 - GitHub-Repo-Import für lokalen Docker-Worker-Pool umgesetzt
 
 - Better Auth mit GitHub-Login, Session-Proxy und user-scoped Projekt-Routen

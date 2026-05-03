@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
 import { prismaAdapter } from "@better-auth/prisma-adapter";
 
+import { mapGitHubProfileToUser } from "@/lib/auth/github-profile";
 import { prisma } from "@/lib/db/client";
 
 export const auth = betterAuth({
@@ -19,6 +20,7 @@ export const auth = betterAuth({
     github: {
       clientId: process.env.GITHUB_OAUTH_CLIENT_ID ?? "",
       clientSecret: process.env.GITHUB_OAUTH_CLIENT_SECRET ?? "",
+      mapProfileToUser: mapGitHubProfileToUser,
     },
   },
   plugins: [nextCookies()],
