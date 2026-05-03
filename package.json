@@ -19,12 +19,14 @@
     "test:host": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@better-auth/prisma-adapter": "^1.6.9",
     "@daytona/sdk": "^0.168.0",
     "@monaco-editor/react": "^4.6.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@wbd/protocol": "workspace:*",
+    "better-auth": "^1.6.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
