@@ -5,7 +5,16 @@ const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentUpsertMock = vi.hoisted(() => vi.fn());
 const projectCreateMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
+const githubRepositoryFindFirstMock = vi.hoisted(() => vi.fn());
 const transactionMock = vi.hoisted(() => vi.fn());
+const createInstallationAccessTokenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/auth/current-user", () => ({
+  requireCurrentUserFromRequest: vi.fn(async () => ({
+    ok: true,
+    user: { id: "dev-user" },
+  })),
+}));
 
 vi.mock("@/lib/runtime", () => ({
   createRuntime: () => ({
@@ -16,6 +25,9 @@ vi.mock("@/lib/runtime", () => ({
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     $transaction: transactionMock,
+    gitHubRepository: {
+      findFirst: githubRepositoryFindFirstMock,
+    },
     project: {
       create: projectCreateMock,
       findMany: vi.fn(),
@@ -25,6 +37,10 @@ vi.mock("@/lib/db/client", () => ({
       upsert: projectEnvironmentUpsertMock,
     },
   },
+}));
+
+vi.mock("@/lib/github/app", () => ({
+  createInstallationAccessToken: createInstallationAccessTokenMock,
 }));
 
 import { POST } from "../route";
@@ -231,6 +247,104 @@ describe("POST /api/projects", () => {
       projectId: "project-with-env",
       projectEnvContent: projectEnv,
     }));
+  });
+
+  it("stores GitHub source metadata and spawns with an installation token", async () => {
+    const project = {
+      id: "project-from-github",
+      name: "Project From GitHub",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    githubRepositoryFindFirstMock.mockResolvedValue({
+      id: "repo_record_1",
+      installationId: "installation_record_1",
+      ownerLogin: "octo",
+      name: "hello-world",
+      installation: {
+        installationId: 123n,
+      },
+    });
+    createInstallationAccessTokenMock.mockResolvedValue({
+      token: "installation-token",
+      expires_at: "2026-05-04T01:00:00Z",
+    });
+    projectCreateMock.mockResolvedValue(project);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-1",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "token",
+      previewUrl: "http://localhost:3000",
+    });
+    projectUpdateMock.mockResolvedValue({ ...project, status: "RUNNING" });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Project From GitHub",
+        sourceType: "github",
+        githubRepositoryId: "repo_record_1",
+        githubBaseBranch: "main",
+      }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(githubRepositoryFindFirstMock).toHaveBeenCalledWith({
+      where: {
+        id: "repo_record_1",
+        installation: { ownerId: expect.any(String) },
+      },
+      include: { installation: true },
+    });
+    expect(projectCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        sourceType: "GITHUB",
+        githubInstallationId: "installation_record_1",
+        githubRepositoryId: "repo_record_1",
+        githubOwner: "octo",
+        githubRepo: "hello-world",
+        githubBaseBranch: "main",
+      }),
+    }));
+    expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "project-from-github",
+      source: {
+        type: "github",
+        installationId: "123",
+        owner: "octo",
+        repo: "hello-world",
+        branch: "main",
+        token: "installation-token",
+      },
+    }));
+  });
+
+  it("rejects GitHub project creation when the repository is not owned by the current user", async () => {
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    githubRepositoryFindFirstMock.mockResolvedValue(null);
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Missing Repo",
+        sourceType: "github",
+        githubRepositoryId: "repo_missing",
+      }),
+    }));
+
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "repository not found" });
+    expect(projectCreateMock).not.toHaveBeenCalled();
+    expect(spawnProjectSandboxMock).not.toHaveBeenCalled();
   });
 
   it("rejects non-string initial env content", async () => {

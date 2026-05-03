@@ -40,6 +40,7 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
+        ...sourceEnv(spawn.source),
         ...args.brokerEnv?.(),
       };
       if (spawn.projectEnvContent) {
@@ -123,6 +124,20 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       const got: SandboxStatusResponse = await agent.getStatus(sandboxId);
       return mapStatus(got.status);
     },
+  };
+}
+
+function sourceEnv(source: SpawnArgs["source"]): Record<string, string> {
+  if (source.type === "template") {
+    return { PROJECT_SOURCE_TYPE: "template" };
+  }
+  return {
+    PROJECT_SOURCE_TYPE: "github",
+    GITHUB_REPO_OWNER: source.owner,
+    GITHUB_REPO_NAME: source.repo,
+    GITHUB_REPO_BRANCH: source.branch,
+    GITHUB_REPO_TOKEN: source.token,
+    GITHUB_REPO_COMMIT_SHA: source.commitSha ?? "",
   };
 }
 

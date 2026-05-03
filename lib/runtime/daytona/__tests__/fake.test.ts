@@ -18,9 +18,7 @@ describe("fake daytona client", () => {
     client = createFakeClient();
     const info = await client.spawnProjectSandbox({
       projectId: "p1",
-      cloneToken: "unused",
-      repoOwner: "u",
-      repoName: "r",
+      source: { type: "template" },
     });
     spawnedIds.push(info.sandboxId);
 
@@ -45,9 +43,7 @@ describe("fake daytona client", () => {
     client = createFakeClient();
     const info = await client.spawnProjectSandbox({
       projectId: "p2",
-      cloneToken: "",
-      repoOwner: "",
-      repoName: "",
+      source: { type: "template" },
     });
     spawnedIds.push(info.sandboxId);
 
@@ -62,9 +58,7 @@ describe("fake daytona client", () => {
     const projectEnvContent = "NEXT_PUBLIC_LABEL=Fake\nSECRET_VALUE=hidden\n";
     const spawnArgs = {
       projectId: "p3",
-      cloneToken: "unused",
-      repoOwner: "u",
-      repoName: "r",
+      source: { type: "template" as const },
       projectEnvContent,
     };
     const info = await client.spawnProjectSandbox(spawnArgs);

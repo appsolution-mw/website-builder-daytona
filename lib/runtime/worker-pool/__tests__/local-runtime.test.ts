@@ -73,9 +73,7 @@ describe("createLocalWorkerPoolRuntime", () => {
 
     const info = await runtime.spawnProjectSandbox({
       projectId,
-      cloneToken: "x",
-      repoOwner: "x",
-      repoName: "x",
+      source: { type: "template" },
     });
 
     expect(mockedAgent.createAgentClient).toHaveBeenCalledWith({

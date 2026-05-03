@@ -6,6 +6,19 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-003 - GitHub-Repo-Import für lokalen Docker-Worker-Pool umgesetzt
+
+- Better Auth mit GitHub-Login, Session-Proxy und user-scoped Projekt-Routen
+  ergänzt.
+- GitHub-App-Installationen, Repository- und Branch-Auswahl über Host-APIs und
+  Dashboard-UI angebunden.
+- Projekte können GitHub-Repos als Quelle speichern und `worker-pool-local`
+  startet die Sandbox aus dem gewählten Branch mit kurzlebigem
+  Installation-Token.
+- Sandbox-Entrypoint klont GitHub-Repos, entfernt Token aus der Remote-URL,
+  erkennt Package Manager und startet den Dev-Server im eigenen Docker-Service.
+- PR-Saveback ist als `T-20260504-004` separat geplant.
+
 ### T-20260504-002 - GitHub-Auth-Env-Platzhalter ergänzt
 
 - Better-Auth- und GitHub-App-Platzhalter in `.env.example` dokumentiert.

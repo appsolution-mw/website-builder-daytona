@@ -16,9 +16,7 @@ describe("fake Daytona + ws-proxy integration", () => {
   it("routes ping via proxy → fake-broker → pong with matching nonce", async () => {
     const info = await daytona.spawnProjectSandbox({
       projectId: "integration-1",
-      cloneToken: "",
-      repoOwner: "",
-      repoName: "",
+      source: { type: "template" },
     });
     spawnedIds.push(info.sandboxId);
 

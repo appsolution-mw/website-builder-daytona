@@ -1,20 +1,23 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { dbRuntimeToProtocol, isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string; sessionId: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id, sessionId } = await params;
   const session = await prisma.session.findFirst({
     where: {
       id: sessionId,
-      project: { id, ownerId: DEV_USER_ID },
+      project: { id, ownerId: currentUser.user.id },
     },
     select: {
       ...sessionSelect,
@@ -54,6 +57,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; sessionId: string }> },
 ) {
   const { id, sessionId } = await params;
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const body = (await request.json().catch(() => ({}))) as {
     defaultRuntime?: unknown;
     runtimeState?: unknown;
@@ -86,7 +92,7 @@ export async function PATCH(
   const existing = await prisma.session.findFirst({
     where: {
       id: sessionId,
-      project: { id, ownerId: DEV_USER_ID },
+      project: { id, ownerId: currentUser.user.id },
     },
     select: { id: true },
   });

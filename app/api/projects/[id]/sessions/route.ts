@@ -1,24 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/db/client";
+import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 
-const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
-
-async function findProject(id: string) {
+async function findProject(id: string, ownerId: string) {
   return prisma.project.findFirst({
-    where: { id, ownerId: DEV_USER_ID },
+    where: { id, ownerId },
     select: { id: true },
   });
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
   const { id } = await params;
-  const project = await findProject(id);
+  const project = await findProject(id, currentUser.user.id);
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -37,7 +39,10 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const project = await findProject(id);
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser.response;
+
+  const project = await findProject(id, currentUser.user.id);
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }

@@ -7,38 +7,139 @@ datasource db {
 }
 
 model User {
-  id        String   @id
-  email     String   @unique
-  createdAt DateTime @default(now())
-  projects  Project[]
+  id                  String               @id
+  name                String               @default("")
+  email               String               @unique
+  emailVerified       Boolean              @default(false)
+  image               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  accounts            Account[]
+  authSessions        AuthSession[]
+  projects            Project[]
+  githubInstallations GitHubInstallation[]
 }
 
 model Project {
-  id                   String        @id @default(cuid())
-  ownerId              String
-  owner                User          @relation(fields: [ownerId], references: [id])
-  name                 String
-  status               ProjectStatus @default(PROVISIONING)
-  agentRuntime         AgentRuntime  @default(CLAUDE_CODE)
-  desiredRuntime       AgentRuntime  @default(CLAUDE_CODE)
-  runtimeSwitchStatus  RuntimeSwitchStatus @default(IDLE)
-  runtimeGeneration    Int           @default(1)
-  createdAt            DateTime      @default(now())
-  lastActive           DateTime      @default(now())
+  id                  String              @id @default(cuid())
+  ownerId             String
+  owner               User                @relation(fields: [ownerId], references: [id])
+  name                String
+  status              ProjectStatus       @default(PROVISIONING)
+  agentRuntime        AgentRuntime        @default(CLAUDE_CODE)
+  desiredRuntime      AgentRuntime        @default(CLAUDE_CODE)
+  runtimeSwitchStatus RuntimeSwitchStatus @default(IDLE)
+  runtimeGeneration   Int                 @default(1)
+  createdAt           DateTime            @default(now())
+  lastActive          DateTime            @default(now())
 
   daytonaSandboxId     String?
   brokerUrl            String?
   brokerPreviewToken   String?
   previewUrl           String?
   provisioningError    String?
+  sourceType           ProjectSourceType @default(TEMPLATE)
+  githubInstallationId String?
+  githubRepositoryId   String?
+  githubOwner          String?
+  githubRepo           String?
+  githubBaseBranch     String?
+  githubWorkingBranch  String?
+  githubImportSha      String?
+  githubPullRequestUrl String?
 
   sessions             Session[]
   sessionRuntimeStates SessionRuntimeState[]
   messages             Message[]
   tokenUsages          TokenUsage[]
   environment          ProjectEnvironment?
+  githubInstallation   GitHubInstallation?   @relation(fields: [githubInstallationId], references: [id], onDelete: SetNull)
+  githubRepository     GitHubRepository?     @relation(fields: [githubRepositoryId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
+  @@index([githubInstallationId])
+  @@index([githubRepositoryId])
+}
+
+model Account {
+  id                    String    @id
+  providerId            String
+  accountId             String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model AuthSession {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+model GitHubInstallation {
+  id                  String             @id @default(cuid())
+  ownerId             String
+  owner               User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  installationId      BigInt
+  accountLogin        String
+  accountType         String
+  accountAvatarUrl    String?
+  repositorySelection String
+  suspendedAt         DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  repositories        GitHubRepository[]
+  projects            Project[]
+
+  @@unique([ownerId, installationId])
+  @@index([installationId])
+}
+
+model GitHubRepository {
+  id             String             @id @default(cuid())
+  installationId String
+  installation   GitHubInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  githubRepoId   BigInt
+  ownerLogin     String
+  name           String
+  fullName       String
+  private        Boolean
+  defaultBranch  String
+  lastSyncedAt   DateTime?
+  projects       Project[]
+
+  @@unique([installationId, githubRepoId])
+  @@index([fullName])
 }
 
 model ProjectEnvironment {
@@ -57,24 +158,29 @@ enum ProjectStatus {
   DESTROYED
 }
 
+enum ProjectSourceType {
+  TEMPLATE
+  GITHUB
+}
+
 model Session {
-  id               String    @id @default(cuid())
-  projectId        String
-  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  title            String    @default("untitled")
-  defaultRuntime   AgentRuntime @default(CLAUDE_CODE)
-  createdAt        DateTime  @default(now())
-  lastMessageAt    DateTime  @default(now())
-  messages         Message[]
-  runtimeStates    SessionRuntimeState[]
+  id             String                @id @default(cuid())
+  projectId      String
+  project        Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title          String                @default("untitled")
+  defaultRuntime AgentRuntime          @default(CLAUDE_CODE)
+  createdAt      DateTime              @default(now())
+  lastMessageAt  DateTime              @default(now())
+  messages       Message[]
+  runtimeStates  SessionRuntimeState[]
 }
 
 model Message {
-  id        String       @id @default(cuid())
+  id        String        @id @default(cuid())
   projectId String
-  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sessionId String?
-  session   Session?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session   Session?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   turnId    String?
   agentId   String?
   runtime   AgentRuntime?
@@ -82,7 +188,7 @@ model Message {
   modelId   String?
   role      MessageRole
   content   String
-  createdAt DateTime     @default(now())
+  createdAt DateTime      @default(now())
 
   @@index([projectId, createdAt])
   @@index([sessionId, createdAt])

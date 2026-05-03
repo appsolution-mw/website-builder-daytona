@@ -142,11 +142,13 @@ export function createCloudClient(): DaytonaClient {
   return {
     async spawnProjectSandbox({
       projectId,
-      cloneToken,
-      repoOwner,
-      repoName,
+      source,
       projectEnvContent,
     }: SpawnArgs): Promise<SandboxInfo> {
+      if (source.type !== "github") {
+        throw new Error("Daytona Cloud runtime requires a GitHub project source");
+      }
+
       // create() blocks until the sandbox is started (default 60s timeout).
       const sandbox = await daytona.create({
         image: BASE_IMAGE,
@@ -157,9 +159,14 @@ export function createCloudClient(): DaytonaClient {
 
       // Run the boot script. nohup+& means this returns as soon as the clone
       // + backgrounding + sleep 3 finishes — the entrypoint continues running.
-      const branch = process.env.GITHUB_CLONE_BRANCH ?? "main";
       await sandbox.process.executeCommand(
-        buildBootCommand({ projectId, cloneToken, repoOwner, repoName, branch }),
+        buildBootCommand({
+          projectId,
+          cloneToken: source.token,
+          repoOwner: source.owner,
+          repoName: source.repo,
+          branch: source.branch,
+        }),
         undefined,
         undefined,
         BOOT_TIMEOUT_SEC,
