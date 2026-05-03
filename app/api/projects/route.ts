@@ -12,6 +12,7 @@ import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-st
 
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const SPAWN_TIMEOUT_MS = 120_000;
+const MAX_ENV_BYTES = 64 * 1024;
 
 const projectSelect = {
   id: true,
@@ -69,12 +70,8 @@ function serializeProject(project: {
   };
 }
 
-async function projectEnvContent(projectId: string): Promise<string | undefined> {
-  const row = await prisma.projectEnvironment.findUnique({
-    where: { projectId },
-    select: { content: true },
-  });
-  return row?.content || undefined;
+function contentByteLength(content: string): number {
+  return new TextEncoder().encode(content).byteLength;
 }
 
 export async function GET() {
@@ -89,13 +86,38 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => ({}))) as { name?: unknown; runtime?: unknown };
+  const body = (await request.json().catch(() => ({}))) as {
+    name?: unknown;
+    runtime?: unknown;
+    environmentContent?: unknown;
+  };
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const runtime = typeof body.runtime === "string" && isAgentRuntime(body.runtime)
     ? body.runtime
     : "claude-code";
   if (!name) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
+  }
+  if (
+    "environmentContent" in body &&
+    body.environmentContent !== undefined &&
+    typeof body.environmentContent !== "string"
+  ) {
+    return NextResponse.json(
+      { error: "environmentContent must be a string" },
+      { status: 400 },
+    );
+  }
+
+  const initialEnvironmentContent = typeof body.environmentContent === "string" &&
+    body.environmentContent.length > 0
+    ? body.environmentContent
+    : undefined;
+  if (
+    initialEnvironmentContent !== undefined &&
+    contentByteLength(initialEnvironmentContent) > MAX_ENV_BYTES
+  ) {
+    return NextResponse.json({ error: "content is too large" }, { status: 413 });
   }
 
   // GitHub clone vars are only needed by the Daytona path (which downloads
@@ -136,6 +158,17 @@ export async function POST(request: NextRequest) {
   // create one. The row is inserted by the broker's `agent.session` event
   // handler after claude reports the new session_id at the end of turn 1.
 
+  let projectEnvContent: string | undefined;
+  if (initialEnvironmentContent !== undefined) {
+    const environment = await prisma.projectEnvironment.upsert({
+      where: { projectId: project.id },
+      create: { projectId: project.id, content: initialEnvironmentContent },
+      update: { content: initialEnvironmentContent },
+      select: { content: true },
+    });
+    projectEnvContent = environment.content;
+  }
+
   const sandboxRuntime = createRuntime();
   try {
     const info = await Promise.race([
@@ -144,7 +177,7 @@ export async function POST(request: NextRequest) {
         cloneToken,
         repoOwner,
         repoName,
-        projectEnvContent: await projectEnvContent(project.id),
+        projectEnvContent,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(

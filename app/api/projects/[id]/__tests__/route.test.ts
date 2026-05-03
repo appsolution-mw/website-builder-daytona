@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentFindUniqueMock = vi.hoisted(() => vi.fn());
@@ -39,6 +39,11 @@ vi.mock("@/lib/db/client", () => ({
 import { GET } from "../route";
 
 describe("GET /api/projects/[id]", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("passes saved project env content when respawning a fake sandbox", async () => {
     const project = {
       id: "project-with-env",
