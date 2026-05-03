@@ -13,9 +13,7 @@ describe("fake Daytona + file.list", () => {
   it("file.list returns the project-template files after fake spawn", async () => {
     const info = await daytona.spawnProjectSandbox({
       projectId: "filelist-1",
-      cloneToken: "",
-      repoOwner: "",
-      repoName: "",
+      source: { type: "template" },
     });
     spawnedIds.push(info.sandboxId);
 

@@ -101,9 +101,7 @@ export async function GET(
     const runtime = createDaytonaRuntime("fake");
     const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
-      cloneToken: "",
-      repoOwner: "",
-      repoName: "",
+      source: { type: "template" },
       projectEnvContent: await projectEnvContent(project.id),
     });
     project = await prisma.project.update({

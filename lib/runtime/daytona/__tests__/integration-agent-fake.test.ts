@@ -16,9 +16,7 @@ describe("fake Daytona + ws-proxy + broker agent.prompt wire-up", () => {
   it("agent.prompt against fake broker (which has no claude) replies with agent.error", async () => {
     const info = await daytona.spawnProjectSandbox({
       projectId: "agent-integration-1",
-      cloneToken: "",
-      repoOwner: "",
-      repoName: "",
+      source: { type: "template" },
     });
     spawnedIds.push(info.sandboxId);
 

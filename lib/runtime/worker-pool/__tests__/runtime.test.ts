@@ -50,9 +50,7 @@ describe("WorkerPoolRuntime", () => {
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const projectId = await project();
 
-    const info = await r.spawnProjectSandbox({
-      projectId, cloneToken: "x", repoOwner: "x", repoName: "x",
-    });
+    const info = await r.spawnProjectSandbox({ projectId, source: { type: "template" } });
 
     // tailscaleIp is provider-specific (FakeProvisioner picks a 100.64.x.y CGNAT
     // address). Just assert the URL shape and that the token is embedded.
@@ -71,8 +69,8 @@ describe("WorkerPoolRuntime", () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
 
-    await r.spawnProjectSandbox({ projectId: await project(), cloneToken: "x", repoOwner: "x", repoName: "x" });
-    await r.spawnProjectSandbox({ projectId: await project(), cloneToken: "x", repoOwner: "x", repoName: "x" });
+    await r.spawnProjectSandbox({ projectId: await project(), source: { type: "template" } });
+    await r.spawnProjectSandbox({ projectId: await project(), source: { type: "template" } });
 
     const workers = await prisma.worker.count();
     expect(workers).toBe(1);
@@ -86,9 +84,7 @@ describe("WorkerPoolRuntime", () => {
     const projectEnvContent = "PUBLIC_NAME=Daytona\nPRIVATE_TOKEN=s3cr3t\n";
     const spawnArgs = {
       projectId: await project(),
-      cloneToken: "x",
-      repoOwner: "x",
-      repoName: "x",
+      source: { type: "template" as const },
       projectEnvContent,
     };
 
@@ -100,14 +96,39 @@ describe("WorkerPoolRuntime", () => {
     );
   });
 
+  it("forwards GitHub repository source env to the worker-agent sandbox", async () => {
+    const handles = createFakeAgentClient();
+    const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
+
+    await r.spawnProjectSandbox({
+      projectId: await project(),
+      source: {
+        type: "github",
+        installationId: "123",
+        owner: "octo",
+        repo: "hello-world",
+        branch: "main",
+        commitSha: "abc123",
+        token: "installation-token",
+      },
+    });
+
+    expect(handles.requests()[0]?.env).toMatchObject({
+      PROJECT_SOURCE_TYPE: "github",
+      GITHUB_REPO_OWNER: "octo",
+      GITHUB_REPO_NAME: "hello-world",
+      GITHUB_REPO_BRANCH: "main",
+      GITHUB_REPO_COMMIT_SHA: "abc123",
+      GITHUB_REPO_TOKEN: "installation-token",
+    });
+  });
+
   it("omits project dotenv env when content is empty", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const spawnArgs = {
       projectId: await project(),
-      cloneToken: "x",
-      repoOwner: "x",
-      repoName: "x",
+      source: { type: "template" as const },
       projectEnvContent: "",
     };
 
@@ -120,7 +141,7 @@ describe("WorkerPoolRuntime", () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const projectId = await project();
-    await r.spawnProjectSandbox({ projectId, cloneToken: "x", repoOwner: "x", repoName: "x" });
+    await r.spawnProjectSandbox({ projectId, source: { type: "template" } });
     const ws = await prisma.workerSandbox.findFirstOrThrow({ where: { projectId } });
 
     await r.destroyProjectSandbox(ws.id);
@@ -142,7 +163,7 @@ describe("WorkerPoolRuntime", () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const projectId = await project();
-    await r.spawnProjectSandbox({ projectId, cloneToken: "x", repoOwner: "x", repoName: "x" });
+    await r.spawnProjectSandbox({ projectId, source: { type: "template" } });
     const ws = await prisma.workerSandbox.findFirstOrThrow({ where: { projectId } });
     expect(await r.getSandboxStatus(ws.id)).toBe("running");
   });
@@ -153,7 +174,7 @@ describe("WorkerPoolRuntime", () => {
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
     const projectId = await project();
     await expect(r.spawnProjectSandbox({
-      projectId, cloneToken: "x", repoOwner: "x", repoName: "x",
+      projectId, source: { type: "template" },
     })).rejects.toThrow(/image-not-found/);
     // No DB rows must remain
     const ws = await prisma.workerSandbox.count();

@@ -15,11 +15,21 @@ export interface Runtime {
 
 export interface SpawnArgs {
   projectId: string;
-  cloneToken: string;
-  repoOwner: string;
-  repoName: string;
+  source: ProjectSource;
   projectEnvContent?: string;
 }
+
+export type ProjectSource =
+  | { type: "template" }
+  | {
+      type: "github";
+      installationId: string;
+      owner: string;
+      repo: string;
+      branch: string;
+      commitSha?: string;
+      token: string;
+    };
 
 export interface SandboxInfo {
   sandboxId: string;

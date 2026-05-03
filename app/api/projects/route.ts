@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { AgentRuntime as PrismaAgentRuntime, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
+import { createInstallationAccessToken } from "@/lib/github/app";
+import { projectSourceFromCreateBody } from "@/lib/projects/source";
 import { createRuntime } from "@/lib/runtime";
 import {
   AGENT_RUNTIME_OPTIONS,
@@ -27,6 +29,13 @@ const projectSelect = {
   lastActive: true,
   brokerUrl: true,
   previewUrl: true,
+  sourceType: true,
+  githubOwner: true,
+  githubRepo: true,
+  githubBaseBranch: true,
+  githubWorkingBranch: true,
+  githubImportSha: true,
+  githubPullRequestUrl: true,
   sessions: {
     take: 1,
     orderBy: { createdAt: "asc" },
@@ -46,6 +55,13 @@ function serializeProject(project: {
   lastActive: Date;
   brokerUrl: string | null;
   previewUrl: string | null;
+  sourceType: string;
+  githubOwner: string | null;
+  githubRepo: string | null;
+  githubBaseBranch: string | null;
+  githubWorkingBranch: string | null;
+  githubImportSha: string | null;
+  githubPullRequestUrl: string | null;
   sessions?: Array<{
     id: string;
     title: string;
@@ -97,7 +113,7 @@ export async function POST(request: NextRequest) {
     name?: unknown;
     runtime?: unknown;
     environmentContent?: unknown;
-  };
+  } & Record<string, unknown>;
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const runtime = typeof body.runtime === "string" && isAgentRuntime(body.runtime)
     ? body.runtime
@@ -127,19 +143,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "content is too large" }, { status: 413 });
   }
 
-  // GitHub clone vars are only needed by the Daytona path (which downloads
-  // the builder repo as a tarball into the sandbox at boot). The worker-pool
-  // path uses pre-built images and ignores them.
-  const runtimeMode = process.env.RUNTIME_MODE ?? `daytona-${process.env.DAYTONA_MODE ?? "cloud"}`;
-  const needsGitHubVars = runtimeMode.startsWith("daytona-");
-  const cloneToken = process.env.GITHUB_CLONE_TOKEN ?? "";
-  const repoOwner = process.env.GITHUB_REPO_OWNER ?? "";
-  const repoName = process.env.GITHUB_REPO_NAME ?? "";
-  if (needsGitHubVars && (!cloneToken || !repoOwner || !repoName)) {
+  let source;
+  try {
+    source = projectSourceFromCreateBody(body);
+  } catch (error) {
     return NextResponse.json(
-      { error: "server missing GITHUB_CLONE_TOKEN/OWNER/NAME" },
-      { status: 500 },
+      { error: error instanceof Error ? error.message : "invalid source" },
+      { status: 400 },
     );
+  }
+
+  const githubRepository = source.type === "github"
+    ? await prisma.gitHubRepository.findFirst({
+        where: {
+          id: source.repositoryId,
+          installation: { ownerId: currentUser.user.id },
+        },
+        include: { installation: true },
+      })
+    : null;
+  if (source.type === "github" && !githubRepository) {
+    return NextResponse.json({ error: "repository not found" }, { status: 404 });
   }
 
   let project: Prisma.ProjectGetPayload<{ select: typeof projectSelect }>;
@@ -153,6 +177,12 @@ export async function POST(request: NextRequest) {
           status: "PROVISIONING",
           agentRuntime: protocolRuntimeToDb(runtime),
           desiredRuntime: protocolRuntimeToDb(runtime),
+          sourceType: source.type === "github" ? "GITHUB" : "TEMPLATE",
+          githubInstallationId: githubRepository?.installationId ?? null,
+          githubRepositoryId: githubRepository?.id ?? null,
+          githubOwner: githubRepository?.ownerLogin ?? null,
+          githubRepo: githubRepository?.name ?? null,
+          githubBaseBranch: source.type === "github" ? source.branch : null,
           sessions: {
             create: {
               title: "Main chat",
@@ -193,12 +223,22 @@ export async function POST(request: NextRequest) {
 
   const sandboxRuntime = createRuntime();
   try {
+    const spawnSource = source.type === "github" && githubRepository
+      ? {
+          type: "github" as const,
+          installationId: githubRepository.installation.installationId.toString(),
+          owner: githubRepository.ownerLogin,
+          repo: githubRepository.name,
+          branch: source.branch,
+          token: (await createInstallationAccessToken(
+            githubRepository.installation.installationId,
+          )).token,
+        }
+      : { type: "template" as const };
     const info = await Promise.race([
       sandboxRuntime.spawnProjectSandbox({
         projectId: project.id,
-        cloneToken,
-        repoOwner,
-        repoName,
+        source: spawnSource,
         projectEnvContent,
       }),
       new Promise<never>((_, reject) =>
