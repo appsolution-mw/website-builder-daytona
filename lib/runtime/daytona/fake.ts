@@ -1,4 +1,4 @@
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -73,9 +73,12 @@ async function closeServer(server: Server): Promise<void> {
 
 export function createFakeClient(): DaytonaClient {
   return {
-    async spawnProjectSandbox({ projectId }: SpawnArgs): Promise<SandboxInfo> {
+    async spawnProjectSandbox({ projectId, projectEnvContent }: SpawnArgs): Promise<SandboxInfo> {
       const projectRoot = await mkdtemp(join(tmpdir(), `wbd-fake-${projectId}-`));
       await cp(PROJECT_TEMPLATE_DIR, projectRoot, { recursive: true });
+      if (projectEnvContent) {
+        await writeFile(join(projectRoot, ".env"), projectEnvContent, "utf8");
+      }
       const broker = await startBroker({ port: 0, projectRoot });
       const preview = await startPreviewServer(projectId);
       const id = `fake-${projectId}-${broker.port}`;

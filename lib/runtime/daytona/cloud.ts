@@ -40,8 +40,9 @@ function buildBootCommand(args: {
   repoOwner: string;
   repoName: string;
   branch: string;
+  projectEnvContent?: string;
 }): string {
-  const { projectId, cloneToken, repoOwner, repoName, branch } = args;
+  const { projectId, cloneToken, repoOwner, repoName, branch, projectEnvContent } = args;
   // Single-quote-safe: neither token nor repo names nor branch can contain
   // single quotes (tokens alnum+underscore+dash; owner/repo/branch per
   // GitHub/Git ref-format constraints).
@@ -70,7 +71,10 @@ function buildBootCommand(args: {
   // `nohup ... & sleep 3`: background the entrypoint, then sleep so the
   // executeCommand session stays alive while nohup starts. No `&&` or `;`
   // between `&` and `sleep` — plain space is the correct POSIX separator.
-  return `${setupSteps} && PROJECT_ID='${projectId}' BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/sandbox/entrypoint.sh > /workspace/entrypoint.log 2>&1 & sleep 3`;
+  const projectEnv = projectEnvContent
+    ? ` PROJECT_ENV_B64='${Buffer.from(projectEnvContent, "utf8").toString("base64")}'`
+    : "";
+  return `${setupSteps} && PROJECT_ID='${projectId}'${projectEnv} BROKER_PORT=${BROKER_PORT} PREVIEW_PORT=${PREVIEW_PORT} nohup sh container/sandbox/entrypoint.sh > /workspace/entrypoint.log 2>&1 & sleep 3`;
 }
 
 function mapState(state: unknown): SandboxStatus {
@@ -102,6 +106,7 @@ export function createCloudClient(): DaytonaClient {
       cloneToken,
       repoOwner,
       repoName,
+      projectEnvContent,
     }: SpawnArgs): Promise<SandboxInfo> {
       const openRouterApiKey = process.env.OPENROUTER_API_KEY ?? "";
       const anthropicApiKey = process.env.ANTHROPIC_API_KEY || openRouterApiKey;
@@ -149,7 +154,7 @@ export function createCloudClient(): DaytonaClient {
       // + backgrounding + sleep 3 finishes — the entrypoint continues running.
       const branch = process.env.GITHUB_CLONE_BRANCH ?? "main";
       await sandbox.process.executeCommand(
-        buildBootCommand({ projectId, cloneToken, repoOwner, repoName, branch }),
+        buildBootCommand({ projectId, cloneToken, repoOwner, repoName, branch, projectEnvContent }),
         undefined,
         undefined,
         BOOT_TIMEOUT_SEC,

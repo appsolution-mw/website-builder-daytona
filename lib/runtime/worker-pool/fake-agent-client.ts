@@ -11,10 +11,13 @@ export interface FakeAgentClientHandles {
   failNext: (statusCode: number, errorCode: string) => void;
   /** Inspect what was created. */
   list(): SandboxStatusResponse[];
+  /** Inspect createSandbox requests sent to the fake agent. */
+  requests(): CreateSandboxRequest[];
 }
 
 export function createFakeAgentClient(): FakeAgentClientHandles {
   const map = new Map<string, SandboxStatusResponse>();
+  const requests: CreateSandboxRequest[] = [];
   let nextFailure: { statusCode: number; errorCode: string } | null = null;
   let portCounter = 33000;
 
@@ -26,6 +29,7 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
         e.statusCode = f.statusCode; e.errorCode = f.errorCode;
         throw e;
       }
+      requests.push(req);
       const broker = portCounter++;
       const preview = portCounter++;
       const r: CreateSandboxResponse = {
@@ -50,5 +54,6 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
     client,
     failNext: (statusCode, errorCode) => { nextFailure = { statusCode, errorCode }; },
     list: () => [...map.values()],
+    requests: () => [...requests],
   };
 }

@@ -80,6 +80,42 @@ describe("WorkerPoolRuntime", () => {
     expect(sandboxes).toBe(2);
   });
 
+  it("encodes project dotenv content into the worker-agent sandbox env", async () => {
+    const handles = createFakeAgentClient();
+    const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
+    const projectEnvContent = "PUBLIC_NAME=Daytona\nPRIVATE_TOKEN=s3cr3t\n";
+    const spawnArgs = {
+      projectId: await project(),
+      cloneToken: "x",
+      repoOwner: "x",
+      repoName: "x",
+      projectEnvContent,
+    };
+
+    await r.spawnProjectSandbox(spawnArgs);
+
+    expect(handles.requests()).toHaveLength(1);
+    expect(handles.requests()[0]?.env.PROJECT_ENV_B64).toBe(
+      Buffer.from(projectEnvContent, "utf8").toString("base64"),
+    );
+  });
+
+  it("omits project dotenv env when content is empty", async () => {
+    const handles = createFakeAgentClient();
+    const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
+    const spawnArgs = {
+      projectId: await project(),
+      cloneToken: "x",
+      repoOwner: "x",
+      repoName: "x",
+      projectEnvContent: "",
+    };
+
+    await r.spawnProjectSandbox(spawnArgs);
+
+    expect(handles.requests()[0]?.env).not.toHaveProperty("PROJECT_ENV_B64");
+  });
+
   it("destroyProjectSandbox removes container + token, marks DESTROYED", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));

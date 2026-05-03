@@ -57,6 +57,35 @@ describe("fake daytona client", () => {
     expect(await client.getSandboxStatus(info.sandboxId)).toBe("destroyed");
   });
 
+  it("writes project dotenv content into the fake project root", async () => {
+    client = createFakeClient();
+    const projectEnvContent = "NEXT_PUBLIC_LABEL=Fake\nSECRET_VALUE=hidden\n";
+    const spawnArgs = {
+      projectId: "p3",
+      cloneToken: "unused",
+      repoOwner: "u",
+      repoName: "r",
+      projectEnvContent,
+    };
+    const info = await client.spawnProjectSandbox(spawnArgs);
+    spawnedIds.push(info.sandboxId);
+
+    const ws = new WebSocket(info.brokerUrl);
+    const reply = await new Promise<string>((resolve, reject) => {
+      ws.once("open", () => ws.send(JSON.stringify({ type: "file.read", requestId: "env", path: ".env" })));
+      ws.once("message", (d) => resolve(d.toString()));
+      ws.once("error", reject);
+    });
+    ws.close();
+
+    expect(JSON.parse(reply)).toEqual({
+      type: "file.content",
+      requestId: "env",
+      path: ".env",
+      content: projectEnvContent,
+    });
+  });
+
   it("destroy is idempotent", async () => {
     client = createFakeClient();
     await client.destroyProjectSandbox("never-existed");

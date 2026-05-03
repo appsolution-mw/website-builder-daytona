@@ -18,6 +18,7 @@ export interface SpawnArgs {
   cloneToken: string;
   repoOwner: string;
   repoName: string;
+  projectEnvContent?: string;
 }
 
 export interface SandboxInfo {
