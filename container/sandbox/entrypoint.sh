@@ -1,10 +1,11 @@
 #!/bin/sh
 # Sandbox entrypoint for the pre-built wbd/sandbox image.
 #
-# All deps are pre-installed in the image. This script only:
-#   1) seeds /workspace/project from /opt/project-template if empty
-#   2) starts `next dev` in the background on PREVIEW_PORT
-#   3) execs broker in the foreground on BROKER_PORT
+# Template deps are pre-installed in the image. This script:
+#   1) seeds /workspace/project or clones the selected GitHub repo
+#   2) installs project deps when a repo was cloned
+#   3) starts the app dev server in the background on PREVIEW_PORT
+#   4) execs broker in the foreground on BROKER_PORT
 #
 # Required env (injected by the host via worker-agent):
 #   PROJECT_ID    — project uuid
@@ -12,6 +13,7 @@
 # Optional:
 #   BROKER_PORT   — defaults 4000
 #   PREVIEW_PORT  — defaults 3000
+#   PROJECT_SOURCE_TYPE — template|github; defaults template
 
 set -eu
 
@@ -19,26 +21,83 @@ set -eu
 : "${BROKER_TOKEN:?BROKER_TOKEN is required}"
 BROKER_PORT="${BROKER_PORT:-4000}"
 PREVIEW_PORT="${PREVIEW_PORT:-3000}"
+PROJECT_SOURCE_TYPE="${PROJECT_SOURCE_TYPE:-template}"
+GITHUB_REPO_OWNER="${GITHUB_REPO_OWNER:-}"
+GITHUB_REPO_NAME="${GITHUB_REPO_NAME:-}"
+GITHUB_REPO_BRANCH="${GITHUB_REPO_BRANCH:-}"
+GITHUB_REPO_TOKEN="${GITHUB_REPO_TOKEN:-}"
+GITHUB_REPO_COMMIT_SHA="${GITHUB_REPO_COMMIT_SHA:-}"
+
+sanitize_url() {
+  echo "$1" | sed -E 's#https://[^@]+@github.com/#https://github.com/#g'
+}
+
+clone_github_repo() {
+  if [ -z "$GITHUB_REPO_OWNER" ] || [ -z "$GITHUB_REPO_NAME" ] || [ -z "$GITHUB_REPO_BRANCH" ] || [ -z "$GITHUB_REPO_TOKEN" ]; then
+    echo "[entrypoint] FATAL: missing GitHub source env" >&2
+    exit 1
+  fi
+
+  mkdir -p /workspace
+  rm -rf /workspace/project
+  CLONE_URL="https://x-access-token:${GITHUB_REPO_TOKEN}@github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}.git"
+  echo "[entrypoint] cloning $(sanitize_url "$CLONE_URL") branch ${GITHUB_REPO_BRANCH}"
+  git clone --depth 1 --branch "$GITHUB_REPO_BRANCH" "$CLONE_URL" /workspace/project 2>/workspace/git-clone.err || {
+    echo "[entrypoint] FATAL: git clone failed for ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}" >&2
+    sed -E 's#https://[^@]+@github.com/#https://github.com/#g' /workspace/git-clone.err >&2
+    exit 1
+  }
+
+  cd /workspace/project
+  if [ -n "$GITHUB_REPO_COMMIT_SHA" ]; then
+    git fetch --depth 1 origin "$GITHUB_REPO_COMMIT_SHA" || true
+    git checkout "$GITHUB_REPO_COMMIT_SHA"
+  fi
+  git remote set-url origin "https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}.git"
+}
+
+install_project_deps() {
+  if [ -f pnpm-lock.yaml ]; then
+    corepack enable pnpm
+    pnpm install --frozen-lockfile || pnpm install
+    DEV_CMD="pnpm dev"
+  elif [ -f package-lock.json ]; then
+    npm ci || npm install
+    DEV_CMD="npm run dev"
+  elif [ -f yarn.lock ]; then
+    corepack enable yarn
+    yarn install
+    DEV_CMD="yarn dev"
+  else
+    corepack enable pnpm
+    pnpm install
+    DEV_CMD="pnpm dev"
+  fi
+}
 
 echo "[entrypoint] sandbox starting for project ${PROJECT_ID}"
 
 mkdir -p /workspace
-if [ ! -d /workspace/project ] || [ -z "$(ls -A /workspace/project 2>/dev/null)" ]; then
-  echo "[entrypoint] seeding /workspace/project from /opt/project-template"
-  mkdir -p /workspace/project
-  cp -a /opt/project-template/. /workspace/project/
+if [ "$PROJECT_SOURCE_TYPE" = "github" ]; then
+  if [ ! -d /workspace/project/.git ]; then
+    clone_github_repo
+  fi
+else
+  if [ ! -d /workspace/project ] || [ -z "$(ls -A /workspace/project 2>/dev/null)" ]; then
+    echo "[entrypoint] seeding /workspace/project from /opt/project-template"
+    mkdir -p /workspace/project
+    cp -a /opt/project-template/. /workspace/project/
+  fi
 fi
 
 cd /workspace/project
 
-# Initialise a local git repo so claude-code's reviewer sub-agent has a
-# working tree to diff against on each turn. Persistence across sandbox
-# restarts is Phase 1.4; for now this resets per spawn.
-if [ ! -d .git ]; then
+git config user.email "sandbox@wbd.local"
+git config user.name "Website Builder Daytona"
+
+if [ "$PROJECT_SOURCE_TYPE" != "github" ] && [ ! -d .git ]; then
   echo "[entrypoint] initialising git repo in /workspace/project"
   git init -q -b main
-  git config user.email "sandbox@wbd.local"
-  git config user.name "wbd sandbox"
   git add -A
   git commit -q -m "initial template" || true
 fi
@@ -48,9 +107,11 @@ if [ -n "${PROJECT_ENV_B64:-}" ]; then
   printf '%s' "${PROJECT_ENV_B64}" | base64 -d > /workspace/project/.env
 fi
 
+install_project_deps
+
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}"
 PORT="${PREVIEW_PORT}" PROJECT_ID="${PROJECT_ID}" \
-  pnpm dev > /workspace/project.log 2>&1 &
+  sh -c "$DEV_CMD" > /workspace/project.log 2>&1 &
 NEXT_PID=$!
 
 sleep 2
