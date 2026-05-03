@@ -1,10 +1,11 @@
 import { NextRequest } from "next/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentUpsertMock = vi.hoisted(() => vi.fn());
 const projectCreateMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
+const transactionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/runtime", () => ({
   createRuntime: () => ({
@@ -14,6 +15,7 @@ vi.mock("@/lib/runtime", () => ({
 
 vi.mock("@/lib/db/client", () => ({
   prisma: {
+    $transaction: transactionMock,
     project: {
       create: projectCreateMock,
       findMany: vi.fn(),
@@ -28,8 +30,19 @@ vi.mock("@/lib/db/client", () => ({
 import { POST } from "../route";
 
 const originalRuntimeMode = process.env.RUNTIME_MODE;
+type TransactionMockCallback = (tx: {
+  project: { create: typeof projectCreateMock };
+  projectEnvironment: { upsert: typeof projectEnvironmentUpsertMock };
+}) => Promise<unknown>;
 
 describe("POST /api/projects", () => {
+  beforeEach(() => {
+    transactionMock.mockImplementation((callback: TransactionMockCallback) => callback({
+      project: { create: projectCreateMock },
+      projectEnvironment: { upsert: projectEnvironmentUpsertMock },
+    }));
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
@@ -40,6 +53,136 @@ describe("POST /api/projects", () => {
     }
 
     process.env.RUNTIME_MODE = originalRuntimeMode;
+  });
+
+  it("creates the project and initial env content in one transaction", async () => {
+    const project = {
+      id: "project-with-env",
+      name: "Project With Env",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    const projectEnv = "NEXT_PUBLIC_LABEL=Host\nSECRET_VALUE=hidden\n";
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectCreateMock.mockResolvedValue(project);
+    projectEnvironmentUpsertMock.mockResolvedValue({ content: projectEnv });
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-1",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "token",
+      previewUrl: "http://localhost:3000",
+    });
+    projectUpdateMock.mockResolvedValue({ ...project, status: "RUNNING" });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Project With Env", environmentContent: projectEnv }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(projectCreateMock).toHaveBeenCalledTimes(1);
+    expect(projectEnvironmentUpsertMock).toHaveBeenCalledTimes(1);
+    expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "project-with-env",
+      projectEnvContent: projectEnv,
+    }));
+  });
+
+  it("does not spawn or mark a project running when initial env persistence fails", async () => {
+    const project = {
+      id: "project-with-env-failure",
+      name: "Project With Env Failure",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectCreateMock.mockResolvedValue(project);
+    projectEnvironmentUpsertMock.mockRejectedValue(new Error("env persistence failed"));
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Project With Env Failure",
+        environmentContent: "SECRET_VALUE=hidden\n",
+      }),
+    }));
+
+    expect(res.status).toBe(500);
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(spawnProjectSandboxMock).not.toHaveBeenCalled();
+    expect(projectUpdateMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "RUNNING" }),
+    }));
+  });
+
+  it("sanitizes spawn failure details in the response and stored provisioning error", async () => {
+    const project = {
+      id: "project-spawn-fails",
+      name: "Project Spawn Fails",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    const leakedSecret = "SECRET_VALUE=hidden";
+    const leakedBase64 = "U0VDUkVUX1ZBTFVFPWhpZGRlbgo=";
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectCreateMock.mockResolvedValue(project);
+    projectEnvironmentUpsertMock.mockResolvedValue({ content: `${leakedSecret}\n` });
+    spawnProjectSandboxMock.mockRejectedValue(
+      new Error(`runtime spawn failed with ${leakedSecret} ${leakedBase64}`),
+    );
+    projectUpdateMock.mockResolvedValue({
+      ...project,
+      status: "DESTROYED",
+      provisioningError: "sandbox provisioning failed",
+    });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Project Spawn Fails",
+        environmentContent: `${leakedSecret}\n`,
+      }),
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: {
+        status: "DESTROYED",
+        provisioningError: "sandbox provisioning failed",
+      },
+    }));
+    expect(json).toMatchObject({
+      error: "provisioning failed",
+      message: "sandbox provisioning failed",
+    });
+    expect(JSON.stringify(json)).not.toContain(leakedSecret);
+    expect(JSON.stringify(json)).not.toContain(leakedBase64);
   });
 
   it("passes saved project env content when spawning the sandbox", async () => {

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import type { AgentRuntime as PrismaAgentRuntime } from "@prisma/client";
+import type { AgentRuntime as PrismaAgentRuntime, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { createRuntime } from "@/lib/runtime";
 import {
@@ -13,6 +13,7 @@ import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-st
 const DEV_USER_ID = process.env.DEV_USER_ID ?? "dev-user";
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
+const SANITIZED_PROVISIONING_ERROR = "sandbox provisioning failed";
 
 const projectSelect = {
   id: true,
@@ -135,39 +136,54 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const project = await prisma.project.create({
-    data: {
-      name,
-      ownerId: DEV_USER_ID,
-      status: "PROVISIONING",
-      agentRuntime: protocolRuntimeToDb(runtime),
-      desiredRuntime: protocolRuntimeToDb(runtime),
-      sessions: {
-        create: {
-          title: "Main chat",
-          defaultRuntime: protocolRuntimeToDb(runtime),
+  let project: Prisma.ProjectGetPayload<{ select: typeof projectSelect }>;
+  let projectEnvContent: string | undefined;
+  try {
+    const created = await prisma.$transaction(async (tx) => {
+      const project = await tx.project.create({
+        data: {
+          name,
+          ownerId: DEV_USER_ID,
+          status: "PROVISIONING",
+          agentRuntime: protocolRuntimeToDb(runtime),
+          desiredRuntime: protocolRuntimeToDb(runtime),
+          sessions: {
+            create: {
+              title: "Main chat",
+              defaultRuntime: protocolRuntimeToDb(runtime),
+            },
+          },
         },
-      },
-    },
-    select: projectSelect,
-  });
+        select: projectSelect,
+      });
+
+      let projectEnvContent: string | undefined;
+      if (initialEnvironmentContent !== undefined) {
+        const environment = await tx.projectEnvironment.upsert({
+          where: { projectId: project.id },
+          create: { projectId: project.id, content: initialEnvironmentContent },
+          update: { content: initialEnvironmentContent },
+          select: { content: true },
+        });
+        projectEnvContent = environment.content;
+      }
+
+      return { project, projectEnvContent };
+    });
+    project = created.project;
+    projectEnvContent = created.projectEnvContent;
+  } catch {
+    return NextResponse.json(
+      { error: "project creation failed" },
+      { status: 500 },
+    );
+  }
 
   // Note: SessionRuntimeState is intentionally NOT pre-created here.
   // The frontend treats "row exists" as "resume an existing claude session";
   // a fresh sandbox container has no session to resume, so the first turn must
   // create one. The row is inserted by the broker's `agent.session` event
   // handler after claude reports the new session_id at the end of turn 1.
-
-  let projectEnvContent: string | undefined;
-  if (initialEnvironmentContent !== undefined) {
-    const environment = await prisma.projectEnvironment.upsert({
-      where: { projectId: project.id },
-      create: { projectId: project.id, content: initialEnvironmentContent },
-      update: { content: initialEnvironmentContent },
-      select: { content: true },
-    });
-    projectEnvContent = environment.content;
-  }
 
   const sandboxRuntime = createRuntime();
   try {
@@ -201,14 +217,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       project: serializeProject(updated),
     }, { status: 201 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+  } catch {
     const updated = await prisma.project.update({
       where: { id: project.id },
-      data: { status: "DESTROYED", provisioningError: message },
+      data: {
+        status: "DESTROYED",
+        provisioningError: SANITIZED_PROVISIONING_ERROR,
+      },
     });
     return NextResponse.json(
-      { error: "provisioning failed", project: updated, message },
+      {
+        error: "provisioning failed",
+        project: updated,
+        message: SANITIZED_PROVISIONING_ERROR,
+      },
       { status: 500 },
     );
   }
