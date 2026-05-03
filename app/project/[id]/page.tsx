@@ -22,11 +22,13 @@ import {
   Globe2,
   History,
   ImagePlus,
+  KeyRound,
   Loader2,
   MessageSquare,
   Monitor,
   Plus,
   RefreshCw,
+  Save,
   Send,
   Smartphone,
   Square,
@@ -118,6 +120,7 @@ const NEXT_LAYOUT_PATH = "app/layout.tsx";
 const NEXT_CONFIG_PATH = "next.config.ts";
 const NEXT_DEVTOOLS_CSS_PATH = "app/wbd-next-devtools.css";
 const PROJECT_AGENTS_PATH = "AGENTS.md";
+const PROJECT_ENV_PATH = ".env";
 const DEFAULT_PROJECT_AGENTS_CONTENT = `# AGENTS.md
 
 ## Project Context
@@ -357,6 +360,13 @@ export default function ProjectWorkspace({
   const [fileListError, setFileListError] = useState<string | null>(null);
   const [saveIndicator, setSaveIndicator] = useState<"idle" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [envPanelOpen, setEnvPanelOpen] = useState(false);
+  const [envContent, setEnvContent] = useState("");
+  const [envContentBase, setEnvContentBase] = useState<string | null>(null);
+  const [envLoading, setEnvLoading] = useState(false);
+  const [envSaving, setEnvSaving] = useState(false);
+  const [envError, setEnvError] = useState<string | null>(null);
+  const [envSyncWarning, setEnvSyncWarning] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
   const [device, setDevice] = useState<DeviceView>("desktop");
   const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
@@ -527,6 +537,72 @@ export default function ProjectWorkspace({
     );
     if (!write.ok) throw new Error(write.reason ?? `could not write ${path}`);
   }, [sendRequest]);
+
+  async function loadProjectEnv(): Promise<void> {
+    if (envLoading) return;
+    setEnvLoading(true);
+    setEnvError(null);
+    setEnvSyncWarning(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/environment`, { cache: "no-store" });
+      const data = (await res.json().catch(() => ({}))) as { content?: unknown; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      if (typeof data.content !== "string") throw new Error("invalid environment response");
+      setEnvContent(data.content);
+      setEnvContentBase(data.content);
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : "environment load failed");
+    } finally {
+      setEnvLoading(false);
+    }
+  }
+
+  function openEnvPanel(): void {
+    setTab("code");
+    setEnvPanelOpen(true);
+    if (envContentBase === null && !envLoading) {
+      void loadProjectEnv();
+    }
+  }
+
+  async function saveProjectEnv(): Promise<void> {
+    if (turnInFlight !== null || envSaving) return;
+    setEnvSaving(true);
+    setEnvError(null);
+    setEnvSyncWarning(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/environment`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: envContent }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { content?: unknown; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      if (typeof data.content !== "string") throw new Error("invalid environment response");
+
+      setEnvContent(data.content);
+      setEnvContentBase(data.content);
+
+      try {
+        await writeProjectFile(PROJECT_ENV_PATH, data.content);
+        setPaths((prev) => (
+          prev.includes(PROJECT_ENV_PATH) ? prev : [...prev, PROJECT_ENV_PATH].sort()
+        ));
+        markChanged(PROJECT_ENV_PATH);
+        if (selectedPathRef.current === PROJECT_ENV_PATH) {
+          setFileContent(data.content);
+          setFileContentBase(data.content);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "sandbox sync failed";
+        setEnvSyncWarning(`Saved to project settings, but .env sync failed: ${message}`);
+      }
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : "environment save failed");
+    } finally {
+      setEnvSaving(false);
+    }
+  }
 
   const syncDevtoolsProjectFiles = useCallback(async (enabled: boolean) => {
     const layoutRequestId = crypto.randomUUID();
@@ -1368,6 +1444,7 @@ export default function ProjectWorkspace({
   }
 
   const dirty = fileContent !== null && fileContent !== fileContentBase;
+  const envDirty = envContentBase !== null && envContent !== envContentBase;
   const editorReadOnly = turnInFlight !== null;
   const wsOpen = wsStatus === "open";
   const showModelPicker = supportsOpenRouterModelPicker(selectedRuntime);
@@ -1693,7 +1770,88 @@ export default function ProjectWorkspace({
                   onSave={onSave}
                 />
               </div>
+              {envPanelOpen && (
+                <aside className="flex w-96 max-w-[42%] shrink-0 flex-col border-l border-border bg-card">
+                  <div className="flex min-h-11 items-center justify-between gap-2 border-b border-border px-3">
+                    <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                      <KeyRound className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                      <span className="truncate">Env</span>
+                      {envDirty && (
+                        <span className="size-1.5 shrink-0 rounded-full bg-amber-400" aria-label="Unsaved changes" />
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label="Close env editor"
+                      onClick={() => setEnvPanelOpen(false)}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                  <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+                    <label htmlFor="project-env-content" className="text-xs font-medium text-muted-foreground">
+                      {PROJECT_ENV_PATH}
+                    </label>
+                    <Textarea
+                      id="project-env-content"
+                      value={envContent}
+                      onChange={(e) => setEnvContent(e.target.value)}
+                      disabled={envLoading || envSaving || turnInFlight !== null}
+                      spellCheck={false}
+                      placeholder={envLoading ? "Loading environment..." : "KEY=value"}
+                      className="min-h-0 flex-1 resize-none font-mono text-xs leading-5"
+                    />
+                    {envError && (
+                      <div role="alert" className="text-xs text-red-200">
+                        {envError}
+                      </div>
+                    )}
+                    {envSyncWarning && (
+                      <div role="status" className="text-xs text-amber-200">
+                        {envSyncWarning}
+                      </div>
+                    )}
+                    <div className="flex min-h-8 items-center justify-between gap-3">
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {envLoading
+                          ? "Loading..."
+                          : envSaving
+                            ? "Saving..."
+                            : envDirty
+                              ? "Unsaved changes"
+                              : envContentBase === null
+                                ? "Not loaded"
+                                : "Saved"}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={envLoading || envSaving || turnInFlight !== null || !envDirty}
+                        onClick={() => void saveProjectEnv()}
+                      >
+                        {envSaving ? <Loader2 className="animate-spin" /> : <Save />}
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </aside>
+              )}
             </div>
+          }
+          codeActions={
+            <Button
+              type="button"
+              variant={envPanelOpen ? "secondary" : "ghost"}
+              size="xs"
+              disabled={wsStatus !== "open"}
+              onClick={openEnvPanel}
+            >
+              <KeyRound />
+              Env
+            </Button>
           }
           previewActions={
             project.previewUrl ? (
