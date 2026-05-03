@@ -6,6 +6,13 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-008 - Projekt-Env-Editor in der Workspace-UI sichtbarer gemacht
+
+- `Env`-Button zusätzlich in die Preview-Toolbar aufgenommen, damit
+  projektbezogene `.env`-Variablen ohne Wechsel in den Code-Tab auffindbar sind.
+- Lokale Host-Datenbank um die fehlende `ProjectEnvironment`-Tabelle ergänzt,
+  damit Speichern der Projekt-Env funktioniert.
+
 ### T-20260504-007 - Next-Devtools-Dateien für `src/app`-Repos korrigiert
 
 - Devtools-Dateipfade erkennen nun, ob ein Projekt `src/app/layout.tsx` oder

@@ -1874,6 +1874,18 @@ export default function ProjectWorkspace({
           previewActions={
             project.previewUrl ? (
               <>
+                <Button
+                  type="button"
+                  variant={envPanelOpen ? "secondary" : "ghost"}
+                  size="xs"
+                  disabled={wsStatus !== "open"}
+                  aria-pressed={envPanelOpen}
+                  aria-label="Edit project environment"
+                  onClick={openEnvPanel}
+                >
+                  <KeyRound />
+                  Env
+                </Button>
                 <div
                   role="group"
                   aria-label="Preview viewport"
