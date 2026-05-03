@@ -6,6 +6,16 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-007 - Next-Devtools-Dateien für `src/app`-Repos korrigiert
+
+- Devtools-Dateipfade erkennen nun, ob ein Projekt `src/app/layout.tsx` oder
+  `app/layout.tsx` verwendet.
+- Workspace-Devtools schreiben die CSS-Datei in denselben App-Root wie das
+  Layout, statt bei `src/app`-Repos ein störendes Top-Level-`app/` anzulegen.
+- Regressionstests für beide App-Root-Varianten ergänzt.
+- Die laufende Paramount-Sandbox wurde bereinigt und die Preview wieder gegen
+  `src/app` gestartet.
+
 ### T-20260504-006 - GitHub-Repo-Quelle im lokalen Worker-Sandbox-Start korrigiert
 
 - Root Cause untersucht: alte globale GitHub-Clone-Env-Werte überschrieben die

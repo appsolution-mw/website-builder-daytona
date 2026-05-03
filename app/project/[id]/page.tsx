@@ -57,6 +57,7 @@ import {
   ensureNextDevtoolsCssImport,
   nextDevIndicatorsEnabled,
   nextDevtoolsCssContent,
+  resolveNextAppDevtoolsPaths,
   setNextDevIndicators,
 } from "@/lib/next-dev-indicators";
 
@@ -116,9 +117,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHAT_IMAGES = 5;
 const MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
-const NEXT_LAYOUT_PATH = "app/layout.tsx";
 const NEXT_CONFIG_PATH = "next.config.ts";
-const NEXT_DEVTOOLS_CSS_PATH = "app/wbd-next-devtools.css";
 const PROJECT_AGENTS_PATH = "AGENTS.md";
 const PROJECT_ENV_PATH = ".env";
 const DEFAULT_PROJECT_AGENTS_CONTENT = `# AGENTS.md
@@ -388,6 +387,7 @@ export default function ProjectWorkspace({
   const mountedRef = useRef(true);
 
   const selectedPathRef = useRef<string | null>(null);
+  const pathsRef = useRef<string[]>([]);
   const fileContentRef = useRef<string | null>(null);
   const fileContentBaseRef = useRef<string | null>(null);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -395,6 +395,7 @@ export default function ProjectWorkspace({
   useEffect(() => { draftAttachmentsRef.current = draftAttachments; }, [draftAttachments]);
   useEffect(() => { selectedRuntimeRef.current = selectedRuntime; }, [selectedRuntime]);
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
+  useEffect(() => { pathsRef.current = paths; }, [paths]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
   useEffect(() => {
@@ -610,16 +611,17 @@ export default function ProjectWorkspace({
   }
 
   const syncDevtoolsProjectFiles = useCallback(async (enabled: boolean) => {
+    const appPaths = resolveNextAppDevtoolsPaths(pathsRef.current);
     const layoutRequestId = crypto.randomUUID();
     const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
-      { type: "file.read", requestId: layoutRequestId, path: NEXT_LAYOUT_PATH },
+      { type: "file.read", requestId: layoutRequestId, path: appPaths.layoutPath },
       layoutRequestId,
     );
     if (typeof layout.content === "string") {
       const nextLayout = ensureNextDevtoolsCssImport(layout.content);
       if (nextLayout !== layout.content) {
-        await writeProjectFile(NEXT_LAYOUT_PATH, nextLayout);
-        if (selectedPathRef.current === NEXT_LAYOUT_PATH) {
+        await writeProjectFile(appPaths.layoutPath, nextLayout);
+        if (selectedPathRef.current === appPaths.layoutPath) {
           setFileContent(nextLayout);
           setFileContentBase(nextLayout);
         }
@@ -627,8 +629,11 @@ export default function ProjectWorkspace({
     }
 
     const nextCss = nextDevtoolsCssContent(enabled);
-    await writeProjectFile(NEXT_DEVTOOLS_CSS_PATH, nextCss);
-    if (selectedPathRef.current === NEXT_DEVTOOLS_CSS_PATH) {
+    await writeProjectFile(appPaths.cssPath, nextCss);
+    setPaths((prev) => (
+      prev.includes(appPaths.cssPath) ? prev : [...prev, appPaths.cssPath].sort()
+    ));
+    if (selectedPathRef.current === appPaths.cssPath) {
       setFileContent(nextCss);
       setFileContentBase(nextCss);
     }
