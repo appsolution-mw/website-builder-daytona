@@ -1,4 +1,4 @@
-import type { AgentRuntime, BrokerToHost } from "@wbd/protocol";
+import type { AgentRuntime, BrokerToHost, PromptImageAttachment } from "@wbd/protocol";
 
 export interface AgentTurnOptions {
   projectId: string;
@@ -8,6 +8,7 @@ export interface AgentTurnOptions {
   turnId: string;
   projectRoot?: string;
   modelId?: string;
+  attachments?: PromptImageAttachment[];
   onEvent: (event: BrokerToHost) => void;
   signal?: AbortSignal;
 }

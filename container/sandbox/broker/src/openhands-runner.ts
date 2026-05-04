@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { BrokerToHost } from "@wbd/protocol";
 import type { AgentReviewOptions, AgentTurnOptions } from "./agent-provider";
@@ -8,6 +8,7 @@ import type { SpawnFn, SpawnedChild } from "./claude-runner";
 
 const OPENHANDS_BRIDGE_PATH = "/opt/builder/container/sandbox/broker/python/openhands_bridge.py";
 const PROJECT_ROOT = "/workspace/project";
+const OPENHANDS_ATTACHMENTS_DIR = ".agent-artifacts/openhands-attachments";
 const DEFAULT_OPENHANDS_MODEL = "openrouter/qwen/qwen3-coder:free";
 const DEFAULT_AGENTS_MD = `# AGENTS.md
 
@@ -73,6 +74,7 @@ function spawnBridge(args: {
   sessionId: string;
   prompt: string;
   model: string;
+  attachmentsManifestPath?: string;
   deps: OpenHandsRunnerDeps;
 }): SpawnedChild {
   const spawnFn: OpenHandsSpawnFn = args.deps.spawn ?? (nodeSpawn as unknown as OpenHandsSpawnFn);
@@ -87,12 +89,47 @@ function spawnBridge(args: {
     "--prompt",
     args.prompt,
   ];
+  if (args.attachmentsManifestPath) {
+    argv.push("--attachments-manifest", args.attachmentsManifestPath);
+  }
 
   return spawnFn("python3", argv, {
     cwd: PROJECT_ROOT,
     env: bridgeEnv(args.model),
     stdio: ["pipe", "pipe", "pipe"],
   });
+}
+
+function imageDataUrl(mimeType: string, dataBase64: string): string {
+  return `data:${mimeType};base64,${dataBase64}`;
+}
+
+function safeManifestName(turnId: string): string {
+  const stem = turnId
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${stem || "turn"}.json`;
+}
+
+async function writeAttachmentsManifest(
+  projectRoot: string | undefined,
+  turnId: string,
+  attachments: AgentTurnOptions["attachments"],
+): Promise<string | undefined> {
+  if (!attachments || attachments.length === 0) return undefined;
+
+  const root = projectRoot || PROJECT_ROOT;
+  const dir = join(root, OPENHANDS_ATTACHMENTS_DIR);
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, safeManifestName(turnId));
+  const manifest = {
+    imageUrls: attachments.map((attachment) =>
+      imageDataUrl(attachment.mimeType, attachment.dataBase64),
+    ),
+  };
+  await writeFile(path, `${JSON.stringify(manifest)}\n`, "utf8");
+  return path;
 }
 
 async function ensureAgentsMd(projectRoot: string | undefined): Promise<void> {
@@ -262,11 +299,17 @@ export async function runOpenHandsTurn(
   }
 
   await ensureAgentsMd(opts.projectRoot);
+  const attachmentsManifestPath = await writeAttachmentsManifest(
+    opts.projectRoot,
+    opts.turnId,
+    opts.attachments,
+  );
 
   const child = spawnBridge({
     sessionId: opts.sessionId,
     prompt: opts.prompt,
     model,
+    attachmentsManifestPath,
     deps,
   });
 

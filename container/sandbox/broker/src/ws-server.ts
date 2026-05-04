@@ -152,12 +152,13 @@ async function savePromptAttachments(args: {
   projectRoot: string;
   turnId: string;
   attachments?: PromptImageAttachment[];
-}): Promise<{ promptLines: string[]; error?: BrokerToHost }> {
+}): Promise<{ promptLines: string[]; attachments: PromptImageAttachment[]; error?: BrokerToHost }> {
   const attachments = args.attachments ?? [];
-  if (attachments.length === 0) return { promptLines: [] };
+  if (attachments.length === 0) return { promptLines: [], attachments: [] };
   if (attachments.length > MAX_ATTACHMENTS) {
     return {
       promptLines: [],
+      attachments: [],
       error: attachmentError(`Too many images attached. Maximum is ${MAX_ATTACHMENTS}.`, args.turnId),
     };
   }
@@ -166,12 +167,14 @@ async function savePromptAttachments(args: {
   await mkdir(uploadDir, { recursive: true });
 
   const promptLines = ["", "Attached image files:"];
+  const savedAttachments: PromptImageAttachment[] = [];
   let totalBytes = 0;
 
   for (const [idx, attachment] of attachments.entries()) {
     if (!IMAGE_EXTENSIONS[attachment.mimeType]) {
       return {
         promptLines: [],
+        attachments: [],
         error: attachmentError(`Unsupported image type: ${attachment.mimeType || "unknown"}.`, args.turnId),
       };
     }
@@ -181,18 +184,21 @@ async function savePromptAttachments(args: {
     } catch {
       return {
         promptLines: [],
+        attachments: [],
         error: attachmentError(`Image ${attachment.name || idx + 1} could not be decoded.`, args.turnId),
       };
     }
     if (buffer.length === 0) {
       return {
         promptLines: [],
+        attachments: [],
         error: attachmentError(`Image ${attachment.name || idx + 1} is empty.`, args.turnId),
       };
     }
     if (buffer.length > MAX_ATTACHMENT_BYTES) {
       return {
         promptLines: [],
+        attachments: [],
         error: attachmentError(`Image ${attachment.name || idx + 1} is larger than 8 MB.`, args.turnId),
       };
     }
@@ -200,6 +206,7 @@ async function savePromptAttachments(args: {
     if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
       return {
         promptLines: [],
+        attachments: [],
         error: attachmentError("Attached images are larger than 20 MB total.", args.turnId),
       };
     }
@@ -208,10 +215,11 @@ async function savePromptAttachments(args: {
     const filePath = join(uploadDir, fileName);
     await writeFile(filePath, buffer);
     promptLines.push(`${idx + 1}. ${filePath}`);
+    savedAttachments.push(attachment);
   }
 
   promptLines.push("", "Use these image paths as visual context for the user's request.");
-  return { promptLines };
+  return { promptLines, attachments: savedAttachments };
 }
 
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
@@ -408,6 +416,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
               turnId,
               projectRoot,
               modelId: msg.modelId,
+              attachments: attachmentResult.attachments,
               onEvent: coderOnEvent,
               signal: ctl.signal,
             },

@@ -35,6 +35,13 @@ def load_openhands() -> SimpleNamespace:
     from openhands.sdk import Agent, AgentContext, Conversation, LLM, Tool
 
     try:
+        from openhands.sdk.llm import ImageContent, Message, TextContent
+    except Exception:
+        ImageContent = None
+        Message = None
+        TextContent = None
+
+    try:
         from openhands.sdk.conversation import ConversationVisualizerBase
     except Exception:
         ConversationVisualizerBase = object
@@ -93,7 +100,10 @@ def load_openhands() -> SimpleNamespace:
         DelegateTool=DelegateTool,
         FileEditorTool=FileEditorTool,
         LLM=LLM,
+        ImageContent=ImageContent,
+        Message=Message,
         TaskTrackerTool=TaskTrackerTool,
+        TextContent=TextContent,
         TerminalTool=TerminalTool,
         Tool=Tool,
         load_installed_skills=load_installed_skills,
@@ -447,7 +457,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", required=True)
+    parser.add_argument("--attachments-manifest")
     return parser.parse_args()
+
+
+def load_attachment_image_urls(path: str | None) -> list[str]:
+    if not path:
+        return []
+
+    with Path(path).open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    image_urls = payload.get("imageUrls") if isinstance(payload, dict) else None
+    if not isinstance(image_urls, list) or not all(isinstance(url, str) and url for url in image_urls):
+        raise RuntimeError("OpenHands image attachment manifest is invalid.")
+    return image_urls
+
+
+def ensure_vision_enabled(llm: Any) -> None:
+    vision_is_active = getattr(llm, "vision_is_active", None)
+    if not callable(vision_is_active):
+        raise RuntimeError(
+            "Selected OpenHands model cannot confirm vision support for image attachments."
+        )
+    if not bool(maybe_await(vision_is_active())):
+        raise RuntimeError(
+            "Selected OpenHands model does not support vision; choose a vision-capable model for image attachments."
+        )
+
+
+def send_user_message(mod: SimpleNamespace, conversation: Any, llm: Any, prompt: str, image_urls: list[str]) -> None:
+    if not image_urls:
+        maybe_await(conversation.send_message(prompt))
+        return
+
+    if mod.Message is None or mod.TextContent is None or mod.ImageContent is None:
+        raise RuntimeError("Installed OpenHands SDK does not support image input messages.")
+
+    ensure_vision_enabled(llm)
+    message = instantiate(
+        mod.Message,
+        role="user",
+        content=[
+            instantiate(mod.TextContent, text=prompt),
+            instantiate(mod.ImageContent, image_urls=image_urls),
+        ],
+    )
+    maybe_await(conversation.send_message(message))
 
 
 def main() -> int:
@@ -480,7 +536,8 @@ def main() -> int:
             )
 
             emit({"type": "status", "phase": "thinking", "detail": "running agent"})
-            maybe_await(conversation.send_message(args.prompt))
+            image_urls = load_attachment_image_urls(args.attachments_manifest)
+            send_user_message(mod, conversation, llm, args.prompt, image_urls)
             maybe_await(conversation.run())
             emit(done_event(started_at, llm, conversation))
         return 0

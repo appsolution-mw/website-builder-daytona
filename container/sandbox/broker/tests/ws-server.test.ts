@@ -674,6 +674,75 @@ describe("broker ws server", () => {
     client.close();
   });
 
+  it("passes prompt image attachments to OpenHands as a native image manifest", async () => {
+    const { mkdtemp, readFile, stat } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
+    const previousOpenRouterKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-openhands-images-"));
+    const imageBase64 = Buffer.from("fake image bytes").toString("base64");
+    const { fakeSpawn, spawns } = spawnsSetup([
+      {
+        stdout: [
+          { type: "done", durationMs: 10, tokensIn: 1, tokensOut: 1, costUsd: 0 },
+        ],
+      },
+    ]);
+
+    try {
+      handle = await startBroker({
+        port: 0,
+        projectRoot: root,
+        enableFsTracker: false,
+        __testSpawn: fakeSpawn,
+      });
+
+      const client = new WebSocket(`ws://localhost:${handle.port}`);
+      await new Promise<void>((resolve) => client.once("open", () => resolve()));
+
+      const events: unknown[] = [];
+      client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+      client.send(JSON.stringify({
+        ...promptMsg("match this screenshot", "t-openhands-img", false, [
+          {
+            name: "Screen Shot.png",
+            mimeType: "image/png",
+            dataBase64: imageBase64,
+          },
+        ]),
+        runtime: "openhands",
+        modelId: "openrouter:openai/gpt-4o",
+      }));
+
+      const start = Date.now();
+      while (Date.now() - start < 2000) {
+        if (events.some((e) => (e as { type?: string }).type === "agent.done")) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      expect(spawns.length).toBe(1);
+      const argv = spawns[0].argv;
+      expect(argv).toContain("--attachments-manifest");
+      const manifestPath = argv[argv.indexOf("--attachments-manifest") + 1];
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
+      expect(manifest).toEqual({
+        imageUrls: [`data:image/png;base64,${imageBase64}`],
+      });
+
+      const imagePath = join(root, ".agent-artifacts", "chat-uploads", "t-openhands-img", "1-Screen-Shot.png");
+      await expect(stat(imagePath)).resolves.toBeDefined();
+      await expect(readFile(imagePath, "utf8")).resolves.toBe("fake image bytes");
+      client.close();
+    } finally {
+      if (previousOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = previousOpenRouterKey;
+      await import("node:fs/promises").then(({ rm }) => rm(root, { recursive: true, force: true }));
+    }
+  });
+
   it("skips reviewer when coder emits an error", async () => {
     const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
     const { fakeSpawn, spawns } = spawnsSetup([

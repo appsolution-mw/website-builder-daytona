@@ -262,6 +262,53 @@ describe("OpenHands runner", () => {
     });
   });
 
+  it("writes image attachment manifest and passes it to the OpenHands bridge", async () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
+    const projectRoot = await mkdtemp(join(tmpdir(), "openhands-images-"));
+    const imageBase64 = Buffer.from("fake png bytes").toString("base64");
+    const spawn = vi.fn(() =>
+      makeFakeChild([
+        JSON.stringify({ type: "done", durationMs: 1, tokensIn: 1, tokensOut: 1, costUsd: 0 }),
+      ]),
+    ) as unknown as OpenHandsSpawnFn;
+
+    try {
+      await runOpenHandsTurn(
+        {
+          projectId: "project-1",
+          sessionId: "session-1",
+          resumeSession: false,
+          prompt: "inspect the screenshot",
+          turnId: "turn-vision",
+          modelId: "openrouter:openai/gpt-4o",
+          projectRoot,
+          attachments: [
+            {
+              name: "screenshot.png",
+              mimeType: "image/png",
+              dataBase64: imageBase64,
+            },
+          ],
+          onEvent: () => {},
+        },
+        { spawn },
+      );
+
+      const mockFn = spawn as unknown as ReturnType<typeof vi.fn>;
+      const [, argv] = mockFn.mock.calls[0] as [string, string[]];
+      const manifestFlagIndex = argv.indexOf("--attachments-manifest");
+      expect(manifestFlagIndex).toBeGreaterThanOrEqual(0);
+      const manifestPath = argv[manifestFlagIndex + 1];
+      expect(manifestPath).toContain(".agent-artifacts/openhands-attachments/turn-vision.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
+      expect(manifest).toEqual({
+        imageUrls: [`data:image/png;base64,${imageBase64}`],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it("prefers explicit LLM bridge env values", async () => {
     process.env.OPENROUTER_API_KEY = "sk-or-test";
     process.env.LLM_API_KEY = "llm-test";
