@@ -92,12 +92,15 @@ fi
 
 cd /workspace/project
 
-git config user.email "sandbox@wbd.local"
-git config user.name "Website Builder Daytona"
-
 if [ "$PROJECT_SOURCE_TYPE" != "github" ] && [ ! -d .git ]; then
   echo "[entrypoint] initialising git repo in /workspace/project"
   git init -q -b main
+fi
+
+git config user.email "sandbox@wbd.local"
+git config user.name "Website Builder Daytona"
+
+if [ "$PROJECT_SOURCE_TYPE" != "github" ]; then
   git add -A
   git commit -q -m "initial template" || true
 fi
