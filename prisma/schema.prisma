@@ -53,6 +53,9 @@ model Project {
   messages             Message[]
   tokenUsages          TokenUsage[]
   environment          ProjectEnvironment?
+  agentConfig          ProjectAgentConfig?
+  skillEnablements     AgentSkillEnablement[]
+  agentEnablements     AgentDefinitionEnablement[]
   githubInstallation   GitHubInstallation?   @relation(fields: [githubInstallationId], references: [id], onDelete: SetNull)
   githubRepository     GitHubRepository?     @relation(fields: [githubRepositoryId], references: [id], onDelete: SetNull)
 
@@ -148,6 +151,95 @@ model ProjectEnvironment {
   content   String   @db.Text
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
+}
+
+model WorkspaceAgentConfig {
+  id        String   @id @default("global")
+  agentsMd  String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProjectAgentConfig {
+  projectId  String          @id
+  project    Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agentsMode AgentConfigMode @default(EXTEND)
+  agentsMd   String          @default("") @db.Text
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+}
+
+model AgentSkillDefinition {
+  id          String                   @id @default(cuid())
+  name        String                   @unique
+  description String                   @default("")
+  body        String                   @db.Text
+  triggers    Json?
+  source      AgentConfigSource        @default(WORKSPACE)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+  enablements AgentSkillEnablement[]
+}
+
+model AgentDefinition {
+  id             String                       @id @default(cuid())
+  name           String                       @unique
+  description    String                       @default("")
+  body           String                       @db.Text
+  tools          Json?
+  model          String                       @default("inherit")
+  skillNames     Json?
+  permissionMode String?
+  source         AgentConfigSource            @default(WORKSPACE)
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+  enablements    AgentDefinitionEnablement[]
+}
+
+model AgentSkillEnablement {
+  id        String               @id @default(cuid())
+  skillId   String
+  skill     AgentSkillDefinition @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project?             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  state     EnablementState
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@unique([skillId, projectId])
+  @@index([projectId])
+}
+
+model AgentDefinitionEnablement {
+  id        String          @id @default(cuid())
+  agentId   String
+  agent     AgentDefinition @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  projectId String?
+  project   Project?        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  state     EnablementState
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@unique([agentId, projectId])
+  @@index([projectId])
+}
+
+enum AgentConfigMode {
+  INHERIT
+  EXTEND
+  REPLACE
+}
+
+enum AgentConfigSource {
+  WORKSPACE
+  PROJECT
+  LEGACY_FILE
+}
+
+enum EnablementState {
+  ENABLED
+  DISABLED
+  INHERITED
 }
 
 enum ProjectStatus {
