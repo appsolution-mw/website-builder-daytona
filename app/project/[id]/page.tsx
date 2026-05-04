@@ -17,6 +17,7 @@ import {
   ArrowLeft,
   Bot,
   Bug,
+  Camera,
   Code2,
   ExternalLink,
   Globe2,
@@ -70,6 +71,13 @@ import {
   setNextDevIndicators,
   staleNextDevtoolsCleanupPaths,
 } from "@/lib/next-dev-indicators";
+import {
+  isUsableCaptureRect,
+  normalizeDragRect,
+  viewportRectToVideoCrop,
+  type CapturePoint,
+  type CaptureRect,
+} from "@/lib/preview-capture";
 
 type RuntimeState = {
   runtime: AgentRuntime;
@@ -302,6 +310,80 @@ function readImageFile(file: File): Promise<DraftImageAttachment> {
   });
 }
 
+function base64ByteLength(dataBase64: string): number {
+  const padding = dataBase64.endsWith("==") ? 2 : dataBase64.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((dataBase64.length * 3) / 4) - padding);
+}
+
+function imageAttachmentFromDataUrl(dataUrl: string, name: string): DraftImageAttachment {
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) {
+    throw new Error("Screenshot could not be converted into an image");
+  }
+  const [, mimeType, dataBase64] = match;
+  if (!ACCEPTED_IMAGE_TYPES.has(mimeType)) {
+    throw new Error(`Unsupported screenshot type: ${mimeType}`);
+  }
+  return {
+    id: crypto.randomUUID(),
+    name,
+    mimeType,
+    size: base64ByteLength(dataBase64),
+    dataUrl,
+    dataBase64,
+  };
+}
+
+async function captureViewportSelectionAsPngDataUrl(selection: CaptureRect): Promise<string> {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error("Screen capture is not available in this browser");
+  }
+
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve();
+      video.onerror = () => reject(new Error("Screen capture could not be loaded"));
+    });
+    await video.play();
+
+    const crop = viewportRectToVideoCrop(
+      selection,
+      { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
+      { width: video.videoWidth, height: video.videoHeight },
+    );
+    if (!isUsableCaptureRect(crop)) {
+      throw new Error("Captured area is too small");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = crop.width;
+    canvas.height = crop.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Screenshot canvas could not be created");
+    }
+    ctx.drawImage(
+      video,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      crop.width,
+      crop.height,
+    );
+    return canvas.toDataURL("image/png");
+  } finally {
+    for (const track of stream.getTracks()) track.stop();
+  }
+}
+
 function imageAttachmentsForPrompt(attachments: DraftImageAttachment[]): PromptImageAttachment[] {
   return attachments.map(({ name, mimeType, dataBase64 }) => ({ name, mimeType, dataBase64 }));
 }
@@ -433,6 +515,12 @@ export default function ProjectWorkspace({
   const [devIndicatorSaving, setDevIndicatorSaving] = useState(false);
   const [devIndicatorError, setDevIndicatorError] = useState<string | null>(null);
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [previewCaptureActive, setPreviewCaptureActive] = useState(false);
+  const [previewCaptureBusy, setPreviewCaptureBusy] = useState(false);
+  const [previewCaptureSelection, setPreviewCaptureSelection] = useState<{
+    viewport: CaptureRect;
+    local: CaptureRect;
+  } | null>(null);
   const [terminalEvent, setTerminalEvent] = useState<{ seq: number; event: TerminalProtocolEvent } | null>(null);
   const [terminalStatus, setTerminalStatus] = useState<XtermTerminalStatus>("offline");
   const [terminalClearSignal, setTerminalClearSignal] = useState(0);
@@ -451,6 +539,8 @@ export default function ProjectWorkspace({
   const turnRuntimeRef = useRef<Map<string, { runtime: AgentRuntime; modelId: string | null }>>(new Map());
   const modelsRequestStartedRef = useRef(false);
   const mountedRef = useRef(true);
+  const previewFrameRef = useRef<HTMLDivElement | null>(null);
+  const previewCaptureStartRef = useRef<CapturePoint | null>(null);
 
   const selectedPathRef = useRef<string | null>(null);
   const pathsRef = useRef<string[]>([]);
@@ -1245,6 +1335,18 @@ export default function ProjectWorkspace({
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  useEffect(() => {
+    if (!previewCaptureActive) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      previewCaptureStartRef.current = null;
+      setPreviewCaptureActive(false);
+      setPreviewCaptureSelection(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewCaptureActive]);
+
   function onChatScroll(e: React.UIEvent<HTMLUListElement>) {
     const el = e.currentTarget;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -1516,6 +1618,105 @@ export default function ProjectWorkspace({
   function retryOpenRouterModels() {
     modelsRequestStartedRef.current = false;
     void loadOpenRouterModels(true);
+  }
+
+  function previewCaptureBounds(): CaptureRect | null {
+    const frame = previewFrameRef.current;
+    if (!frame) return null;
+    const rect = frame.getBoundingClientRect();
+    return {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  function previewCaptureSelectionFromPointer(
+    start: CapturePoint,
+    current: CapturePoint,
+  ): { viewport: CaptureRect; local: CaptureRect } | null {
+    const bounds = previewCaptureBounds();
+    if (!bounds) return null;
+    const viewport = normalizeDragRect(start, current, bounds);
+    return {
+      viewport,
+      local: {
+        x: viewport.x - bounds.x,
+        y: viewport.y - bounds.y,
+        width: viewport.width,
+        height: viewport.height,
+      },
+    };
+  }
+
+  async function addPreviewCapture(selection: CaptureRect) {
+    if (draftAttachmentsRef.current.length >= MAX_CHAT_IMAGES) {
+      setAttachmentError(`You can attach up to ${MAX_CHAT_IMAGES} images`);
+      return;
+    }
+
+    setPreviewCaptureBusy(true);
+    setPreviewCaptureActive(false);
+    setAttachmentError(null);
+    try {
+      const dataUrl = await captureViewportSelectionAsPngDataUrl(selection);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const attachment = imageAttachmentFromDataUrl(dataUrl, `preview-capture-${timestamp}.png`);
+      if (attachment.size > MAX_CHAT_IMAGE_BYTES) {
+        setAttachmentError(`Screenshot is larger than ${formatBytes(MAX_CHAT_IMAGE_BYTES)}`);
+        return;
+      }
+      setDraftAttachments((prev) => [...prev, attachment].slice(0, MAX_CHAT_IMAGES));
+    } catch (err) {
+      const message = err instanceof DOMException && err.name === "NotAllowedError"
+        ? "Screen capture was cancelled"
+        : err instanceof Error
+          ? err.message
+          : "Screen capture failed";
+      setAttachmentError(message);
+    } finally {
+      setPreviewCaptureBusy(false);
+    }
+  }
+
+  function togglePreviewCapture() {
+    if (previewCaptureBusy) return;
+    previewCaptureStartRef.current = null;
+    setPreviewCaptureSelection(null);
+    setPreviewCaptureActive((active) => !active);
+  }
+
+  function onPreviewCapturePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (previewCaptureBusy || e.button !== 0) return;
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY };
+    previewCaptureStartRef.current = start;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setPreviewCaptureSelection(previewCaptureSelectionFromPointer(start, start));
+  }
+
+  function onPreviewCapturePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = previewCaptureStartRef.current;
+    if (!start || previewCaptureBusy) return;
+    setPreviewCaptureSelection(previewCaptureSelectionFromPointer(start, { x: e.clientX, y: e.clientY }));
+  }
+
+  function finishPreviewCapturePointer(e: ReactPointerEvent<HTMLDivElement>) {
+    const start = previewCaptureStartRef.current;
+    if (!start) return;
+    e.preventDefault();
+    previewCaptureStartRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    const selection = previewCaptureSelectionFromPointer(start, { x: e.clientX, y: e.clientY });
+    setPreviewCaptureSelection(null);
+    if (!selection || !isUsableCaptureRect(selection.viewport)) {
+      setAttachmentError("Capture area is too small");
+      return;
+    }
+    void addPreviewCapture(selection.viewport);
   }
 
   async function addImageFiles(fileList: FileList | File[]) {
@@ -2263,6 +2464,19 @@ export default function ProjectWorkspace({
               <>
                 <Button
                   type="button"
+                  variant={previewCaptureActive ? "secondary" : "ghost"}
+                  size="xs"
+                  disabled={turnInFlight !== null || previewCaptureBusy}
+                  aria-pressed={previewCaptureActive}
+                  aria-label="Capture preview region"
+                  title="Capture preview region"
+                  onClick={togglePreviewCapture}
+                >
+                  {previewCaptureBusy ? <Loader2 className="animate-spin" /> : <Camera />}
+                  Capture
+                </Button>
+                <Button
+                  type="button"
                   variant={envPanelOpen ? "secondary" : "ghost"}
                   size="xs"
                   disabled={wsStatus !== "open"}
@@ -2334,6 +2548,7 @@ export default function ProjectWorkspace({
             project.previewUrl ? (
               <div className="flex min-w-0 min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/40 p-3 sm:p-6">
                 <div
+                  ref={previewFrameRef}
                   className={cn(
                     "relative overflow-hidden rounded-lg bg-white shadow-xl ring-1 ring-border transition-[width,height,max-width,max-height] duration-200",
                     device === "desktop" && "h-full w-full",
@@ -2348,6 +2563,33 @@ export default function ProjectWorkspace({
                     sandbox="allow-scripts allow-same-origin allow-forms"
                     title="project preview"
                   />
+                  {previewCaptureActive && (
+                    <div
+                      className={cn(
+                        "absolute inset-0 z-20 cursor-crosshair bg-black/10",
+                        previewCaptureBusy && "cursor-wait",
+                      )}
+                      onPointerDown={onPreviewCapturePointerDown}
+                      onPointerMove={onPreviewCapturePointerMove}
+                      onPointerUp={finishPreviewCapturePointer}
+                      onPointerCancel={finishPreviewCapturePointer}
+                    >
+                      <span className="sr-only" aria-live="polite">
+                        Preview capture mode active
+                      </span>
+                      {previewCaptureSelection && (
+                        <div
+                          className="absolute border-2 border-primary bg-primary/15 shadow-[0_0_0_9999px_rgb(0_0_0/0.18)]"
+                          style={{
+                            left: `${previewCaptureSelection.local.x}px`,
+                            top: `${previewCaptureSelection.local.y}px`,
+                            width: `${previewCaptureSelection.local.width}px`,
+                            height: `${previewCaptureSelection.local.height}px`,
+                          }}
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
