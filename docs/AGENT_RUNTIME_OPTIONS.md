@@ -143,13 +143,18 @@ Hinweise:
   `OPENHANDS_ENABLE_PUBLIC_SKILLS=0` ist der konservative Default fuer
   reproduzierbare Sandbox-Laeufe; bei `1` darf OpenHands zusaetzliche
   oeffentliche Skills verwenden.
-- Projektkontext kommt weiterhin aus dem Repository, inklusive project
-  `AGENTS.md`. Zusaetzliche OpenHands-Skills koennen optional unter
-  `.openhands/skills` im Projekt abgelegt werden.
+- Projektkontext kommt weiterhin aus `AGENTS.md`. Die Host-UI verwaltet dafür
+  eine globale Konfiguration und eine Projektkonfiguration mit `INHERIT`,
+  `EXTEND` oder `REPLACE`; beim Sandbox-Start wird daraus die effektive
+  `AGENTS.md` materialisiert.
+- Skills werden über die Host-UI global gepflegt und pro Projekt aktiviert,
+  deaktiviert oder geerbt. Aktivierte Skills werden beim Sandbox-Start nach
+  `.agents/skills/<name>/SKILL.md` geschrieben. Der ältere Pfad
+  `.openhands/skills` bleibt nur als Legacy-Fallback relevant.
 - File-basierte Agents bleiben ein guter Weg, projektspezifische Rollen,
-  Review-Regeln und Spezialfaehigkeiten versioniert mit dem Code zu halten.
-  Der OpenHands-Pfad kann diese Projektdateien zusammen mit den uebrigen
-  Sandbox-Dateien lesen.
+  Review-Regeln und Spezialfähigkeiten zu halten. Aktivierte Agents werden als
+  `.agents/agents/<name>.md` materialisiert und können ebenfalls global oder
+  pro Projekt aktiviert, deaktiviert oder geerbt werden.
 - Sub-Agents und Delegation laufen in OpenHands ueber dessen Agent-/Skill-
   Mechanismen. Wo verfuegbar, nutzt die Runtime den `DelegateTool` fuer
   abgegrenzte Teilaufgaben statt alles in einem langen Haupt-Turn zu halten.
