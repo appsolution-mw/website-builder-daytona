@@ -14,10 +14,16 @@ import {
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
 import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
+import { AgentError } from "@/lib/runtime/worker-pool/types";
 
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
 const SANITIZED_PROVISIONING_ERROR = "sandbox provisioning failed";
+const SANDBOX_IMAGE_NOT_FOUND_ERROR = "sandbox image not found";
+const WORKER_AGENT_AUTH_ERROR = "worker agent authentication failed";
+const WORKER_AGENT_UNAVAILABLE_ERROR = "worker agent unavailable";
+const SANDBOX_PORTS_EXHAUSTED_ERROR = "sandbox port range exhausted";
+const SANDBOX_SPAWN_TIMEOUT_ERROR = "sandbox provisioning timed out";
 
 const projectSelect = {
   id: true,
@@ -91,6 +97,36 @@ function serializeProject(project: {
 
 function contentByteLength(content: string): number {
   return new TextEncoder().encode(content).byteLength;
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error(`spawn timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+function safeProvisioningError(error: unknown): string {
+  if (error instanceof AgentError) {
+    if (error.errorCode === "image-not-found") return SANDBOX_IMAGE_NOT_FOUND_ERROR;
+    if (error.errorCode === "hmac-invalid" || error.statusCode === 401) return WORKER_AGENT_AUTH_ERROR;
+    if (error.errorCode === "port-exhausted") return SANDBOX_PORTS_EXHAUSTED_ERROR;
+  }
+  if (error instanceof Error) {
+    if (error.message.startsWith("spawn timeout after ")) return SANDBOX_SPAWN_TIMEOUT_ERROR;
+    if (error.name === "AbortError" || /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT/i.test(error.message)) {
+      return WORKER_AGENT_UNAVAILABLE_ERROR;
+    }
+  }
+  return SANITIZED_PROVISIONING_ERROR;
 }
 
 export async function GET(request: NextRequest) {
@@ -238,20 +274,15 @@ export async function POST(request: NextRequest) {
         }
       : { type: "template" as const };
     const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
-    const info = await Promise.race([
+    const info = await withTimeout(
       sandboxRuntime.spawnProjectSandbox({
         projectId: project.id,
         source: spawnSource,
         projectEnvContent,
         openhandsFiles,
       }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`spawn timeout after ${SPAWN_TIMEOUT_MS}ms`)),
-          SPAWN_TIMEOUT_MS,
-        ),
-      ),
-    ]);
+      SPAWN_TIMEOUT_MS,
+    );
 
     const updated = await prisma.project.update({
       where: { id: project.id },
@@ -267,19 +298,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       project: serializeProject(updated),
     }, { status: 201 });
-  } catch {
+  } catch (error) {
+    const message = safeProvisioningError(error);
     const updated = await prisma.project.update({
       where: { id: project.id },
       data: {
         status: "DESTROYED",
-        provisioningError: SANITIZED_PROVISIONING_ERROR,
+        provisioningError: message,
       },
     });
     return NextResponse.json(
       {
         error: "provisioning failed",
         project: updated,
-        message: SANITIZED_PROVISIONING_ERROR,
+        message,
       },
       { status: 500 },
     );

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentError } from "@/lib/runtime/worker-pool/types";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentUpsertMock = vi.hoisted(() => vi.fn());
@@ -211,6 +212,51 @@ describe("POST /api/projects", () => {
     });
     expect(JSON.stringify(json)).not.toContain(leakedSecret);
     expect(JSON.stringify(json)).not.toContain(leakedBase64);
+  });
+
+  it("stores a safe actionable message when the worker-agent cannot find the sandbox image", async () => {
+    const project = {
+      id: "project-image-missing",
+      name: "Project Image Missing",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectCreateMock.mockResolvedValue(project);
+    spawnProjectSandboxMock.mockRejectedValue(
+      new AgentError(422, "image-not-found", "POST /sandboxes -> 422 image-not-found"),
+    );
+    projectUpdateMock.mockResolvedValue({
+      ...project,
+      status: "DESTROYED",
+      provisioningError: "sandbox image not found",
+    });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Project Image Missing" }),
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: {
+        status: "DESTROYED",
+        provisioningError: "sandbox image not found",
+      },
+    }));
+    expect(json).toMatchObject({
+      error: "provisioning failed",
+      message: "sandbox image not found",
+    });
   });
 
   it("passes saved project env content when spawning the sandbox", async () => {
