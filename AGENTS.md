@@ -22,29 +22,119 @@ rule block above intact.
 - Preserve native spelling in user-facing text. Do not replace umlauts such as
   `ä`, `ö`, `ü`, or `ß`.
 
-## Task Journal
+## Task And Changelog Files
 
-- `TASKS.md` is the source of truth for active and completed work.
-- `TASKS.md` must stay a structural overview table, not a detailed execution
-  log. Use the columns `ID`, `Datum`, `Status`, `Aufgabe`, `Plan / Skill`, and
-  `Notizen`.
-- `CHANGELOG.md` summarizes completed work by task ID.
-- Before every non-trivial task, add or update a `TASKS.md` entry:
-  - Use a stable ID in the format `T-YYYYMMDD-001`.
-  - Set the status to `Planned` or `In Progress`.
-  - Document the scope and intended approach briefly in one table row.
-- After completing a task:
-  - Set the task status to `Done`, or `Blocked` if it cannot be completed.
-  - Add a concise `CHANGELOG.md` entry that references the task ID.
+Never read full historical task or changelog files during normal implementation
+work. Use the current task file and the current monthly changelog only.
+
+- `TASKS.md` and `CHANGELOG.md` MUST only be short index or entry-point files.
+  They MUST NOT contain long work logs, full implementation histories, or
+  detailed task records.
+- Agents MUST keep task and changelog context small. During normal work, agents
+  MUST read only the smallest relevant file set:
+  1. `AGENTS.md`
+  2. `docs/tasks/CURRENT_TASK.md`, if it exists
+  3. the current task file
+  4. directly relevant source, config, schema, workflow, or documentation files
+- Agents MUST NOT automatically scan or fully read all files under
+  `docs/tasks/`, `docs/tasks/done/`, or `docs/changelog/`.
+- Historical task or changelog files MAY be read only when the user explicitly
+  asks for historical analysis, audit, migration, or traceability work.
+
+Task files MUST be stored as small, focused Markdown files:
+
+```text
+docs/tasks/
+  CURRENT_TASK.md
+  INDEX.md
+  active/
+    T-YYYYMMDD-001.md
+  done/
+    YYYY/
+      MM/
+        T-YYYYMMDD-001.md
+```
+
+Changelogs MUST be stored by month:
+
+```text
+docs/changelog/
+  INDEX.md
+  YYYY-MM.md
+```
+
+Before every non-trivial task, agents MUST create or update exactly one task
+file under `docs/tasks/active/`.
+
+- Task IDs MUST be stable and use the format `T-YYYYMMDD-001`.
+- A task file is REQUIRED for changes to code, documentation, schema, config,
+  build tooling, deployment workflows, or AI workflow rules.
+- Small read-only inspections and simple one-command checks do not need a task
+  file.
+- `docs/tasks/CURRENT_TASK.md` SHOULD point to the active task only when there
+  is one current task. It MUST stay short.
+
+Each task file SHOULD use this structure:
+
+```markdown
+# T-YYYYMMDD-001 - Short task title
+
+Status: In Progress
+Date: YYYY-MM-DD
+Owner: AI Agent
+
+Related files:
+- path/to/file
+
+## Scope
+
+Short description of the task.
+
+## Plan
+
+- Step 1
+- Step 2
+
+## Notes
+
+Important implementation notes only.
+
+## Outcome
+
+Pending / completed result.
+```
+
+When completing a task, agents MUST:
+
+- Set the current task file status to `Done`, or `Blocked` if it cannot be
+  completed.
+- Fill in the task file `Outcome` section.
+- Move the task file from `docs/tasks/active/` to
+  `docs/tasks/done/YYYY/MM/`.
+- Add exactly one short entry to the matching monthly changelog file
+  `docs/changelog/YYYY-MM.md`.
+- Update `docs/tasks/CURRENT_TASK.md` only if another task remains active;
+  otherwise leave it absent or point it to no active task.
+
+Changelog entries MUST be append-only and concise.
+
+- Do not maintain a giant global `CHANGELOG.md`.
+- Use one monthly file per month.
+- Each entry MUST include the date, task ID, and a short summary.
+- Each entry MAY include affected files.
+- Changelogs MUST NOT contain detailed implementation logs. Details belong in
+  the task file, Git commits, PRs, specs, plans, or relevant documentation.
+
+Legacy monolithic files MUST be treated as archives.
+
+- If large `TASKS.md` or `CHANGELOG.md` files already exist, agents MUST NOT
+  automatically migrate or fully read them.
+- Existing large files SHOULD be moved only by explicit request, for example to
+  `docs/archive/TASKS.legacy.md` and `docs/archive/CHANGELOG.legacy.md`.
+- New work MUST use the split task and monthly changelog structure.
+- Historical content MUST be backfilled only when the user explicitly asks for
+  backfill, migration, audit, or historical traceability.
 - Reference the task ID in commits and related documentation.
-- For backfilled historical work, derive task rows from Git tags, Git commits,
-  and `docs/superpowers/specs` or `docs/superpowers/plans`. If old commits do
-  not contain a task ID, record the tag or commit range in `Notizen` instead of
-  rewriting history.
-- Keep implementation detail in plans, specs, PRs, and commit history. Do not
-  expand `TASKS.md` into multi-step task plans.
-- Minimal one-command inspections do not need a new task entry. Any code,
-  documentation, schema, config, or workflow change does.
 
 ## Sub-Agent Delegation
 
@@ -154,8 +244,8 @@ rule block above intact.
   - `docs:`
   - `chore:`
   - `perf:`
-- Include the task ID in commit messages when the work has a `TASKS.md` entry,
-  for example: `docs: add task journal workflow for T-20260503-001`.
+- Include the task ID in commit messages when the work has a task file, for
+  example: `docs: update task workflow rules for T-20260504-001`.
 - Keep commits small and focused. Do not mix unrelated changes.
 - Do not stage or revert unrelated user changes.
 - Do not rewrite history or use destructive Git commands unless explicitly
@@ -171,5 +261,5 @@ rule block above intact.
   - Next.js or TypeScript changes: `pnpm lint` and usually `pnpm build`.
   - Runtime, broker, worker, protocol, or DB changes: focused tests plus the
     relevant package or host test command.
-- If verification is blocked, record the blocker in `TASKS.md` and mention it
-  in the final report.
+- If verification is blocked, record the blocker in the current task file and
+  mention it in the final report.
