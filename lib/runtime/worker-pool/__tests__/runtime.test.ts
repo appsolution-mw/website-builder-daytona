@@ -96,6 +96,26 @@ describe("WorkerPoolRuntime", () => {
     );
   });
 
+  it("encodes managed OpenHands files into the worker-agent sandbox env", async () => {
+    const handles = createFakeAgentClient();
+    const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
+    const openhandsFiles = [
+      { path: "AGENTS.md", content: "# Project instructions\n" },
+      { path: ".agents/skills/copy/SKILL.md", content: "---\nname: copy\n---\n" },
+    ];
+
+    await r.spawnProjectSandbox({
+      projectId: await project(),
+      source: { type: "template" },
+      openhandsFiles,
+    });
+
+    expect(handles.requests()).toHaveLength(1);
+    expect(handles.requests()[0]?.env.OPENHANDS_FILES_B64).toBe(
+      Buffer.from(JSON.stringify(openhandsFiles), "utf8").toString("base64"),
+    );
+  });
+
   it("forwards GitHub repository source env to the worker-agent sandbox", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));

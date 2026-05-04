@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentFindUniqueMock = vi.hoisted(() => vi.fn());
@@ -6,6 +6,8 @@ const projectFindFirstMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
 const sessionFindFirstMock = vi.hoisted(() => vi.fn());
 const sessionFindManyMock = vi.hoisted(() => vi.fn());
+const getEffectiveAgentConfigMock = vi.hoisted(() => vi.fn());
+const materializeOpenHandsFilesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/runtime", () => ({
   createRuntime: vi.fn(),
@@ -36,9 +38,22 @@ vi.mock("@/lib/db/client", () => ({
   },
 }));
 
+vi.mock("@/lib/agent-config/db", () => ({
+  getEffectiveAgentConfig: getEffectiveAgentConfigMock,
+}));
+
+vi.mock("@/lib/agent-config/materialize", () => ({
+  materializeOpenHandsFiles: materializeOpenHandsFilesMock,
+}));
+
 import { GET } from "../route";
 
 describe("GET /api/projects/[id]", () => {
+  beforeEach(() => {
+    getEffectiveAgentConfigMock.mockResolvedValue({ agentsMd: "# AGENTS.md\n", agentsMode: "EXTEND", skills: [], agents: [] });
+    materializeOpenHandsFilesMock.mockReturnValue([{ path: "AGENTS.md", content: "# AGENTS.md\n" }]);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
@@ -96,6 +111,7 @@ describe("GET /api/projects/[id]", () => {
     expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
       projectId: "project-with-env",
       projectEnvContent: projectEnv,
+      openhandsFiles: [{ path: "AGENTS.md", content: "# AGENTS.md\n" }],
     }));
   });
 });

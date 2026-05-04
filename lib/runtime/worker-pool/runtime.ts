@@ -46,6 +46,9 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       if (spawn.projectEnvContent) {
         env.PROJECT_ENV_B64 = Buffer.from(spawn.projectEnvContent, "utf8").toString("base64");
       }
+      if (spawn.openhandsFiles && spawn.openhandsFiles.length > 0) {
+        env.OPENHANDS_FILES_B64 = Buffer.from(JSON.stringify(spawn.openhandsFiles), "utf8").toString("base64");
+      }
       // Reserve DB row up-front so a concurrent spawn for the same project hits
       // the unique constraint and we know which one to keep.
       const ws = await prisma.workerSandbox.create({

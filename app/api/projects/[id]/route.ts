@@ -5,6 +5,8 @@ import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createRuntime, createDaytonaRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
+import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
+import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 
 const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
 const DEFAULT_SESSION_TITLE = "Main chat";
@@ -99,10 +101,12 @@ export async function GET(
     // Branch only reached for fake-* sandboxes — use fake runtime unconditionally
     // so a RUNTIME_MODE change between provision and re-spawn can't mismatch.
     const runtime = createDaytonaRuntime("fake");
+    const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
     const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
       source: { type: "template" },
       projectEnvContent: await projectEnvContent(project.id),
+      openhandsFiles,
     });
     project = await prisma.project.update({
       where: { id: project.id },

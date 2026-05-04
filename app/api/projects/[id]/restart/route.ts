@@ -4,6 +4,8 @@ import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createDaytonaRuntime, createRuntime, type Runtime } from "@/lib/runtime";
 import type { ProjectSource } from "@/lib/runtime/types";
 import { createInstallationAccessToken } from "@/lib/github/app";
+import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
+import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 
 const SANITIZED_RESTART_ERROR = "sandbox restart failed";
 
@@ -82,6 +84,7 @@ export async function POST(
     select: { content: true },
   });
   const runtime = runtimeForSandbox(project.daytonaSandboxId);
+  const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
 
   try {
     if (project.daytonaSandboxId) {
@@ -91,6 +94,7 @@ export async function POST(
       projectId: project.id,
       source,
       projectEnvContent: environment?.content || undefined,
+      openhandsFiles,
     });
     const updated = await prisma.project.update({
       where: { id: project.id },

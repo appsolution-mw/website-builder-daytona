@@ -75,6 +75,7 @@ function buildBootCommand(args: {
 function buildCreateEnvVars(args: {
   projectId: string;
   projectEnvContent?: string;
+  openhandsFiles?: SpawnArgs["openhandsFiles"];
 }): Record<string, string> {
   const openRouterApiKey = process.env.OPENROUTER_API_KEY ?? "";
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY || openRouterApiKey;
@@ -113,6 +114,9 @@ function buildCreateEnvVars(args: {
   if (args.projectEnvContent) {
     envVars.PROJECT_ENV_B64 = Buffer.from(args.projectEnvContent, "utf8").toString("base64");
   }
+  if (args.openhandsFiles && args.openhandsFiles.length > 0) {
+    envVars.OPENHANDS_FILES_B64 = Buffer.from(JSON.stringify(args.openhandsFiles), "utf8").toString("base64");
+  }
   return envVars;
 }
 
@@ -144,6 +148,7 @@ export function createCloudClient(): DaytonaClient {
       projectId,
       source,
       projectEnvContent,
+      openhandsFiles,
     }: SpawnArgs): Promise<SandboxInfo> {
       if (source.type !== "github") {
         throw new Error("Daytona Cloud runtime requires a GitHub project source");
@@ -154,7 +159,7 @@ export function createCloudClient(): DaytonaClient {
         image: BASE_IMAGE,
         resources: { cpu: 2, memory: 4, disk: 10 },
         public: true, // preview URLs are unauthenticated
-        envVars: buildCreateEnvVars({ projectId, projectEnvContent }),
+        envVars: buildCreateEnvVars({ projectId, projectEnvContent, openhandsFiles }),
       });
 
       // Run the boot script. nohup+& means this returns as soon as the clone

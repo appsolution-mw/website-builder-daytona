@@ -80,6 +80,54 @@ describe("fake daytona client", () => {
     });
   });
 
+  it("writes managed OpenHands files into the fake project root", async () => {
+    client = createFakeClient();
+    const openhandsFiles = [
+      { path: "AGENTS.md", content: "# Managed fake instructions\n" },
+      { path: ".agents/skills/research/SKILL.md", content: "---\nname: research\n---\n" },
+    ];
+    const info = await client.spawnProjectSandbox({
+      projectId: "p4",
+      source: { type: "template" },
+      openhandsFiles,
+    });
+    spawnedIds.push(info.sandboxId);
+
+    const ws = new WebSocket(info.brokerUrl);
+    const agentsReply = await new Promise<string>((resolve, reject) => {
+      ws.once("open", () => ws.send(JSON.stringify({ type: "file.read", requestId: "agents", path: "AGENTS.md" })));
+      ws.once("message", (d) => resolve(d.toString()));
+      ws.once("error", reject);
+    });
+    ws.close();
+
+    expect(JSON.parse(agentsReply)).toEqual({
+      type: "file.content",
+      requestId: "agents",
+      path: "AGENTS.md",
+      content: openhandsFiles[0]?.content,
+    });
+
+    const skillWs = new WebSocket(info.brokerUrl);
+    const skillReply = await new Promise<string>((resolve, reject) => {
+      skillWs.once("open", () => skillWs.send(JSON.stringify({
+        type: "file.read",
+        requestId: "skill",
+        path: ".agents/skills/research/SKILL.md",
+      })));
+      skillWs.once("message", (d) => resolve(d.toString()));
+      skillWs.once("error", reject);
+    });
+    skillWs.close();
+
+    expect(JSON.parse(skillReply)).toEqual({
+      type: "file.content",
+      requestId: "skill",
+      path: ".agents/skills/research/SKILL.md",
+      content: openhandsFiles[1]?.content,
+    });
+  });
+
   it("destroy is idempotent", async () => {
     client = createFakeClient();
     await client.destroyProjectSandbox("never-existed");

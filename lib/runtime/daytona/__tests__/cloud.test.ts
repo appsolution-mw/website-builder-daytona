@@ -16,6 +16,23 @@ describe("Daytona cloud runtime boot command", () => {
     })).not.toHaveProperty("PROJECT_ENV_B64");
   });
 
+  it("includes managed OpenHands files base64 in create env vars only when non-empty", () => {
+    const openhandsFiles = [
+      { path: "AGENTS.md", content: "# Managed\n" },
+      { path: ".agents/agents/reviewer.md", content: "Review carefully.\n" },
+    ];
+
+    expect(__testing.buildCreateEnvVars({
+      projectId: "project-1",
+      openhandsFiles,
+    }).OPENHANDS_FILES_B64).toBe(Buffer.from(JSON.stringify(openhandsFiles), "utf8").toString("base64"));
+
+    expect(__testing.buildCreateEnvVars({
+      projectId: "project-1",
+      openhandsFiles: [],
+    })).not.toHaveProperty("OPENHANDS_FILES_B64");
+  });
+
   it("does not embed project dotenv content in the shell boot command", () => {
     const projectEnvContent = "NEXT_PUBLIC_LABEL=Cloud\nSECRET_VALUE=hidden\n";
     const projectEnvBase64 = Buffer.from(projectEnvContent, "utf8").toString("base64");

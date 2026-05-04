@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 import openhands_bridge
 
@@ -44,6 +47,41 @@ class JsonlVisualizerTests(unittest.TestCase):
             json.loads(line),
             {"type": "chunk", "delta": "The headline uses Inter."},
         )
+
+
+class AgentContextTests(unittest.TestCase):
+    def test_loads_agents_skills_before_legacy_openhands_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            modern_dir = workspace / ".agents" / "skills" / "modern"
+            legacy_dir = workspace / ".openhands" / "skills"
+            modern_dir.mkdir(parents=True)
+            legacy_dir.mkdir(parents=True)
+            (modern_dir / "SKILL.md").write_text("---\nname: modern\n---\n", encoding="utf-8")
+            (legacy_dir / "legacy.md").write_text("# Legacy\n", encoding="utf-8")
+            visited: list[str] = []
+
+            class AgentContext:
+                def __init__(self, skills: list[str]) -> None:
+                    self.skills = skills
+
+            def load_skills_from_dir(path: str) -> list[str]:
+                relative_path = str(Path(path).relative_to(workspace))
+                visited.append(relative_path)
+                return [relative_path]
+
+            mod = SimpleNamespace(
+                AgentContext=AgentContext,
+                load_installed_skills=None,
+                load_project_skills=None,
+                load_skills_from_dir=load_skills_from_dir,
+            )
+
+            context = openhands_bridge.load_agent_context(mod, workspace)
+
+            self.assertIsNotNone(context)
+            self.assertEqual(visited, [".agents/skills", ".openhands/skills"])
+            self.assertEqual(context.skills, [".agents/skills", ".openhands/skills"])
 
 
 if __name__ == "__main__":

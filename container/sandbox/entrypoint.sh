@@ -110,6 +110,26 @@ if [ -n "${PROJECT_ENV_B64:-}" ]; then
   printf '%s' "${PROJECT_ENV_B64}" | base64 -d > /workspace/project/.env
 fi
 
+if [ -n "${OPENHANDS_FILES_B64:-}" ]; then
+  echo "[entrypoint] writing managed OpenHands config files"
+  OPENHANDS_TMP="/tmp/openhands-files.json"
+  printf '%s' "${OPENHANDS_FILES_B64}" | base64 -d > "${OPENHANDS_TMP}"
+  python3 - <<'PY'
+import json
+from pathlib import Path
+
+root = Path("/workspace/project").resolve()
+items = json.loads(Path("/tmp/openhands-files.json").read_text(encoding="utf-8"))
+for item in items:
+    rel = item["path"]
+    target = (root / rel).resolve()
+    if root not in target.parents and target != root:
+        raise SystemExit(f"refusing path outside workspace: {rel}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(item["content"], encoding="utf-8")
+PY
+fi
+
 install_project_deps
 
 echo "[entrypoint] starting next dev on :${PREVIEW_PORT}"

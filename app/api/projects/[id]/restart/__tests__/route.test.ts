@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const destroyProjectSandboxMock = vi.hoisted(() => vi.fn());
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
@@ -8,6 +8,8 @@ const projectFindFirstMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentFindUniqueMock = vi.hoisted(() => vi.fn());
 const createInstallationAccessTokenMock = vi.hoisted(() => vi.fn());
+const getEffectiveAgentConfigMock = vi.hoisted(() => vi.fn());
+const materializeOpenHandsFilesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/current-user", () => ({
   requireCurrentUserFromRequest: vi.fn(async () => ({
@@ -37,11 +39,24 @@ vi.mock("@/lib/github/app", () => ({
   createInstallationAccessToken: createInstallationAccessTokenMock,
 }));
 
+vi.mock("@/lib/agent-config/db", () => ({
+  getEffectiveAgentConfig: getEffectiveAgentConfigMock,
+}));
+
+vi.mock("@/lib/agent-config/materialize", () => ({
+  materializeOpenHandsFiles: materializeOpenHandsFilesMock,
+}));
+
 import { POST } from "../route";
 
 describe("POST /api/projects/[id]/restart", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  beforeEach(() => {
+    getEffectiveAgentConfigMock.mockResolvedValue({ agentsMd: "# AGENTS.md\n", agentsMode: "EXTEND", skills: [], agents: [] });
+    materializeOpenHandsFilesMock.mockReturnValue([{ path: "AGENTS.md", content: "# AGENTS.md\n" }]);
   });
 
   it("destroys and respawns a template sandbox with saved environment content", async () => {
@@ -101,6 +116,7 @@ describe("POST /api/projects/[id]/restart", () => {
       projectId: "project-1",
       source: { type: "template" },
       projectEnvContent: projectEnv,
+      openhandsFiles: [{ path: "AGENTS.md", content: "# AGENTS.md\n" }],
     });
     expect(projectUpdateMock).toHaveBeenCalledWith({
       where: { id: "project-1" },
@@ -174,7 +190,56 @@ describe("POST /api/projects/[id]/restart", () => {
         token: "installation-token",
       },
       projectEnvContent: undefined,
+      openhandsFiles: [{ path: "AGENTS.md", content: "# AGENTS.md\n" }],
     });
+  });
+
+  it("materializes the effective OpenHands config for restart", async () => {
+    const openhandsFiles = [
+      { path: "AGENTS.md", content: "# Effective\n" },
+      { path: ".agents/agents/reviewer.md", content: "---\nname: reviewer\n---\n" },
+    ];
+    const runtime = {
+      destroyProjectSandbox: destroyProjectSandboxMock,
+      spawnProjectSandbox: spawnProjectSandboxMock,
+    };
+    createRuntimeMock.mockReturnValue(runtime);
+    projectFindFirstMock.mockResolvedValue({
+      id: "project-openhands",
+      status: "RUNNING",
+      daytonaSandboxId: "sandbox-old",
+      sourceType: "TEMPLATE",
+      githubOwner: null,
+      githubRepo: null,
+      githubBaseBranch: null,
+      githubInstallation: null,
+    });
+    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
+    materializeOpenHandsFilesMock.mockReturnValue(openhandsFiles);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-new",
+      brokerUrl: "ws://localhost:4001",
+      brokerPreviewToken: "new-token",
+      previewUrl: "http://localhost:3001",
+    });
+    projectUpdateMock.mockResolvedValue({
+      id: "project-openhands",
+      status: "RUNNING",
+      daytonaSandboxId: "sandbox-new",
+    });
+
+    const res = await POST(new Request("http://localhost/api/projects/project-openhands/restart", {
+      method: "POST",
+    }), {
+      params: Promise.resolve({ id: "project-openhands" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(getEffectiveAgentConfigMock).toHaveBeenCalledWith("project-openhands");
+    expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: "project-openhands",
+      openhandsFiles,
+    }));
   });
 
   it("uses the fake Daytona runtime when restarting a fake sandbox", async () => {

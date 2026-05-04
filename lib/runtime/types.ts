@@ -17,6 +17,10 @@ export interface SpawnArgs {
   projectId: string;
   source: ProjectSource;
   projectEnvContent?: string;
+  openhandsFiles?: Array<{
+    path: string;
+    content: string;
+  }>;
 }
 
 export type ProjectSource =

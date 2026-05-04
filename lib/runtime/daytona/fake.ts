@@ -1,7 +1,7 @@
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { startBroker, type BrokerHandle } from "@wbd/broker";
 import type { DaytonaClient, SandboxInfo, SandboxStatus } from "./types";
 import type { SpawnArgs } from "../types";
@@ -71,13 +71,31 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
+async function writeManagedOpenHandsFiles(
+  projectRoot: string,
+  files: NonNullable<SpawnArgs["openhandsFiles"]>,
+): Promise<void> {
+  const root = resolve(projectRoot);
+  for (const file of files) {
+    const target = resolve(root, file.path);
+    if (target !== root && !target.startsWith(`${root}${sep}`)) {
+      throw new Error(`Refusing to write OpenHands file outside project root: ${file.path}`);
+    }
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.content, "utf8");
+  }
+}
+
 export function createFakeClient(): DaytonaClient {
   return {
-    async spawnProjectSandbox({ projectId, projectEnvContent }: SpawnArgs): Promise<SandboxInfo> {
+    async spawnProjectSandbox({ projectId, projectEnvContent, openhandsFiles }: SpawnArgs): Promise<SandboxInfo> {
       const projectRoot = await mkdtemp(join(tmpdir(), `wbd-fake-${projectId}-`));
       await cp(PROJECT_TEMPLATE_DIR, projectRoot, { recursive: true });
       if (projectEnvContent) {
         await writeFile(join(projectRoot, ".env"), projectEnvContent, "utf8");
+      }
+      if (openhandsFiles && openhandsFiles.length > 0) {
+        await writeManagedOpenHandsFiles(projectRoot, openhandsFiles);
       }
       const broker = await startBroker({ port: 0, projectRoot });
       const preview = await startPreviewServer(projectId);

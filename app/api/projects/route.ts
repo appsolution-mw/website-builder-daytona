@@ -12,6 +12,8 @@ import {
   protocolRuntimeToDb,
 } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
+import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
+import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
@@ -235,11 +237,13 @@ export async function POST(request: NextRequest) {
           )).token,
         }
       : { type: "template" as const };
+    const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
     const info = await Promise.race([
       sandboxRuntime.spawnProjectSandbox({
         projectId: project.id,
         source: spawnSource,
         projectEnvContent,
+        openhandsFiles,
       }),
       new Promise<never>((_, reject) =>
         setTimeout(

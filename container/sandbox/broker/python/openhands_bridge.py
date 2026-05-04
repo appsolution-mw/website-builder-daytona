@@ -322,17 +322,21 @@ def load_agent_context(mod: SimpleNamespace, workspace: Path) -> Any | None:
         except Exception:
             pass
 
-    local_skills = workspace / ".openhands" / "skills"
-    if local_skills.is_dir() and mod.load_skills_from_dir is not None:
-        try:
-            loaded = mod.load_skills_from_dir(str(local_skills))
-            if isinstance(loaded, tuple):
-                for group in loaded:
-                    append_skills(skills, group)
-            else:
-                append_skills(skills, loaded)
-        except Exception:
-            pass
+    skill_dirs = [
+        workspace / ".agents" / "skills",
+        workspace / ".openhands" / "skills",
+    ]
+    for local_skills in skill_dirs:
+        if local_skills.is_dir() and mod.load_skills_from_dir is not None:
+            try:
+                loaded = mod.load_skills_from_dir(str(local_skills))
+                if isinstance(loaded, tuple):
+                    for group in loaded:
+                        append_skills(skills, group)
+                else:
+                    append_skills(skills, loaded)
+            except Exception:
+                pass
 
     if os.getenv("OPENHANDS_ENABLE_PUBLIC_SKILLS") == "1" and mod.load_installed_skills is not None:
         try:
