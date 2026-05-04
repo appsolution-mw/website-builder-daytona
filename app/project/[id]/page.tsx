@@ -32,6 +32,7 @@ import {
   Save,
   ScrollText,
   Send,
+  Settings2,
   Smartphone,
   Square,
   Tablet,
@@ -54,6 +55,13 @@ import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
 import { XtermTerminal, type XtermTerminalStatus } from "@/components/workspace/XtermTerminal";
+import { ProjectAgentConfigPanel } from "@/components/agent-config/ProjectAgentConfigPanel";
+import { normalizeProjectAgentConfigResponse } from "@/components/agent-config/normalizers";
+import type {
+  MaterializedAgentFile,
+  ProjectAgentConfigInput,
+  ProjectAgentConfigResponse,
+} from "@/components/agent-config/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -509,6 +517,12 @@ export default function ProjectWorkspace({
   const [envError, setEnvError] = useState<string | null>(null);
   const [envSyncWarning, setEnvSyncWarning] = useState<string | null>(null);
   const [envSyncPending, setEnvSyncPending] = useState(false);
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false);
+  const [agentConfig, setAgentConfig] = useState<ProjectAgentConfigResponse | null>(null);
+  const [agentConfigLoading, setAgentConfigLoading] = useState(false);
+  const [agentConfigError, setAgentConfigError] = useState<string | null>(null);
+  const [agentConfigSaving, setAgentConfigSaving] = useState(false);
+  const [agentConfigSyncWarning, setAgentConfigSyncWarning] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
   const [device, setDevice] = useState<DeviceView>("desktop");
   const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
@@ -745,8 +759,38 @@ export default function ProjectWorkspace({
   function openEnvPanel(): void {
     setTab("code");
     setEnvPanelOpen(true);
+    setAgentConfigOpen(false);
     if (envContentBase === null && !envLoading) {
       void loadProjectEnv();
+    }
+  }
+
+  async function loadAgentConfig(): Promise<void> {
+    if (agentConfigLoading) return;
+    setAgentConfigLoading(true);
+    setAgentConfigError(null);
+    setAgentConfigSyncWarning(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/agent-config`, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const body = data as { error?: string; message?: string };
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      setAgentConfig(normalizeProjectAgentConfigResponse(data));
+    } catch (err) {
+      setAgentConfigError(err instanceof Error ? err.message : "agent config load failed");
+    } finally {
+      setAgentConfigLoading(false);
+    }
+  }
+
+  function openAgentConfigPanel(): void {
+    setTab("code");
+    setEnvPanelOpen(false);
+    setAgentConfigOpen(true);
+    if (!agentConfig && !agentConfigLoading) {
+      void loadAgentConfig();
     }
   }
 
@@ -789,6 +833,61 @@ export default function ProjectWorkspace({
       setEnvError(err instanceof Error ? err.message : "environment save failed");
     } finally {
       setEnvSaving(false);
+    }
+  }
+
+  async function syncOpenHandsFiles(files: MaterializedAgentFile[]): Promise<void> {
+    if (turnInFlight !== null) {
+      throw new Error("an agent turn is running");
+    }
+
+    for (const file of files) {
+      await writeProjectFile(file.path, file.content);
+      setPaths((prev) => (
+        prev.includes(file.path) ? prev : [...prev, file.path].sort()
+      ));
+      markChanged(file.path);
+      if (selectedPathRef.current === file.path) {
+        setFileContent(file.content);
+        setFileContentBase(file.content);
+      }
+    }
+  }
+
+  async function saveAgentConfig(next: ProjectAgentConfigInput): Promise<void> {
+    if (turnInFlight !== null || agentConfigSaving) return;
+    setAgentConfigSaving(true);
+    setAgentConfigError(null);
+    setAgentConfigSyncWarning(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/agent-config`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const body = data as { error?: string; message?: string };
+        throw new Error(body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      const updated = normalizeProjectAgentConfigResponse({
+        ...(agentConfig ?? {}),
+        ...data,
+      });
+      setAgentConfig(updated);
+
+      try {
+        await syncOpenHandsFiles(updated.materializedFiles);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "sandbox sync failed";
+        setAgentConfigSyncWarning(
+          `Saved to project settings, but live OpenHands file sync failed: ${message}. Restart applies the managed config.`,
+        );
+      }
+    } catch (err) {
+      setAgentConfigError(err instanceof Error ? err.message : "agent config save failed");
+    } finally {
+      setAgentConfigSaving(false);
     }
   }
 
@@ -1952,6 +2051,18 @@ export default function ProjectWorkspace({
           >
             {sandboxRestarting ? <Loader2 className="animate-spin" /> : <RefreshCw />}
           </Button>
+          <Button
+            type="button"
+            variant={agentConfigOpen ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label="Edit agent config"
+            title="Edit agent config"
+            disabled={wsStatus !== "open"}
+            aria-pressed={agentConfigOpen}
+            onClick={openAgentConfigPanel}
+          >
+            <Settings2 />
+          </Button>
           <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
             {turnInFlight ? "agent busy" : "ready"}
           </Badge>
@@ -2321,6 +2432,20 @@ export default function ProjectWorkspace({
                   </div>
                 </aside>
               )}
+              {agentConfigOpen && (
+                <ProjectAgentConfigPanel
+                  config={agentConfig}
+                  loading={agentConfigLoading}
+                  saving={agentConfigSaving}
+                  error={agentConfigError}
+                  syncWarning={agentConfigSyncWarning}
+                  disabled={turnInFlight !== null}
+                  onClose={() => setAgentConfigOpen(false)}
+                  onReload={() => void loadAgentConfig()}
+                  onSave={(next) => void saveAgentConfig(next)}
+                  onLocalChange={setAgentConfig}
+                />
+              )}
             </div>
           }
           terminal={
@@ -2397,18 +2522,32 @@ export default function ProjectWorkspace({
             </div>
           }
           codeActions={
-            <Button
-              type="button"
-              variant={envPanelOpen ? "secondary" : "ghost"}
-              size="xs"
-              disabled={wsStatus !== "open"}
-              aria-pressed={envPanelOpen}
-              aria-label="Edit project environment"
-              onClick={openEnvPanel}
-            >
-              <KeyRound />
-              Env
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant={agentConfigOpen ? "secondary" : "ghost"}
+                size="xs"
+                disabled={wsStatus !== "open"}
+                aria-pressed={agentConfigOpen}
+                aria-label="Edit agent config"
+                onClick={openAgentConfigPanel}
+              >
+                <Settings2 />
+                Agent config
+              </Button>
+              <Button
+                type="button"
+                variant={envPanelOpen ? "secondary" : "ghost"}
+                size="xs"
+                disabled={wsStatus !== "open"}
+                aria-pressed={envPanelOpen}
+                aria-label="Edit project environment"
+                onClick={openEnvPanel}
+              >
+                <KeyRound />
+                Env
+              </Button>
+            </>
           }
           terminalActions={
             <>
@@ -2486,6 +2625,18 @@ export default function ProjectWorkspace({
                 >
                   <KeyRound />
                   Env
+                </Button>
+                <Button
+                  type="button"
+                  variant={agentConfigOpen ? "secondary" : "ghost"}
+                  size="xs"
+                  disabled={wsStatus !== "open"}
+                  aria-pressed={agentConfigOpen}
+                  aria-label="Edit agent config"
+                  onClick={openAgentConfigPanel}
+                >
+                  <Settings2 />
+                  Agent config
                 </Button>
                 <div
                   role="group"

@@ -14,6 +14,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Settings2,
   Trash2,
 } from "lucide-react";
 
@@ -422,6 +423,12 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-col gap-3 sm:items-end">
             <div className="flex gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href="/agent-config">
+                  <Settings2 />
+                  Agent config
+                </Link>
+              </Button>
               <Button asChild variant="outline" size="sm">
                 <Link href="/usage">
                   <BarChart3 />
