@@ -151,6 +151,21 @@ def public_attr(obj: Any, name: str) -> Any:
         return None
 
 
+def text_content(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "content", "message"):
+            text = text_content(value.get(key))
+            if text:
+                return text
+        return ""
+    if isinstance(value, (list, tuple)):
+        parts = [text_content(item) for item in value]
+        return "\n\n".join(part for part in parts if part)
+    return ""
+
+
 def event_dict(event: Any) -> dict[str, Any]:
     for method_name in ("model_dump", "dict"):
         method = public_attr(event, method_name)
@@ -264,6 +279,14 @@ class JsonlVisualizer:
             value = public_attr(event, key)
             if isinstance(value, str) and value.strip():
                 return compact_string(value)
+        source = record.get("source")
+        llm_message = record.get("llm_message")
+        if isinstance(llm_message, dict):
+            role = llm_message.get("role")
+            if source == "agent" or role == "assistant":
+                text = text_content(llm_message.get("content"))
+                if text:
+                    return compact_string(text)
         return ""
 
 
