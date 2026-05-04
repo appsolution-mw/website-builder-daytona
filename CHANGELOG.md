@@ -6,6 +6,17 @@ Einzelcommit.
 
 ## 2026-05-04
 
+### T-20260504-015 - Template-Projektstart nach Projekterstellung stabilisiert
+
+- Root Cause für `ws: closed` und verweigerte Template-Preview behoben:
+  `git config` lief im Sandbox-Entrypoint vor `git init` und beendete
+  Template-Container sofort.
+- Entrypoint-Reihenfolge korrigiert, sodass Template-Projekte zuerst ein
+  Git-Repo initialisieren und danach lokale Git-Konfiguration/Initial-Commit
+  ausführen.
+- Regressionstest für die Entrypoint-Reihenfolge ergänzt und lokales
+  `wbd/sandbox:dev`-Image neu gebaut.
+
 ### T-20260504-014 - Workspace-Terminal auf interaktives xterm.js-PTY umgestellt
 
 - Workspace-Terminal von Command-Formular auf xterm.js-Frontend mit
