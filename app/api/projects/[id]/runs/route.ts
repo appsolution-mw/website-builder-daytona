@@ -141,7 +141,9 @@ export async function POST(
     providerSessionId: payload.providerSessionId,
     modelId: payload.modelId,
   });
-  await requestProjectQueueDrain(project.id);
+  requestProjectQueueDrain(project.id).catch((error: unknown) => {
+    console.error("project queue drain failed", error);
+  });
 
   return NextResponse.json(result, { status: 201 });
 }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requireCurrentUserFromRequestMock = vi.hoisted(() => vi.fn());
 const requireAccessibleProjectMock = vi.hoisted(() => vi.fn());
@@ -71,6 +71,10 @@ function postRequest(body: unknown): Request {
 }
 
 describe("/api/projects/[id]/runs", () => {
+  beforeEach(() => {
+    requestProjectQueueDrainMock.mockResolvedValue(undefined);
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });

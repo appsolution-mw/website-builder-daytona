@@ -246,6 +246,52 @@ describe("worker-agent server", () => {
     expect(brokerRequests).toEqual([]);
   });
 
+  it("POST /sandboxes/:id/runs/:runId/execute forwards the request and streams broker events", async () => {
+    const { port } = await startBrokerStreamServer([
+      { type: "agent.chunk", turnId: "run-1", delta: "Hi" },
+      { type: "agent.done", turnId: "run-1", exitCode: 0 },
+    ]);
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({
+      projectId: "p1",
+      sessionId: "session-1",
+      providerSessionId: "provider-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      prompt: "Build it",
+      runtime: "openhands",
+      resumeSession: true,
+    });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/runs/run-1/execute",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/runs/run-1/execute", body),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/x-ndjson");
+    expect(res.body.trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+      { type: "agent.chunk", turnId: "run-1", delta: "Hi" },
+      { type: "agent.done", turnId: "run-1", exitCode: 0 },
+    ]);
+    expect(brokerRequests).toEqual([
+      {
+        method: "POST",
+        url: "/internal/projects/p1/runs/run-1/execute",
+        authorization: "Bearer broker-token",
+        body,
+      },
+    ]);
+  });
+
   it("POST /sandboxes/:id/queue/drain validates projectId body", async () => {
     const body = JSON.stringify({});
 
@@ -406,6 +452,32 @@ async function startBrokerCommandServer(
       });
       res.writeHead(statusCode, { "content-type": "application/json" });
       res.end(JSON.stringify(responseBody));
+    });
+  });
+  await new Promise<void>((resolve) => brokerServer?.listen(0, "127.0.0.1", resolve));
+  const address = brokerServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("broker test server did not bind to a port");
+  }
+  return { port: address.port };
+}
+
+async function startBrokerStreamServer(events: unknown[]): Promise<{ port: number }> {
+  brokerServer = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      brokerRequests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      for (const event of events) {
+        res.write(`${JSON.stringify(event)}\n`);
+      }
+      res.end();
     });
   });
   await new Promise<void>((resolve) => brokerServer?.listen(0, "127.0.0.1", resolve));

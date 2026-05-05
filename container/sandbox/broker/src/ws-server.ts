@@ -1,11 +1,13 @@
 import { WebSocketServer, type WebSocket } from "ws";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type {
+  AgentRuntime,
   HostToBroker,
   BrokerToHost,
 } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
 import type { SpawnFn } from "./claude-runner";
+import { executeAgentRun } from "./agent-run-executor";
 import { agentRuntimeFromEnv } from "./agent-provider";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
 import {
@@ -39,21 +41,51 @@ export interface StartBrokerOptions {
   onCancelProjectRun?: (projectId: string, runId: string) => Promise<void> | void;
 }
 
+interface ExecuteRunCommand {
+  projectId: string;
+  sessionId: string;
+  providerSessionId: string;
+  runId: string;
+  attemptId: string;
+  prompt: string;
+  runtime: AgentRuntime;
+  resumeSession: boolean;
+  modelId?: string;
+}
+
+interface ActiveRunState {
+  controller: AbortController;
+  persistEvent: (event: BrokerToHost) => Promise<void>;
+}
+
 const MAX_TERMINAL_COMMAND_BYTES = 8192;
 
 export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandle> {
   const projectRoot = opts.projectRoot ?? "/workspace/project";
   const enableFsTracker = opts.enableFsTracker ?? true;
   console.log(`[broker] default agent runtime=${agentRuntimeFromEnv()}`);
+  const activeRuns = new Map<string, ActiveRunState>();
+  const server = createServer();
+  const wss = new WebSocketServer({ server });
+  const broadcast = (msg: BrokerToHost) => {
+    const data = JSON.stringify(msg);
+    for (const client of wss.clients) {
+      if (client.readyState === client.OPEN) client.send(data);
+    }
+  };
 
-  const server = createServer((req, res) => {
-    void handleInternalHttpRequest(req, res, opts).catch(() => {
+  server.on("request", (req, res) => {
+    void handleInternalHttpRequest(req, res, {
+      ...opts,
+      activeRuns,
+      broadcastEvent: broadcast,
+      projectRoot,
+    }).catch(() => {
       if (!res.writableEnded) {
         writeJson(res, 500, { error: "internal" });
       }
     });
   });
-  const wss = new WebSocketServer({ server });
 
   await new Promise<void>((resolve, reject) => {
     server.once("listening", resolve);
@@ -66,15 +98,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     throw new Error("ws server did not bind to a numeric port");
   }
 
-  const isAgentActive = () => false;
-  const isLocked = () => false;
-
-  const broadcast = (msg: BrokerToHost) => {
-    const data = JSON.stringify(msg);
-    for (const client of wss.clients) {
-      if (client.readyState === client.OPEN) client.send(data);
-    }
-  };
+  const isAgentActive = () => activeRuns.size > 0;
+  const isLocked = isAgentActive;
 
   let tracker: FsTracker | undefined;
   if (enableFsTracker) {
@@ -82,12 +107,18 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       root: projectRoot,
       isAgentActive,
       onEvent: (e) => {
-        broadcast({
+        const event: BrokerToHost = {
           type: "file.changed",
           path: e.path,
           event: e.event,
           source: e.source,
-        });
+        };
+        for (const active of activeRuns.values()) {
+          active.persistEvent(event).catch((error: unknown) => {
+            console.error("failed to persist file change event", error);
+          });
+        }
+        broadcast(event);
       },
     });
   }
@@ -391,7 +422,11 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
 async function handleInternalHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: StartBrokerOptions,
+  opts: StartBrokerOptions & {
+    activeRuns: Map<string, ActiveRunState>;
+    broadcastEvent: (event: BrokerToHost) => void;
+    projectRoot: string;
+  },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (!url.pathname.startsWith("/internal/")) {
@@ -421,12 +456,123 @@ async function handleInternalHttpRequest(
   if (cancelMatch) {
     const projectId = decodeURIComponent(cancelMatch[1]);
     const runId = decodeURIComponent(cancelMatch[2]);
-    await (opts.onCancelProjectRun ?? noopCancel)(projectId, runId);
+    if (opts.onCancelProjectRun) {
+      await opts.onCancelProjectRun(projectId, runId);
+    } else {
+      opts.activeRuns.get(runId)?.controller.abort();
+    }
     writeJson(res, 200, { ok: true });
     return;
   }
 
+  const executeMatch = /^\/internal\/projects\/([^/]+)\/runs\/([^/]+)\/execute$/.exec(url.pathname);
+  if (executeMatch) {
+    const projectId = decodeURIComponent(executeMatch[1]);
+    const runId = decodeURIComponent(executeMatch[2]);
+    const body = await readJsonBody(req);
+    if (!isExecuteRunCommand(body) || body.projectId !== projectId || body.runId !== runId) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    if (opts.activeRuns.has(runId)) {
+      writeJson(res, 409, { error: "run-already-active" });
+      return;
+    }
+
+    await executeInternalRun({
+      command: body,
+      res,
+      activeRuns: opts.activeRuns,
+      broadcastEvent: opts.broadcastEvent,
+      projectRoot: opts.projectRoot,
+      ...(opts.__testSpawn ? { __testSpawn: opts.__testSpawn } : {}),
+    });
+    return;
+  }
+
   writeJson(res, 404, { error: "not-found" });
+}
+
+async function executeInternalRun(input: {
+  command: ExecuteRunCommand;
+  res: ServerResponse;
+  activeRuns: Map<string, ActiveRunState>;
+  broadcastEvent: (event: BrokerToHost) => void;
+  projectRoot: string;
+  __testSpawn?: SpawnFn;
+}): Promise<void> {
+  const ctl = new AbortController();
+  input.res.writeHead(200, { "content-type": "application/x-ndjson" });
+  const persistEvent = async (event: BrokerToHost): Promise<void> => {
+    input.res.write(`${JSON.stringify(event)}\n`);
+  };
+  input.activeRuns.set(input.command.runId, {
+    controller: ctl,
+    persistEvent,
+  });
+
+  try {
+    await executeAgentRun({
+      projectId: input.command.projectId,
+      sessionId: input.command.sessionId,
+      providerSessionId: input.command.providerSessionId,
+      runId: input.command.runId,
+      attemptId: input.command.attemptId,
+      prompt: input.command.prompt,
+      runtime: input.command.runtime,
+      resumeSession: input.command.resumeSession,
+      modelId: input.command.modelId,
+      projectRoot: input.projectRoot,
+      signal: ctl.signal,
+      persistEvent,
+      broadcastEvent: input.broadcastEvent,
+      ...(input.__testSpawn ? { __testSpawn: input.__testSpawn } : {}),
+    });
+  } catch (error) {
+    input.res.write(`${JSON.stringify({
+      type: "agent.error",
+      turnId: input.command.runId,
+      message: error instanceof Error ? error.message : String(error),
+    } satisfies BrokerToHost)}\n`);
+  } finally {
+    input.activeRuns.delete(input.command.runId);
+    input.res.end();
+  }
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const text = Buffer.concat(chunks).toString("utf8").trim();
+  if (!text) return {};
+  return JSON.parse(text) as unknown;
+}
+
+function isExecuteRunCommand(value: unknown): value is ExecuteRunCommand {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    typeof body.projectId === "string" &&
+    typeof body.sessionId === "string" &&
+    typeof body.providerSessionId === "string" &&
+    typeof body.runId === "string" &&
+    typeof body.attemptId === "string" &&
+    typeof body.prompt === "string" &&
+    isAgentRuntime(body.runtime) &&
+    typeof body.resumeSession === "boolean" &&
+    (body.modelId === undefined || typeof body.modelId === "string")
+  );
+}
+
+function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return (
+    value === "claude-code" ||
+    value === "openai-codex" ||
+    value === "vercel-ai" ||
+    value === "openhands"
+  );
 }
 
 function verifyBrokerBearer(authHeader: string | undefined): (
@@ -452,7 +598,4 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
 }
 
 function noop(): void {
-}
-
-function noopCancel(): void {
 }

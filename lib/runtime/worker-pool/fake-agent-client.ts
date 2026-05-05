@@ -7,7 +7,8 @@ import type {
 
 export type FakeAgentCommandRequest =
   | { type: "queue.drain"; sandboxId: string; projectId: string }
-  | { type: "run.cancel"; sandboxId: string; projectId: string; runId: string };
+  | { type: "run.cancel"; sandboxId: string; projectId: string; runId: string }
+  | { type: "run.execute"; sandboxId: string; projectId: string; runId: string };
 
 export interface FakeAgentClientHandles {
   client: AgentClient;
@@ -57,6 +58,23 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
     },
     async cancelProjectRun(sandboxId, projectId, runId) {
       commandRequests.push({ type: "run.cancel", sandboxId, projectId, runId });
+    },
+    async executeProjectRun(sandboxId, request, onEvent) {
+      commandRequests.push({
+        type: "run.execute",
+        sandboxId,
+        projectId: request.projectId,
+        runId: request.runId,
+      });
+      await onEvent({
+        type: "agent.done",
+        turnId: request.runId,
+        durationMs: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+        costUsd: 0,
+        exitCode: 0,
+      });
     },
     async health() {
       return { ok: true, dockerVersion: "fake", uptime: 0, count: map.size };

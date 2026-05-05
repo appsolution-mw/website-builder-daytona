@@ -1,5 +1,6 @@
 import type { AgentRuntime, BrokerToHost } from "@wbd/protocol";
 import { createAgentProvider } from "./agent-provider-factory";
+import type { SpawnFn } from "./claude-runner";
 
 export type PersistRunEvent = (event: BrokerToHost) => Promise<void>;
 
@@ -17,8 +18,12 @@ export async function executeAgentRun(input: {
   signal: AbortSignal;
   persistEvent: PersistRunEvent;
   broadcastEvent: (event: BrokerToHost) => void;
+  __testSpawn?: SpawnFn;
 }): Promise<void> {
-  const provider = createAgentProvider({ runtime: input.runtime });
+  const provider = createAgentProvider({
+    runtime: input.runtime,
+    ...(input.__testSpawn ? { __testSpawn: input.__testSpawn } : {}),
+  });
   await provider.runTurn({
     projectId: input.projectId,
     sessionId: input.providerSessionId,

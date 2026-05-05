@@ -31,6 +31,24 @@ export interface CancelProjectRunRequest {
   runId: string;
 }
 
+export type WorkerAgentRuntime =
+  | "claude-code"
+  | "openai-codex"
+  | "vercel-ai"
+  | "openhands";
+
+export interface ExecuteProjectRunRequest {
+  projectId: string;
+  sessionId: string;
+  providerSessionId: string;
+  runId: string;
+  attemptId: string;
+  prompt: string;
+  runtime: WorkerAgentRuntime;
+  resumeSession: boolean;
+  modelId?: string;
+}
+
 export interface BrokerCommandResponse {
   ok: true;
 }

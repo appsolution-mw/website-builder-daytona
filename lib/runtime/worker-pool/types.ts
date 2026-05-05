@@ -36,6 +36,24 @@ export interface CancelProjectRunRequest {
   runId: string;
 }
 
+export type WorkerAgentRuntime =
+  | "claude-code"
+  | "openai-codex"
+  | "vercel-ai"
+  | "openhands";
+
+export interface ExecuteProjectRunRequest {
+  projectId: string;
+  sessionId: string;
+  providerSessionId: string;
+  runId: string;
+  attemptId: string;
+  prompt: string;
+  runtime: WorkerAgentRuntime;
+  resumeSession: boolean;
+  modelId?: string;
+}
+
 export interface AgentClient {
   createSandbox(req: CreateSandboxRequest): Promise<CreateSandboxResponse>;
   destroySandbox(sandboxId: string): Promise<void>;
@@ -43,6 +61,11 @@ export interface AgentClient {
   listSandboxes(): Promise<SandboxStatusResponse[]>;
   drainProjectQueue(sandboxId: string, projectId: string): Promise<void>;
   cancelProjectRun(sandboxId: string, projectId: string, runId: string): Promise<void>;
+  executeProjectRun(
+    sandboxId: string,
+    request: ExecuteProjectRunRequest,
+    onEvent: (event: unknown) => void | Promise<void>,
+  ): Promise<void>;
   health(): Promise<{ ok: boolean; dockerVersion: string; uptime: number; count: number }>;
 }
 

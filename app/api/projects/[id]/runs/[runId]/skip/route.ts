@@ -36,7 +36,9 @@ export async function POST(
     }
     throw error;
   }
-  await requestProjectQueueDrain(project.id);
+  requestProjectQueueDrain(project.id).catch((error: unknown) => {
+    console.error("project queue drain failed", error);
+  });
 
   return NextResponse.json({ ok: true });
 }

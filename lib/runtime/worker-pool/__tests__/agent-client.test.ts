@@ -117,6 +117,50 @@ describe("agent-client", () => {
     );
   });
 
+  it("executeProjectRun sends an HMAC-signed request and streams NDJSON events", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      res.write(`${JSON.stringify({ type: "agent.chunk", turnId: "run-1", delta: "Hi" })}\n`);
+      res.end(`${JSON.stringify({ type: "agent.done", turnId: "run-1", exitCode: 0 })}\n`);
+    };
+    const c = client();
+    const events: unknown[] = [];
+
+    await c.executeProjectRun(
+      "sandbox-1",
+      {
+        projectId: "project-1",
+        sessionId: "session-1",
+        providerSessionId: "provider-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        prompt: "Build it",
+        runtime: "openhands",
+        resumeSession: true,
+        modelId: "model-1",
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(captured[0].method).toBe("POST");
+    expect(captured[0].url).toBe("/sandboxes/sandbox-1/runs/run-1/execute");
+    expect(JSON.parse(captured[0].body)).toMatchObject({
+      projectId: "project-1",
+      runId: "run-1",
+      runtime: "openhands",
+      resumeSession: true,
+    });
+    expect(captured[0].headers["x-signature"]).toBe(
+      signatureFor(captured[0]),
+    );
+    expect(events).toEqual([
+      { type: "agent.chunk", turnId: "run-1", delta: "Hi" },
+      { type: "agent.done", turnId: "run-1", exitCode: 0 },
+    ]);
+  });
+
   it("getStatus parses status response", async () => {
     respond = (_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
