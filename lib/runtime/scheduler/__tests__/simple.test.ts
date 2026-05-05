@@ -23,7 +23,7 @@ async function seedWorker(args: {
   });
 }
 
-async function seedSandbox(workerId: string, projectId: string, status: "SPAWNING" | "RUNNING" | "PAUSED" | "DESTROYED") {
+async function seedSandbox(workerId: string, projectId: string, status: "SPAWNING" | "RUNNING" | "STOPPED" | "PAUSED" | "DESTROYED") {
   return prisma.workerSandbox.create({
     data: {
       workerId,
@@ -67,28 +67,38 @@ describe("SimpleScheduler", () => {
     expect(await s.pickWorker({})).toBeNull();
   });
 
-  it("picks the worker with the most free capacity", async () => {
-    const a = await seedWorker({ capacity: 4 });
+  it("prefers the least used worker over the worker with the most free capacity", async () => {
+    const a = await seedWorker({ capacity: 10 });
     const b = await seedWorker({ capacity: 4 });
-    // a has 3 active, b has 1 active → b has more free capacity
+    // a has more free capacity, but b has fewer occupied slots.
     await seedSandbox(a.id, "p1", "RUNNING");
-    await seedSandbox(a.id, "p2", "RUNNING");
-    await seedSandbox(a.id, "p3", "SPAWNING");
-    await seedSandbox(b.id, "p4", "RUNNING");
+    await seedSandbox(a.id, "p2", "SPAWNING");
+    await seedSandbox(b.id, "p3", "RUNNING");
 
     const s = createSimpleScheduler();
     const picked = await s.pickWorker({});
     expect(picked?.id).toBe(b.id);
   });
 
-  it("does not count PAUSED or DESTROYED sandboxes against capacity", async () => {
+  it("counts stopped sandboxes against capacity but ignores destroyed sandboxes", async () => {
     const w = await seedWorker({ capacity: 2 });
-    await seedSandbox(w.id, "p1", "PAUSED");
+    await seedSandbox(w.id, "p1", "STOPPED");
     await seedSandbox(w.id, "p2", "DESTROYED");
     await seedSandbox(w.id, "p3", "RUNNING");
     const s = createSimpleScheduler();
+    expect(await s.pickWorker({})).toBeNull();
+  });
+
+  it("picks the least used ready worker", async () => {
+    const a = await seedWorker({ capacity: 10 });
+    const b = await seedWorker({ capacity: 10 });
+    await seedSandbox(a.id, "p1", "RUNNING");
+    await seedSandbox(a.id, "p2", "SPAWNING");
+    await seedSandbox(b.id, "p3", "RUNNING");
+
+    const s = createSimpleScheduler();
     const picked = await s.pickWorker({});
-    expect(picked?.id).toBe(w.id); // still has 1 free slot
+    expect(picked?.id).toBe(b.id);
   });
 
   it("returns null when all workers are at capacity", async () => {

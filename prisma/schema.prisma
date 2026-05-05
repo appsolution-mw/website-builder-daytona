@@ -604,6 +604,7 @@ enum WorkerStatus {
 enum SandboxLifecycleStatus {
   SPAWNING
   RUNNING
+  STOPPED
   PAUSED
   DESTROYED
 }

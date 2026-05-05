@@ -1,5 +1,7 @@
 ALTER TABLE "Project" RENAME COLUMN "daytonaSandboxId" TO "sandboxId";
 
+ALTER TYPE "SandboxLifecycleStatus" ADD VALUE IF NOT EXISTS 'STOPPED';
+
 ALTER TABLE "Project" ADD COLUMN "publicSlug" TEXT;
 CREATE UNIQUE INDEX "Project_publicSlug_key" ON "Project"("publicSlug");
 
