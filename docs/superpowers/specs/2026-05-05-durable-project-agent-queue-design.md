@@ -1,8 +1,8 @@
 # Durable Project Agent Queue Design
 
 Date: 2026-05-05
-Status: Draft for user review
-Task: T-20260505-008
+Status: Implemented
+Task: T-20260505-010
 
 ## Goal
 

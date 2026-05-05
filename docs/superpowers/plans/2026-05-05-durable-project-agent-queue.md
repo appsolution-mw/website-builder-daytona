@@ -1,5 +1,9 @@
 # Durable Project Agent Queue Implementation Plan
 
+Status: Implemented under `T-20260505-010`. This file is retained as the
+original execution artifact; unchecked boxes and earlier task IDs in commit
+examples are historical plan text, not current project status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement a durable project-level FIFO agent queue so customer project tasks keep running after browser disconnects, stream events are replayable, failed runs are retryable, and OpenHands conversations resume reliably.

@@ -17,9 +17,14 @@ AGENT_RUNTIME=openhands
 
 ## Bestehende Architektur
 
-Der Browser sendet `agent.prompt` an den `ws-proxy`, der an den Broker im
-Daytona-Container weiterleitet. Der Broker startet bisher `claude --print` und
-uebersetzt Claude-Code-NDJSON in die bestehenden `agent.*` Events.
+Project chat prompts are persisted as durable `AgentRun` records and processed
+through a project-level FIFO queue. Browser WebSocket connections subscribe to
+persisted events through the `ws-proxy`, but they do not own provider execution.
+Closing the browser does not cancel a running task. Failed and cancelled runs
+block the project queue until a user retries or skips the run.
+
+Der Broker im Daytona-Container führt den jeweiligen Runtime-Prozess aus und
+übersetzt Provider-Events in die bestehenden `agent.*` Events.
 
 Wichtige Dateien:
 
@@ -28,6 +33,17 @@ Wichtige Dateien:
 - `container/broker/src/ndjson-parser.ts`: Claude-Code-Stream-Adapter
 - `lib/runtime/daytona/cloud.ts`: Container-Env und Bootstrapping
 - `packages/protocol/src/index.ts`: geteiltes Browser/Broker-Protokoll
+
+## Durable Project Queue
+
+Project chat prompts are persisted as `AgentRun` records and processed through
+one FIFO queue per project. The host owns enqueue, retry, skip, cancel, event
+replay, and queue-drain state. The browser submits prompts through Host APIs and
+subscribes to persisted events; reconnects replay missed `AgentRunEvent` rows.
+
+OpenHands runs use project-scoped conversation persistence under
+`.agent-artifacts/openhands/conversations` so follow-up runs in the same chat
+session can resume provider context.
 
 ## Eingebaute Optionen
 
