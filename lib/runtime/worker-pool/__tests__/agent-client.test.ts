@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
 import * as http from "node:http";
 import { createAgentClient } from "../agent-client";
 import { AgentError } from "../types";
@@ -85,6 +86,37 @@ describe("agent-client", () => {
     expect(captured[0].body).toBe("");
   });
 
+  it("drainProjectQueue sends an HMAC-signed project command", async () => {
+    respond = (_req, res) => { res.writeHead(204); res.end(); };
+    const c = client();
+
+    await c.drainProjectQueue("sandbox/1", "project-1");
+
+    expect(captured[0].method).toBe("POST");
+    expect(captured[0].url).toBe("/sandboxes/sandbox%2F1/queue/drain");
+    expect(captured[0].body).toBe(JSON.stringify({ projectId: "project-1" }));
+    expect(captured[0].headers["x-signature"]).toBe(
+      signatureFor(captured[0]),
+    );
+  });
+
+  it("cancelProjectRun sends an HMAC-signed run command", async () => {
+    respond = (_req, res) => { res.writeHead(204); res.end(); };
+    const c = client();
+
+    await c.cancelProjectRun("sandbox-1", "project-1", "run/1");
+
+    expect(captured[0].method).toBe("POST");
+    expect(captured[0].url).toBe("/sandboxes/sandbox-1/runs/run%2F1/cancel");
+    expect(captured[0].body).toBe(JSON.stringify({
+      projectId: "project-1",
+      runId: "run/1",
+    }));
+    expect(captured[0].headers["x-signature"]).toBe(
+      signatureFor(captured[0]),
+    );
+  });
+
   it("getStatus parses status response", async () => {
     respond = (_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
@@ -104,3 +136,13 @@ describe("agent-client", () => {
     await expect(c.getStatus("s1")).rejects.toThrow();
   });
 });
+
+function signatureFor(req: CapturedReq): string {
+  const timestamp = req.headers["x-timestamp"];
+  if (typeof timestamp !== "string") {
+    throw new Error("missing x-timestamp");
+  }
+  return createHmac("sha256", SECRET)
+    .update(`${timestamp}.${req.method}.${req.url}.${req.body}`)
+    .digest("hex");
+}

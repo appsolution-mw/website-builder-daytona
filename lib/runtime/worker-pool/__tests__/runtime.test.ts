@@ -45,6 +45,24 @@ describe("WorkerPoolRuntime", () => {
     await prisma.user.deleteMany({ where: { id: { startsWith: "test-user-" } } });
   });
 
+  it("fake agent records queue commands separately from create requests", async () => {
+    const handles = createFakeAgentClient();
+
+    await handles.client.drainProjectQueue("sandbox-1", "project-1");
+    await handles.client.cancelProjectRun("sandbox-1", "project-1", "run-1");
+
+    expect(handles.requests()).toEqual([]);
+    expect(handles.commandRequests()).toEqual([
+      { type: "queue.drain", sandboxId: "sandbox-1", projectId: "project-1" },
+      {
+        type: "run.cancel",
+        sandboxId: "sandbox-1",
+        projectId: "project-1",
+        runId: "run-1",
+      },
+    ]);
+  });
+
   it("provisions a worker on first spawn and creates the sandbox", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));

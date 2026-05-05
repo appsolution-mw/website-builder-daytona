@@ -27,11 +27,22 @@ export interface SandboxStatusResponse {
   status: "spawning" | "running" | "stopped" | "gone";
 }
 
+export interface DrainProjectQueueRequest {
+  projectId: string;
+}
+
+export interface CancelProjectRunRequest {
+  projectId: string;
+  runId: string;
+}
+
 export interface AgentClient {
   createSandbox(req: CreateSandboxRequest): Promise<CreateSandboxResponse>;
   destroySandbox(sandboxId: string): Promise<void>;
   getStatus(sandboxId: string): Promise<SandboxStatusResponse>;
   listSandboxes(): Promise<SandboxStatusResponse[]>;
+  drainProjectQueue(sandboxId: string, projectId: string): Promise<void>;
+  cancelProjectRun(sandboxId: string, projectId: string, runId: string): Promise<void>;
   health(): Promise<{ ok: boolean; dockerVersion: string; uptime: number; count: number }>;
 }
 

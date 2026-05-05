@@ -48,6 +48,8 @@ describe("createLocalWorkerPoolRuntime", () => {
       destroySandbox: vi.fn(async () => undefined),
       getStatus: vi.fn(async () => ({ sandboxId: "sandbox-local", status: "running" })),
       listSandboxes: vi.fn(async () => []),
+      drainProjectQueue: vi.fn(async () => undefined),
+      cancelProjectRun: vi.fn(async () => undefined),
       health: vi.fn(async () => ({ ok: true })),
     });
 

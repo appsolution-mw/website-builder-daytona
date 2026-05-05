@@ -5,6 +5,10 @@ import type {
   SandboxStatusResponse,
 } from "./types";
 
+export type FakeAgentCommandRequest =
+  | { type: "queue.drain"; sandboxId: string; projectId: string }
+  | { type: "run.cancel"; sandboxId: string; projectId: string; runId: string };
+
 export interface FakeAgentClientHandles {
   client: AgentClient;
   /** Force the next createSandbox to throw with this AgentError-like body. */
@@ -13,11 +17,14 @@ export interface FakeAgentClientHandles {
   list(): SandboxStatusResponse[];
   /** Inspect createSandbox requests sent to the fake agent. */
   requests(): CreateSandboxRequest[];
+  /** Inspect queue/run command requests sent to the fake agent. */
+  commandRequests(): FakeAgentCommandRequest[];
 }
 
 export function createFakeAgentClient(): FakeAgentClientHandles {
   const map = new Map<string, SandboxStatusResponse>();
   const requests: CreateSandboxRequest[] = [];
+  const commandRequests: FakeAgentCommandRequest[] = [];
   let nextFailure: { statusCode: number; errorCode: string } | null = null;
   let portCounter = 33000;
 
@@ -45,6 +52,12 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
       return map.get(id) ?? { sandboxId: id, status: "gone" };
     },
     async listSandboxes() { return [...map.values()]; },
+    async drainProjectQueue(sandboxId, projectId) {
+      commandRequests.push({ type: "queue.drain", sandboxId, projectId });
+    },
+    async cancelProjectRun(sandboxId, projectId, runId) {
+      commandRequests.push({ type: "run.cancel", sandboxId, projectId, runId });
+    },
     async health() {
       return { ok: true, dockerVersion: "fake", uptime: 0, count: map.size };
     },
@@ -55,5 +68,6 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
     failNext: (statusCode, errorCode) => { nextFailure = { statusCode, errorCode }; },
     list: () => [...map.values()],
     requests: () => [...requests],
+    commandRequests: () => [...commandRequests],
   };
 }

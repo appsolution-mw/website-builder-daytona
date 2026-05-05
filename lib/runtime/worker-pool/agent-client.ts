@@ -1,9 +1,11 @@
 import { createHmac } from "node:crypto";
 import {
   AgentError,
+  type CancelProjectRunRequest,
   type AgentClient,
   type CreateSandboxRequest,
   type CreateSandboxResponse,
+  type DrainProjectQueueRequest,
   type SandboxStatusResponse,
 } from "./types";
 
@@ -67,6 +69,22 @@ export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
       call<SandboxStatusResponse>("GET", `/sandboxes/${encodeURIComponent(id)}`),
     listSandboxes: () =>
       call<SandboxStatusResponse[]>("GET", "/sandboxes"),
+    drainProjectQueue: (sandboxId, projectId) => {
+      const req: DrainProjectQueueRequest = { projectId };
+      return call<void>(
+        "POST",
+        `/sandboxes/${encodeURIComponent(sandboxId)}/queue/drain`,
+        req,
+      );
+    },
+    cancelProjectRun: (sandboxId, projectId, runId) => {
+      const req: CancelProjectRunRequest = { projectId, runId };
+      return call<void>(
+        "POST",
+        `/sandboxes/${encodeURIComponent(sandboxId)}/runs/${encodeURIComponent(runId)}/cancel`,
+        req,
+      );
+    },
     health: () => call("GET", "/health"),
   };
 }
