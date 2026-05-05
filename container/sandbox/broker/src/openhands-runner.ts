@@ -75,6 +75,8 @@ function spawnBridge(args: {
   prompt: string;
   model: string;
   attachmentsManifestPath?: string;
+  conversationId?: string;
+  persistenceDir?: string;
   deps: OpenHandsRunnerDeps;
 }): SpawnedChild {
   const spawnFn: OpenHandsSpawnFn = args.deps.spawn ?? (nodeSpawn as unknown as OpenHandsSpawnFn);
@@ -91,6 +93,12 @@ function spawnBridge(args: {
   ];
   if (args.attachmentsManifestPath) {
     argv.push("--attachments-manifest", args.attachmentsManifestPath);
+  }
+  if (args.conversationId) {
+    argv.push("--conversation-id", args.conversationId);
+  }
+  if (args.persistenceDir) {
+    argv.push("--persistence-dir", args.persistenceDir);
   }
 
   return spawnFn("python3", argv, {
@@ -163,16 +171,16 @@ function missingApiKeyMessage(model: string): string {
 
 function emitMissingApiKey(opts: {
   turnId: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   model: string;
   agentId?: string;
-}): void {
-  opts.onEvent({
+}): Promise<void> {
+  return Promise.resolve(opts.onEvent({
     type: "agent.error",
     turnId: opts.turnId,
     message: missingApiKeyMessage(opts.model),
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
-  });
+  })).then(() => undefined);
 }
 
 function tagReviewer(event: BrokerToHost): BrokerToHost {
@@ -190,7 +198,7 @@ function tagReviewer(event: BrokerToHost): BrokerToHost {
 async function runBridge(args: {
   child: SpawnedChild;
   turnId: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   mapEvent?: (event: BrokerToHost) => BrokerToHost;
 }): Promise<void> {
@@ -198,10 +206,14 @@ async function runBridge(args: {
   let sawTerminal = false;
   let aborted = false;
   let stderrTail = "";
+  let eventError: unknown;
 
+  let eventChain = Promise.resolve();
   const emit = (event: BrokerToHost) => {
     if (event.type === "agent.done" || event.type === "agent.error") sawTerminal = true;
-    args.onEvent(mapEvent(event));
+    eventChain = eventChain.then(async () => {
+      await args.onEvent(mapEvent(event));
+    });
   };
 
   const killChild = () => {
@@ -271,7 +283,10 @@ async function runBridge(args: {
           }`,
         });
       }
-      finish();
+      void eventChain.then(finish, (error: unknown) => {
+        eventError = error;
+        finish();
+      });
     });
 
     args.child.once("error", (err) => {
@@ -282,9 +297,15 @@ async function runBridge(args: {
           message: err instanceof Error ? err.message : String(err),
         });
       }
-      finish();
+      void eventChain.then(finish, (error: unknown) => {
+        eventError = error;
+        finish();
+      });
     });
   });
+  if (eventError !== undefined) {
+    throw eventError;
+  }
 }
 
 export async function runOpenHandsTurn(
@@ -294,7 +315,7 @@ export async function runOpenHandsTurn(
   const model = openHandsModel(opts.modelId, "OPENHANDS_MODEL");
 
   if (!bridgeApiKeyAvailable()) {
-    emitMissingApiKey({ ...opts, model });
+    await emitMissingApiKey({ ...opts, model });
     return;
   }
 
@@ -310,6 +331,8 @@ export async function runOpenHandsTurn(
     prompt: opts.prompt,
     model,
     attachmentsManifestPath,
+    conversationId: opts.run?.conversationId,
+    persistenceDir: opts.run?.persistenceDir,
     deps,
   });
 
@@ -328,7 +351,7 @@ export async function runOpenHandsReviewPass(
   const model = openHandsModel(undefined, "OPENHANDS_REVIEWER_MODEL");
 
   if (!bridgeApiKeyAvailable()) {
-    emitMissingApiKey({ ...opts, model, agentId: "reviewer" });
+    await emitMissingApiKey({ ...opts, model, agentId: "reviewer" });
     return;
   }
 

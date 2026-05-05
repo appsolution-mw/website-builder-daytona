@@ -68,7 +68,7 @@ export interface ClaudeRunnerOptions {
   prompt: string;
   turnId: string;
   modelId?: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -135,10 +135,14 @@ export async function runClaudeTurn(
   let aborted = false;
   let timedOut = false;
   let stderrTail = "";
+  let eventChain = Promise.resolve();
+  let eventError: unknown;
 
   const emit = (e: BrokerToHost) => {
     if (e.type === "agent.done" || e.type === "agent.error") sawResult = true;
-    opts.onEvent(e);
+    eventChain = eventChain.then(async () => {
+      await opts.onEvent(e);
+    });
   };
 
   const killChild = () => {
@@ -209,7 +213,10 @@ export async function runClaudeTurn(
           message: `claude exited with code ${code ?? "unknown"}${stderrTail ? `\n${stderrTail}` : ""}`,
         });
       }
-      resolve();
+      void eventChain.then(resolve, (error: unknown) => {
+        eventError = error;
+        resolve();
+      });
     });
     child.once("error", (err) => {
       if (timeout) clearTimeout(timeout);
@@ -220,15 +227,21 @@ export async function runClaudeTurn(
           message: err instanceof Error ? err.message : String(err),
         });
       }
-      resolve();
+      void eventChain.then(resolve, (error: unknown) => {
+        eventError = error;
+        resolve();
+      });
     });
   });
+  if (eventError !== undefined) {
+    throw eventError;
+  }
 }
 
 export interface ReviewerRunnerOptions {
   projectId: string;
   turnId: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -271,6 +284,8 @@ export async function runReviewerPass(
   let aborted = false;
   let timedOut = false;
   let stderrTail = "";
+  let eventChain = Promise.resolve();
+  let eventError: unknown;
 
   const tagReviewer = (e: BrokerToHost): BrokerToHost => {
     if (
@@ -285,7 +300,9 @@ export async function runReviewerPass(
   };
   const emit = (e: BrokerToHost) => {
     if (e.type === "agent.done" || e.type === "agent.error") sawResult = true;
-    opts.onEvent(tagReviewer(e));
+    eventChain = eventChain.then(async () => {
+      await opts.onEvent(tagReviewer(e));
+    });
   };
 
   const killChild = () => {
@@ -367,7 +384,10 @@ export async function runReviewerPass(
           message: `reviewer exited with code ${code}${stderrTail ? `\n${stderrTail}` : ""}`,
         });
       }
-      finish();
+      void eventChain.then(finish, (error: unknown) => {
+        eventError = error;
+        finish();
+      });
     });
     child.once("error", (err) => {
       emit({
@@ -375,7 +395,13 @@ export async function runReviewerPass(
         turnId: opts.turnId,
         message: err instanceof Error ? err.message : String(err),
       });
-      finish();
+      void eventChain.then(finish, (error: unknown) => {
+        eventError = error;
+        finish();
+      });
     });
   });
+  if (eventError !== undefined) {
+    throw eventError;
+  }
 }

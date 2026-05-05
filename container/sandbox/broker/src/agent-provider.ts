@@ -1,5 +1,13 @@
 import type { AgentRuntime, BrokerToHost, PromptImageAttachment } from "@wbd/protocol";
 
+export interface AgentRunMetadata {
+  runId: string;
+  attemptId: string;
+  conversationId?: string;
+  persistenceDir?: string;
+  resumeState?: unknown;
+}
+
 export interface AgentTurnOptions {
   projectId: string;
   sessionId: string;
@@ -9,14 +17,15 @@ export interface AgentTurnOptions {
   projectRoot?: string;
   modelId?: string;
   attachments?: PromptImageAttachment[];
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
+  run?: AgentRunMetadata;
 }
 
 export interface AgentReviewOptions {
   projectId: string;
   turnId: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
 }
 

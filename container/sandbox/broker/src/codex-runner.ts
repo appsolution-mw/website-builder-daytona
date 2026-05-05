@@ -202,7 +202,7 @@ async function runThread(args: {
   thread: Thread;
   prompt: string;
   turnId: string;
-  onEvent: (event: BrokerToHost) => void;
+  onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   agentId?: string;
 }): Promise<void> {
@@ -213,12 +213,12 @@ async function runThread(args: {
   for await (const event of events) {
     for (const mapped of eventsForThreadEvent(event, args.turnId, startedAt, args.agentId)) {
       if (mapped.type === "agent.done" || mapped.type === "agent.error") sawTerminal = true;
-      args.onEvent(mapped);
+      await args.onEvent(mapped);
     }
   }
 
   if (!sawTerminal && args.signal?.aborted) {
-    args.onEvent({
+    await args.onEvent({
       type: "agent.done",
       turnId: args.turnId,
       durationMs: Date.now() - startedAt,
@@ -232,7 +232,7 @@ async function runThread(args: {
 
 export async function runCodexTurn(opts: AgentTurnOptions): Promise<void> {
   if (!process.env.CODEX_API_KEY && !process.env.OPENAI_API_KEY) {
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.error",
       turnId: opts.turnId,
       message: "openai-codex runtime requires CODEX_API_KEY or OPENAI_API_KEY.",

@@ -430,6 +430,42 @@ describe("OpenHands runner", () => {
     });
   });
 
+  it("passes durable conversation persistence args to the OpenHands bridge", async () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
+    const spawn = vi.fn(() =>
+      makeFakeChild([
+        JSON.stringify({ type: "done", durationMs: 1, tokensIn: 1, tokensOut: 1, costUsd: 0 }),
+      ]),
+    ) as unknown as OpenHandsSpawnFn;
+
+    await runOpenHandsTurn(
+      {
+        projectId: "project-1",
+        sessionId: "provider-session-id",
+        resumeSession: true,
+        prompt: "resume this",
+        turnId: "run-1",
+        modelId: "openrouter:qwen/qwen3-coder:free",
+        projectRoot: "/workspace/project",
+        onEvent: () => {},
+        run: {
+          runId: "run-1",
+          attemptId: "attempt-1",
+          conversationId: "provider-session-id",
+          persistenceDir: "/workspace/project/.agent-artifacts/openhands/conversations",
+        },
+      },
+      { spawn },
+    );
+
+    const mockFn = spawn as unknown as ReturnType<typeof vi.fn>;
+    const [, argv] = mockFn.mock.calls[0] as [string, string[]];
+    expect(argv).toContain("--conversation-id");
+    expect(argv).toContain("provider-session-id");
+    expect(argv).toContain("--persistence-dir");
+    expect(argv).toContain("/workspace/project/.agent-artifacts/openhands/conversations");
+  });
+
   it("runs reviewer pass in a fresh review session and tags emitted events", async () => {
     process.env.OPENROUTER_API_KEY = "sk-or-test";
     const events: BrokerToHost[] = [];

@@ -124,7 +124,7 @@ export async function runVercelAiTurn(opts: AgentTurnOptions): Promise<void> {
   const normalizedModelId = normalizeModelId(opts.modelId);
   const missingKeyMessage = apiKeyMissingMessage(normalizedModelId);
   if (missingKeyMessage) {
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.error",
       turnId: opts.turnId,
       message: missingKeyMessage,
@@ -132,8 +132,8 @@ export async function runVercelAiTurn(opts: AgentTurnOptions): Promise<void> {
     return;
   }
 
-  opts.onEvent({ type: "agent.status", turnId: opts.turnId, phase: "starting" });
-  opts.onEvent({ type: "agent.status", turnId: opts.turnId, phase: "thinking" });
+  await opts.onEvent({ type: "agent.status", turnId: opts.turnId, phase: "starting" });
+  await opts.onEvent({ type: "agent.status", turnId: opts.turnId, phase: "thinking" });
 
   const history = opts.resumeSession ? (histories.get(opts.sessionId) ?? []) : [];
   const compiledPrompt = compilePrompt(opts.prompt, history);
@@ -161,7 +161,7 @@ export async function runVercelAiTurn(opts: AgentTurnOptions): Promise<void> {
     histories.set(opts.sessionId, nextHistory);
 
     if (result.text) {
-      opts.onEvent({
+      await opts.onEvent({
         type: "agent.chunk",
         turnId: opts.turnId,
         delta: result.text,
@@ -171,7 +171,7 @@ export async function runVercelAiTurn(opts: AgentTurnOptions): Promise<void> {
 
     const usage = extractUsage(result);
 
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.done",
       turnId: opts.turnId,
       durationMs: Date.now() - startedAt,
@@ -183,7 +183,7 @@ export async function runVercelAiTurn(opts: AgentTurnOptions): Promise<void> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.error",
       turnId: opts.turnId,
       message,
@@ -204,7 +204,7 @@ export async function runVercelAiReviewPass(opts: AgentReviewOptions): Promise<v
     });
 
     if (result.text) {
-      opts.onEvent({
+      await opts.onEvent({
         type: "agent.chunk",
         turnId: opts.turnId,
         delta: result.text,
@@ -214,7 +214,7 @@ export async function runVercelAiReviewPass(opts: AgentReviewOptions): Promise<v
 
     const usage = extractUsage(result);
 
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.done",
       turnId: opts.turnId,
       durationMs: Date.now() - startedAt,
@@ -226,7 +226,7 @@ export async function runVercelAiReviewPass(opts: AgentReviewOptions): Promise<v
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    opts.onEvent({
+    await opts.onEvent({
       type: "agent.error",
       turnId: opts.turnId,
       message,

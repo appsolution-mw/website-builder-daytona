@@ -420,6 +420,23 @@ def create_visualizer(mod: SimpleNamespace, name: str) -> JsonlVisualizer:
     return JsonlVisualizer(name=name)
 
 
+def build_conversation_kwargs(
+    args: argparse.Namespace,
+    agent: Any,
+    workspace: Path,
+    visualizer: Any,
+) -> dict[str, Any]:
+    return {
+        "agent": agent,
+        "workspace": str(workspace),
+        "visualizer": visualizer,
+        "max_iteration_per_run": positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+        "max_iterations": positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+        "conversation_id": args.conversation_id,
+        "persistence_dir": args.persistence_dir,
+    }
+
+
 def positive_int(value: str | None) -> int | None:
     if value is None:
         return None
@@ -485,6 +502,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--attachments-manifest")
+    parser.add_argument("--conversation-id")
+    parser.add_argument("--persistence-dir")
     return parser.parse_args()
 
 
@@ -553,13 +572,16 @@ def main() -> int:
                 usage_id=args.session,
             )
             agent = build_agent(mod, llm, workspace)
+            if args.persistence_dir:
+                Path(args.persistence_dir).mkdir(parents=True, exist_ok=True)
             conversation = instantiate(
                 mod.Conversation,
-                agent=agent,
-                workspace=str(workspace),
-                visualizer=create_visualizer(mod, "OpenHands"),
-                max_iteration_per_run=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
-                max_iterations=positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
+                **build_conversation_kwargs(
+                    args,
+                    agent,
+                    workspace,
+                    create_visualizer(mod, "OpenHands"),
+                ),
             )
 
             emit({"type": "status", "phase": "thinking", "detail": "running agent"})

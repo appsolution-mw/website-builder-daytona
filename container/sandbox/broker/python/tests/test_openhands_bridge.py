@@ -84,5 +84,31 @@ class AgentContextTests(unittest.TestCase):
             self.assertEqual(context.skills, [".agents/skills", ".openhands/skills"])
 
 
+class ConversationPersistenceTests(unittest.TestCase):
+    def test_builds_conversation_kwargs_with_persistence_metadata(self) -> None:
+        args = SimpleNamespace(
+            conversation_id="provider-session-id",
+            persistence_dir="/workspace/project/.agent-artifacts/openhands/conversations",
+        )
+        agent = object()
+        visualizer = object()
+        workspace = Path("/workspace/project")
+
+        kwargs = openhands_bridge.build_conversation_kwargs(args, agent, workspace, visualizer)
+
+        self.assertEqual(
+            kwargs,
+            {
+                "agent": agent,
+                "workspace": "/workspace/project",
+                "visualizer": visualizer,
+                "max_iteration_per_run": None,
+                "max_iterations": None,
+                "conversation_id": "provider-session-id",
+                "persistence_dir": "/workspace/project/.agent-artifacts/openhands/conversations",
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
