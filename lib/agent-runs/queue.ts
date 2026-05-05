@@ -204,12 +204,14 @@ export async function markRunSucceeded(input: {
         runtime: true,
         modelId: true,
         status: true,
+        lastAttemptNumber: true,
       },
     });
     await assertRunCompletionIsCurrent(tx, {
       projectId: run.projectId,
       runId: input.runId,
       runStatus: run.status,
+      lastAttemptNumber: run.lastAttemptNumber,
       attemptId: input.attemptId,
     });
     const now = new Date();
@@ -295,12 +297,14 @@ export async function markRunFailed(input: {
         projectId: true,
         sessionId: true,
         status: true,
+        lastAttemptNumber: true,
       },
     });
     await assertRunCompletionIsCurrent(tx, {
       projectId: run.projectId,
       runId: input.runId,
       runStatus: run.status,
+      lastAttemptNumber: run.lastAttemptNumber,
       attemptId: input.attemptId,
     });
     const now = new Date();
@@ -432,6 +436,7 @@ async function assertRunCompletionIsCurrent(
     projectId: string;
     runId: string;
     runStatus: string;
+    lastAttemptNumber: number;
     attemptId: string;
   },
 ): Promise<void> {
@@ -452,10 +457,13 @@ async function assertRunCompletionIsCurrent(
 
   const attempt = await tx.agentRunAttempt.findUniqueOrThrow({
     where: { id: input.attemptId },
-    select: { runId: true, status: true },
+    select: { attemptNumber: true, runId: true, status: true },
   });
   if (attempt.runId !== input.runId) {
     throw new Error("Run attempt does not belong to run");
+  }
+  if (attempt.attemptNumber !== input.lastAttemptNumber) {
+    throw new Error("Run attempt is not current");
   }
   if (!isInFlightAttemptStatus(attempt.status)) {
     throw new Error("Run attempt is not in flight");

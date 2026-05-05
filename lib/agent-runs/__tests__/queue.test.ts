@@ -393,6 +393,55 @@ describe("agent run queue transitions", () => {
     });
   });
 
+  it("rejects completion from an older in-flight attempt when a newer attempt exists", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const { attemptId: olderAttemptId } = await markRunStarting(runId);
+    const newerAttempt = await prisma.agentRunAttempt.create({
+      data: {
+        runId,
+        attemptNumber: 2,
+        status: "RUNNING",
+        startedAt: new Date(),
+      },
+      select: { id: true },
+    });
+    await prisma.agentRun.update({
+      where: { id: runId },
+      data: { lastAttemptNumber: 2 },
+    });
+
+    await expect(
+      markRunSucceeded({
+        runId,
+        attemptId: olderAttemptId,
+        agentMessage: "Stale result",
+      }),
+    ).rejects.toThrow("Run attempt is not current");
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({ status: "RUNNING" });
+    await expect(
+      prisma.agentRunAttempt.findUniqueOrThrow({
+        where: { id: olderAttemptId },
+      }),
+    ).resolves.toMatchObject({ status: "STARTING", attemptNumber: 1 });
+    await expect(
+      prisma.agentRunAttempt.findUniqueOrThrow({
+        where: { id: newerAttempt.id },
+      }),
+    ).resolves.toMatchObject({ status: "RUNNING", attemptNumber: 2 });
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "RUNNING",
+      activeRunId: runId,
+      blockedRunId: null,
+    });
+  });
+
   it("persists final agent message on success", async () => {
     const { project, session, runId } = await enqueueFixtureRun();
     const { attemptId } = await markRunStarting(runId);
