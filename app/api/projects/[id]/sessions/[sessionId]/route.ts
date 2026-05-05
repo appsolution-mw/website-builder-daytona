@@ -1,10 +1,54 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { dbRuntimeToProtocol, isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
+import {
+  createSessionLibrarySnapshot,
+  resolveWorkflowPreset,
+} from "@/lib/library/service";
+import type { SessionLibrarySnapshotPayload } from "@/lib/library/types";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type RuntimeStatePatch = {
+  runtime?: unknown;
+  providerSessionId?: unknown;
+  modelId?: unknown;
+  libraryPresetItemId?: unknown;
+  libraryPresetRevisionId?: unknown;
+};
+
+function hasStringProperty(value: unknown, key: string): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && key in value;
+}
+
+function errorCode(error: unknown): string | null {
+  if (!hasStringProperty(error, "code")) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRuntimeStateUniqueConflict(error: unknown): boolean {
+  return errorCode(error) === "P2002";
+}
+
+function isLibraryPresetError(error: unknown): boolean {
+  if (errorCode(error) === "P2025") return true;
+  const message = errorMessage(error);
+  return [
+    "missing skill revision",
+    "missing agent revision",
+    "does not belong to item",
+    "project not found for user",
+    "session not found for project",
+    "session runtime state not found for project session",
+  ].some((fragment) => message.includes(fragment));
+}
 
 export async function GET(
   request: Request,
@@ -69,11 +113,7 @@ export async function PATCH(
     : null;
   const runtimeState =
     body.runtimeState && typeof body.runtimeState === "object"
-      ? body.runtimeState as {
-          runtime?: unknown;
-          providerSessionId?: unknown;
-          modelId?: unknown;
-        }
+      ? body.runtimeState as RuntimeStatePatch
       : null;
   const runtime =
     typeof runtimeState?.runtime === "string" && isAgentRuntime(runtimeState.runtime)
@@ -101,26 +141,54 @@ export async function PATCH(
   }
 
   try {
+    const libraryPresetItemId =
+      runtime === "OPENHANDS" && typeof runtimeState?.libraryPresetItemId === "string"
+        ? runtimeState.libraryPresetItemId
+        : null;
+    const libraryPresetRevisionId =
+      typeof runtimeState?.libraryPresetRevisionId === "string"
+        ? runtimeState.libraryPresetRevisionId
+        : undefined;
+    const librarySnapshotPayload: SessionLibrarySnapshotPayload | null = libraryPresetItemId
+      ? await resolveWorkflowPreset({
+          userId: currentUser.user.id,
+          presetItemId: libraryPresetItemId,
+          presetRevisionId: libraryPresetRevisionId,
+        })
+      : null;
+
     if (runtime && providerSessionId) {
-      await prisma.sessionRuntimeState.upsert({
-        where: {
-          sessionId_runtime: {
+      await prisma.$transaction(async (tx: Prisma.TransactionClient): Promise<void> => {
+        const runtimeStateRow = await tx.sessionRuntimeState.upsert({
+          where: {
+            sessionId_runtime: {
+              sessionId: existing.id,
+              runtime,
+            },
+          },
+          create: {
+            projectId: id,
             sessionId: existing.id,
             runtime,
+            providerSessionId,
+            modelId: typeof runtimeState?.modelId === "string" ? runtimeState.modelId : null,
           },
-        },
-        create: {
+          update: {
+            providerSessionId,
+            modelId: typeof runtimeState?.modelId === "string" ? runtimeState.modelId : null,
+            lastUsedAt: new Date(),
+          },
+        });
+
+        if (!librarySnapshotPayload) return;
+        await createSessionLibrarySnapshot({
+          userId: currentUser.user.id,
           projectId: id,
           sessionId: existing.id,
-          runtime,
-          providerSessionId,
-          modelId: typeof runtimeState?.modelId === "string" ? runtimeState.modelId : null,
-        },
-        update: {
-          providerSessionId,
-          modelId: typeof runtimeState?.modelId === "string" ? runtimeState.modelId : null,
-          lastUsedAt: new Date(),
-        },
+          sessionRuntimeStateId: runtimeStateRow.id,
+          payload: librarySnapshotPayload,
+          tx,
+        });
       });
     }
 
@@ -130,7 +198,14 @@ export async function PATCH(
       select: sessionSelect,
     });
     return NextResponse.json({ session: serializeSession(session) });
-  } catch {
-    return NextResponse.json({ error: "runtime state already exists" }, { status: 409 });
+  } catch (error) {
+    if (isRuntimeStateUniqueConflict(error)) {
+      return NextResponse.json({ error: "runtime state already exists" }, { status: 409 });
+    }
+    if (isLibraryPresetError(error)) {
+      return NextResponse.json({ error: "invalid library preset" }, { status: 400 });
+    }
+    console.error("[api] session update failed", error);
+    return NextResponse.json({ error: "session update failed" }, { status: 500 });
   }
 }

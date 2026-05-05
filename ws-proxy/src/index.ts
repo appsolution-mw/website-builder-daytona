@@ -19,6 +19,7 @@ export interface ProxyHandle {
 
 export interface StartProxyOptions {
   port: number;
+  host?: string;
   /**
    * Given a projectId (extracted from the URL path `/p/:projectId`),
    * return the broker WebSocket URL to connect to.
@@ -45,7 +46,7 @@ function parseUsageEvent(data: RawData, isBinary: boolean): AgentUsageEvent | nu
 }
 
 export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> {
-  const wss = new WebSocketServer({ port: opts.port });
+  const wss = new WebSocketServer({ port: opts.port, host: opts.host });
   await new Promise<void>((resolve, reject) => {
     wss.once("listening", resolve);
     wss.once("error", reject);
@@ -238,8 +239,10 @@ if (isEntry) {
 async function main() {
   const { prisma } = await import("./db");
   const port = Number(process.env.WS_PROXY_PORT ?? 4100);
+  const host = process.env.WS_PROXY_HOST ?? "0.0.0.0";
   const handle = await startProxy({
     port,
+    host,
     resolveBrokerUrl: async (projectId) => {
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -298,7 +301,7 @@ async function main() {
       });
     },
   });
-  console.log(`[ws-proxy] listening on ws://localhost:${handle.port}`);
+  console.log(`[ws-proxy] listening on ws://${host}:${handle.port}`);
   const shutdown = async () => {
     await handle.close();
     await prisma.$disconnect();

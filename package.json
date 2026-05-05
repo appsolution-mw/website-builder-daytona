@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "pnpm dev:clean && concurrently -n next,broker,proxy -c blue,green,yellow \"pnpm dev:next\" \"pnpm dev:broker\" \"pnpm dev:proxy\"",
     "dev:clean": "sh scripts/clean-ports.sh",
-    "dev:next": "next dev",
+    "dev:next": "next dev -H ${NEXT_HOST:-0.0.0.0}",
     "dev:broker": "pnpm -F @wbd/broker dev",
     "dev:proxy": "pnpm -F @wbd/ws-proxy dev",
     "dev:worker": "bash scripts/start-local-worker-agent.sh",

@@ -10,6 +10,10 @@ import { enqueueAgentRun } from "@/lib/agent-runs/queue";
 import { requestProjectQueueDrain } from "@/lib/agent-runs/executor-client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { prisma } from "@/lib/db/client";
+import {
+  createSessionLibrarySnapshot,
+  resolveWorkflowPreset,
+} from "@/lib/library/service";
 import { requireAccessibleProject } from "@/lib/workspaces/access";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -43,6 +47,8 @@ type EnqueuePayload = {
   runtime: AgentRuntime;
   providerSessionId: string;
   modelId?: string | null;
+  libraryPresetItemId?: string | null;
+  libraryPresetRevisionId?: string | null;
 };
 
 const LIST_RUN_STATUSES = ["QUEUED", "RUNNING"] as const;
@@ -132,6 +138,57 @@ export async function POST(
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }
 
+  const runtime = protocolRuntimeToDb(payload.runtime);
+  let librarySnapshotId: string | null = null;
+  let effectiveModelId = payload.modelId;
+
+  try {
+    const runtimeState = await prisma.sessionRuntimeState.upsert({
+      where: {
+        sessionId_runtime: {
+          sessionId: payload.sessionId,
+          runtime,
+        },
+      },
+      create: {
+        projectId: project.id,
+        sessionId: payload.sessionId,
+        runtime,
+        providerSessionId: payload.providerSessionId,
+        modelId: payload.modelId,
+      },
+      update: {
+        providerSessionId: payload.providerSessionId,
+        modelId: payload.modelId,
+        lastUsedAt: new Date(),
+      },
+    });
+
+    if (payload.runtime === "openhands" && payload.libraryPresetItemId) {
+      const snapshotPayload = await resolveWorkflowPreset({
+        userId: currentUser.user.id,
+        presetItemId: payload.libraryPresetItemId,
+        presetRevisionId: payload.libraryPresetRevisionId ?? undefined,
+      });
+      effectiveModelId = effectiveModelId ?? snapshotPayload.modelId;
+      const snapshot = await createSessionLibrarySnapshot({
+        userId: currentUser.user.id,
+        projectId: project.id,
+        sessionId: payload.sessionId,
+        sessionRuntimeStateId: runtimeState.id,
+        presetItemId: payload.libraryPresetItemId,
+        presetRevisionId: payload.libraryPresetRevisionId,
+        payload: snapshotPayload,
+      });
+      librarySnapshotId = snapshot.id;
+    }
+  } catch (error) {
+    if (isLibraryPresetError(error)) {
+      return NextResponse.json({ error: "invalid library preset" }, { status: 400 });
+    }
+    throw error;
+  }
+
   const result = await enqueueAgentRun({
     projectId: project.id,
     sessionId: payload.sessionId,
@@ -139,27 +196,8 @@ export async function POST(
     prompt: payload.prompt,
     runtime: payload.runtime,
     providerSessionId: payload.providerSessionId,
-    modelId: payload.modelId,
-  });
-  await prisma.sessionRuntimeState.upsert({
-    where: {
-      sessionId_runtime: {
-        sessionId: payload.sessionId,
-        runtime: protocolRuntimeToDb(payload.runtime),
-      },
-    },
-    create: {
-      projectId: project.id,
-      sessionId: payload.sessionId,
-      runtime: protocolRuntimeToDb(payload.runtime),
-      providerSessionId: payload.providerSessionId,
-      modelId: payload.modelId,
-    },
-    update: {
-      providerSessionId: payload.providerSessionId,
-      modelId: payload.modelId,
-      lastUsedAt: new Date(),
-    },
+    modelId: effectiveModelId,
+    ...(librarySnapshotId ? { librarySnapshotId } : {}),
   });
   requestProjectQueueDrain(project.id).catch((error: unknown) => {
     console.error("project queue drain failed", error);
@@ -205,8 +243,40 @@ function parseEnqueuePayload(body: Record<string, unknown>): EnqueuePayload | nu
   const modelId = typeof body.modelId === "string" && body.modelId.trim()
     ? body.modelId.trim()
     : null;
+  const libraryPresetItemId = typeof body.libraryPresetItemId === "string" && body.libraryPresetItemId.trim()
+    ? body.libraryPresetItemId.trim()
+    : null;
+  const libraryPresetRevisionId = typeof body.libraryPresetRevisionId === "string" && body.libraryPresetRevisionId.trim()
+    ? body.libraryPresetRevisionId.trim()
+    : null;
 
-  return { sessionId, prompt, runtime, providerSessionId, modelId };
+  return { sessionId, prompt, runtime, providerSessionId, modelId, libraryPresetItemId, libraryPresetRevisionId };
+}
+
+function hasStringProperty(value: unknown, key: string): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && key in value;
+}
+
+function errorCode(error: unknown): string | null {
+  if (!hasStringProperty(error, "code")) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isLibraryPresetError(error: unknown): boolean {
+  if (errorCode(error) === "P2025") return true;
+  const message = errorMessage(error);
+  return [
+    "missing skill revision",
+    "missing agent revision",
+    "does not belong to item",
+    "project not found for user",
+    "session not found for project",
+    "session runtime state not found for project session",
+  ].some((fragment) => message.includes(fragment));
 }
 
 function serializeRun(run: RunRecord): {

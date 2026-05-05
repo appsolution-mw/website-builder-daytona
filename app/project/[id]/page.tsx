@@ -51,6 +51,7 @@ import type {
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
+import { PresetPicker, type PresetOption } from "@/components/library/PresetPicker";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
@@ -66,6 +67,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { runtimeLabel } from "@/lib/agents/runtime";
+import { libraryPresetItemIdForRuntimeSync } from "@/lib/agents/openhands-library-snapshot";
 import {
   ensureNextDevtoolsCssImport,
   ensurePreviewConsoleBridge,
@@ -92,6 +94,13 @@ type RuntimeState = {
   providerSessionId: string;
   modelId: string | null;
   lastUsedAt: string;
+  librarySnapshot?: {
+    id: string;
+    presetItemId: string | null;
+    presetRevisionId: string | null;
+    snapshotJson: unknown;
+    createdAt: string;
+  };
 };
 
 type ChatSession = {
@@ -134,6 +143,10 @@ type Project = {
 type DeviceView = "desktop" | "tablet" | "mobile";
 
 type DraftImageAttachment = ChatImageAttachmentView & PromptImageAttachment;
+type LibraryPresetApiItem = PresetOption & {
+  status?: string;
+  currentRevision?: unknown | null;
+};
 type TerminalProtocolEvent = Extract<
   ProxyToBrowser,
   { type: "terminal.ready" | "terminal.output" | "terminal.exit" }
@@ -502,6 +515,10 @@ function selectedModelForSession(session: ChatSession | null, runtime: AgentRunt
   return runtimeStateForSession(session, runtime)?.modelId ?? null;
 }
 
+function isSelectableLibraryPreset(item: LibraryPresetApiItem): boolean {
+  return item.status === "PUBLISHED" && item.currentRevision !== null && item.currentRevision !== undefined;
+}
+
 function WorkspaceLoadingState({
   title,
   description,
@@ -544,6 +561,8 @@ export default function ProjectWorkspace({
   const [openRouterModels, setOpenRouterModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [libraryPresets, setLibraryPresets] = useState<PresetOption[]>([]);
+  const [selectedLibraryPresetId, setSelectedLibraryPresetId] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
@@ -633,6 +652,11 @@ export default function ProjectWorkspace({
   useEffect(() => { pathsRef.current = paths; }, [paths]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
   useEffect(() => { fileContentBaseRef.current = fileContentBase; }, [fileContentBase]);
+  const activeOpenHandsLibraryPresetId =
+    selectedRuntime === "openhands"
+      ? runtimeStateForSession(activeSession, "openhands")?.librarySnapshot?.presetItemId ?? null
+      : null;
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -1163,11 +1187,17 @@ export default function ProjectWorkspace({
     setAttachmentError(null);
   }
 
-  async function syncRuntimeState(runtime: AgentRuntime, providerSessionId: string, modelId?: string) {
+  async function syncRuntimeState(
+    runtime: AgentRuntime,
+    providerSessionId: string,
+    modelId?: string,
+    libraryPresetItemId?: string | null,
+  ) {
     const session = activeSessionRef.current;
     if (!session) return;
     const existingState = runtimeStateForSession(session, runtime);
     if (
+      libraryPresetItemId === undefined &&
       existingState &&
       existingState.providerSessionId === providerSessionId &&
       existingState.modelId === (modelId ?? existingState.modelId ?? null)
@@ -1180,6 +1210,7 @@ export default function ProjectWorkspace({
       providerSessionId,
       modelId: modelId ?? null,
       lastUsedAt: new Date().toISOString(),
+      ...(existingState?.librarySnapshot ? { librarySnapshot: existingState.librarySnapshot } : {}),
     };
     const nextSession = {
       ...session,
@@ -1212,12 +1243,30 @@ export default function ProjectWorkspace({
           runtime,
           providerSessionId,
           ...(modelId ? { modelId } : {}),
+          ...(libraryPresetItemId ? { libraryPresetItemId } : {}),
         },
       }),
     }).catch(() => null);
     if (res?.ok) {
       void refreshChatSessions();
     }
+  }
+
+  function selectLibraryPreset(presetId: string): void {
+    setSelectedLibraryPresetId(presetId);
+    const session = activeSessionRef.current;
+    if (!session || selectedRuntimeRef.current !== "openhands") return;
+    const runtimeState = runtimeStateForSession(session, "openhands");
+    if (!runtimeState) return;
+    void syncRuntimeState(
+      "openhands",
+      runtimeState.providerSessionId,
+      runtimeState.modelId ?? undefined,
+      libraryPresetItemIdForRuntimeSync({
+        selectedLibraryPresetId: presetId,
+        librarySnapshot: runtimeState.librarySnapshot,
+      }) ?? presetId,
+    );
   }
 
   async function setSessionDefaultRuntime(runtime: AgentRuntime) {
@@ -1684,6 +1733,28 @@ export default function ProjectWorkspace({
     };
   }, [loadOpenRouterModels, selectedRuntime]);
 
+  useEffect(() => {
+    queueMicrotask(() => {
+      if (mountedRef.current) setSelectedLibraryPresetId(activeOpenHandsLibraryPresetId);
+    });
+  }, [activeOpenHandsLibraryPresetId]);
+
+  useEffect(() => {
+    if (selectedRuntime !== "openhands") return;
+    let cancelled = false;
+    fetch("/api/library?type=WORKFLOW_PRESET")
+      .then((response) => (response.ok ? response.json() : { items: [] }))
+      .then((body: { items?: LibraryPresetApiItem[] }) => {
+        if (!cancelled) setLibraryPresets((body.items ?? []).filter(isSelectableLibraryPreset));
+      })
+      .catch(() => {
+        if (!cancelled) setLibraryPresets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRuntime]);
+
   async function onSelectFile(path: string) {
     if (path === selectedPath) return;
     setSelectedPath(path);
@@ -1980,6 +2051,7 @@ export default function ProjectWorkspace({
         runtime,
         providerSessionId,
         ...(modelId ? { modelId } : {}),
+        ...(runtime === "openhands" && selectedLibraryPresetId ? { libraryPresetItemId: selectedLibraryPresetId } : {}),
       }),
     });
     const data = (await res.json().catch(() => ({}))) as { runId?: string; error?: string };
@@ -2258,6 +2330,14 @@ export default function ProjectWorkspace({
                 )}
               </div>
             )}
+            {selectedRuntime === "openhands" && libraryPresets.length > 0 ? (
+              <PresetPicker
+                presets={libraryPresets}
+                selectedId={selectedLibraryPresetId}
+                disabled={turnInFlight !== null || sessionLoading}
+                onSelect={selectLibraryPreset}
+              />
+            ) : null}
           </div>
           <ul
             ref={chatScrollRef}

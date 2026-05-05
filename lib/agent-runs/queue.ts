@@ -31,6 +31,7 @@ export async function enqueueAgentRun(input: {
   runtime: AgentRuntime;
   providerSessionId: string;
   modelId?: string | null;
+  librarySnapshotId?: string | null;
 }): Promise<QueuedRunResult> {
   for (let attempt = 1; attempt <= MAX_QUEUE_SEQUENCE_RETRIES; attempt += 1) {
     try {
@@ -618,6 +619,7 @@ async function createQueuedRun(input: {
   runtime: AgentRuntime;
   providerSessionId: string;
   modelId?: string | null;
+  librarySnapshotId?: string | null;
 }): Promise<QueuedRunResult> {
   const runtime = protocolRuntimeToDb(input.runtime);
   return prisma.$transaction(async (tx) => {
@@ -645,6 +647,7 @@ async function createQueuedRun(input: {
         runtime,
         providerSessionId: input.providerSessionId,
         modelId: input.modelId ?? null,
+        librarySnapshotId: input.librarySnapshotId ?? null,
         queueSequence,
       },
       select: { id: true },

@@ -20,6 +20,7 @@ model User {
   githubInstallations  GitHubInstallation[]
   workspaceMemberships WorkspaceMember[]
   createdAgentRuns     AgentRun[]
+  libraryItems         LibraryItem[]
 }
 
 model Workspace {
@@ -79,6 +80,7 @@ model Project {
   sessionRuntimeStates SessionRuntimeState[]
   messages             Message[]
   tokenUsages          TokenUsage[]
+  sessionLibrarySnapshots SessionLibrarySnapshot[]
   queueState           ProjectQueueState?
   agentRuns            AgentRun[]
   runEvents            AgentRunEvent[]
@@ -120,6 +122,8 @@ model AgentRun {
   runtime           AgentRuntime
   providerSessionId String
   modelId           String?
+  librarySnapshotId String?
+  librarySnapshot   SessionLibrarySnapshot? @relation(fields: [librarySnapshotId], references: [id], onDelete: SetNull)
   queueSequence     Int
   queuedAt          DateTime          @default(now())
   startedAt         DateTime?
@@ -132,6 +136,7 @@ model AgentRun {
   @@unique([projectId, queueSequence])
   @@index([projectId, status, queueSequence])
   @@index([sessionId, queuedAt])
+  @@index([librarySnapshotId])
 }
 
 model AgentRunAttempt {
@@ -415,6 +420,7 @@ model Session {
   lastMessageAt  DateTime              @default(now())
   messages       Message[]
   runtimeStates  SessionRuntimeState[]
+  librarySnapshots SessionLibrarySnapshot[]
   agentRuns      AgentRun[]
   runEvents      AgentRunEvent[]
 }
@@ -482,10 +488,82 @@ model SessionRuntimeState {
   lastUsedAt        DateTime     @default(now())
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
+  librarySnapshots  SessionLibrarySnapshot[]
 
   @@unique([sessionId, runtime])
   @@unique([runtime, providerSessionId])
   @@index([projectId, sessionId])
+}
+
+enum LibraryItemType {
+  SKILL
+  AGENT
+  WORKFLOW_PRESET
+}
+
+enum LibraryItemStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model LibraryItem {
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              LibraryItemType
+  slug              String
+  name              String
+  description       String            @default("")
+  tags              String[]          @default([])
+  status            LibraryItemStatus @default(DRAFT)
+  currentRevisionId String?           @unique
+  currentRevision   LibraryRevision?  @relation("CurrentLibraryRevision", fields: [id, currentRevisionId], references: [itemId, id], onDelete: NoAction, onUpdate: Cascade)
+  revisions         LibraryRevision[] @relation("LibraryItemRevisions")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([userId, type, slug])
+  @@unique([id, currentRevisionId])
+  @@index([userId, type, status])
+}
+
+model LibraryRevision {
+  id             String       @id @default(cuid())
+  itemId         String
+  item           LibraryItem  @relation("LibraryItemRevisions", fields: [itemId], references: [id], onDelete: Cascade)
+  currentForItem LibraryItem? @relation("CurrentLibraryRevision")
+  version        Int
+  title          String
+  content        String
+  configJson     Json
+  checksum       String
+  createdAt      DateTime     @default(now())
+  createdBy      String
+  changeNote     String       @default("")
+
+  @@unique([itemId, version])
+  @@index([itemId, checksum])
+  @@unique([itemId, id])
+  @@index([itemId, createdAt])
+}
+
+model SessionLibrarySnapshot {
+  id                    String              @id @default(cuid())
+  projectId             String
+  project               Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId             String
+  session               Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionRuntimeStateId String
+  sessionRuntimeState   SessionRuntimeState @relation(fields: [sessionRuntimeStateId], references: [id], onDelete: Cascade)
+  agentRuns             AgentRun[]
+  presetItemId          String?
+  presetRevisionId      String?
+  snapshotJson          Json
+  createdAt             DateTime            @default(now())
+
+  @@index([projectId, sessionId])
+  @@index([sessionRuntimeStateId, createdAt])
 }
 
 enum TokenUsageLabel {

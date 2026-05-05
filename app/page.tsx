@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type ComponentProps } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useTransition,
+  type ComponentProps,
+} from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -24,6 +31,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { authClient } from "@/lib/auth-client";
+import { localHttpUrlForBrowserPort } from "@/lib/network/local-url";
 
 type Project = {
   id: string;
@@ -71,6 +79,18 @@ type GitHubBranch = {
 
 const POLL_INTERVAL_MS = 3_000;
 
+function subscribeBrowserHostname(): () => void {
+  return () => {};
+}
+
+function getBrowserHostnameSnapshot(): string | undefined {
+  return typeof window === "undefined" ? undefined : window.location.hostname;
+}
+
+function getServerBrowserHostnameSnapshot(): undefined {
+  return undefined;
+}
+
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [orphanSandboxes, setOrphanSandboxes] = useState<OrphanSandbox[] | null>(null);
@@ -91,6 +111,11 @@ export default function Dashboard() {
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
   const [orphanError, setOrphanError] = useState<string | null>(null);
   const [removingOrphanId, setRemovingOrphanId] = useState<string | null>(null);
+  const browserHostname = useSyncExternalStore(
+    subscribeBrowserHostname,
+    getBrowserHostnameSnapshot,
+    getServerBrowserHostnameSnapshot,
+  );
   const pollRef = useRef<number | null>(null);
 
   async function refresh() {
@@ -430,6 +455,12 @@ export default function Dashboard() {
                 </Link>
               </Button>
               <Button asChild variant="outline" size="sm">
+                <Link href="/library">
+                  <FolderKanban />
+                  Library
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
                 <Link href="/usage">
                   <BarChart3 />
                   Usage
@@ -685,7 +716,11 @@ export default function Dashboard() {
                   <div className="flex items-center gap-2 sm:justify-end">
                     {sandbox.previewPort && sandbox.status === "running" && (
                       <Button asChild variant="secondary" size="sm">
-                        <a href={`http://127.0.0.1:${sandbox.previewPort}`} target="_blank" rel="noreferrer">
+                        <a
+                          href={localHttpUrlForBrowserPort(sandbox.previewPort, browserHostname)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           Preview
                         </a>
                       </Button>

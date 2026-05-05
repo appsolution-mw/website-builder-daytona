@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db/client";
 import { dbRuntimeToProtocol } from "@/lib/agents/runtime";
+import { prependOpenHandsLibrarySnapshotToPrompt } from "@/lib/agents/openhands-library-snapshot";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
 import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
 import type { BrokerToHost } from "@wbd/protocol";
@@ -100,6 +101,7 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         modelId: true,
         queueSequence: true,
         lastAttemptNumber: true,
+        librarySnapshot: { select: { snapshotJson: true } },
         userMessage: { select: { content: true } },
       },
     });
@@ -127,7 +129,11 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         providerSessionId: run.providerSessionId,
         runId,
         attemptId,
-        prompt: run.userMessage.content,
+        prompt: promptForRun({
+          prompt: run.userMessage.content,
+          runtime: dbRuntimeToProtocol(run.runtime),
+          snapshot: run.librarySnapshot?.snapshotJson,
+        }),
         runtime: dbRuntimeToProtocol(run.runtime),
         resumeSession: await shouldResumeRun(run),
         ...(run.modelId ? { modelId: run.modelId } : {}),
@@ -173,6 +179,20 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
 
     return { ok: true, agentMessage: chunks.join("") };
   };
+}
+
+function promptForRun(input: {
+  prompt: string;
+  runtime: ReturnType<typeof dbRuntimeToProtocol>;
+  snapshot?: unknown;
+}): string {
+  if (input.runtime !== "openhands" || input.snapshot === undefined) {
+    return input.prompt;
+  }
+  return prependOpenHandsLibrarySnapshotToPrompt({
+    prompt: input.prompt,
+    snapshot: input.snapshot,
+  });
 }
 
 async function shouldResumeRun(run: {

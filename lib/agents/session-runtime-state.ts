@@ -1,4 +1,5 @@
 import type { AgentRuntime, Prisma } from "@prisma/client";
+import type { AgentRuntime as ProtocolAgentRuntime } from "@wbd/protocol";
 import { dbRuntimeToProtocol } from "./runtime";
 
 export const sessionRuntimeStateSelect = {
@@ -6,6 +7,17 @@ export const sessionRuntimeStateSelect = {
   providerSessionId: true,
   modelId: true,
   lastUsedAt: true,
+  librarySnapshots: {
+    take: 1,
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      presetItemId: true,
+      presetRevisionId: true,
+      snapshotJson: true,
+      createdAt: true,
+    },
+  },
 } satisfies Prisma.SessionRuntimeStateSelect;
 
 export const sessionSelect = {
@@ -26,6 +38,13 @@ type SessionRuntimeStateShape = {
   providerSessionId: string;
   modelId: string | null;
   lastUsedAt: Date;
+  librarySnapshots?: Array<{
+    id: string;
+    presetItemId: string | null;
+    presetRevisionId: string | null;
+    snapshotJson: Prisma.JsonValue;
+    createdAt: Date;
+  }>;
 };
 
 type SessionShape = {
@@ -33,19 +52,45 @@ type SessionShape = {
   runtimeStates: SessionRuntimeStateShape[];
 };
 
-export function serializeRuntimeState<T extends SessionRuntimeStateShape>(state: T) {
+type LibrarySnapshotMetadata = {
+  id: string;
+  presetItemId: string | null;
+  presetRevisionId: string | null;
+  snapshotJson: Prisma.JsonValue;
+  createdAt: Date;
+};
+
+type SerializedRuntimeState = {
+  runtime: ProtocolAgentRuntime;
+  providerSessionId: string;
+  modelId: string | null;
+  lastUsedAt: Date;
+  librarySnapshot?: LibrarySnapshotMetadata;
+};
+
+type SerializedSession<T extends SessionShape> = Omit<T, "defaultRuntime" | "runtimeStates"> & {
+  defaultRuntime: ProtocolAgentRuntime;
+  runtimeStates: SerializedRuntimeState[];
+};
+
+export function serializeRuntimeState<T extends SessionRuntimeStateShape>(
+  state: T,
+): SerializedRuntimeState {
+  const [librarySnapshot] = state.librarySnapshots ?? [];
   return {
     runtime: dbRuntimeToProtocol(state.runtime),
     providerSessionId: state.providerSessionId,
     modelId: state.modelId,
     lastUsedAt: state.lastUsedAt,
+    ...(librarySnapshot ? { librarySnapshot } : {}),
   };
 }
 
-export function serializeSession<T extends SessionShape>(session: T) {
+export function serializeSession<T extends SessionShape>(session: T): SerializedSession<T> {
+  const { defaultRuntime, runtimeStates, ...sessionData } = session;
   return {
-    ...session,
-    defaultRuntime: dbRuntimeToProtocol(session.defaultRuntime),
-    runtimeStates: session.runtimeStates.map(serializeRuntimeState),
+    ...sessionData,
+    defaultRuntime: dbRuntimeToProtocol(defaultRuntime),
+    runtimeStates: runtimeStates.map(serializeRuntimeState),
   };
 }
