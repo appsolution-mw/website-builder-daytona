@@ -5,7 +5,7 @@ import type {
 } from "@prisma/client";
 import type { AgentRuntime } from "@wbd/protocol";
 import { NextResponse, type NextRequest } from "next/server";
-import { dbRuntimeToProtocol, isAgentRuntime } from "@/lib/agents/runtime";
+import { dbRuntimeToProtocol, isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { enqueueAgentRun } from "@/lib/agent-runs/queue";
 import { requestProjectQueueDrain } from "@/lib/agent-runs/executor-client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
@@ -140,6 +140,26 @@ export async function POST(
     runtime: payload.runtime,
     providerSessionId: payload.providerSessionId,
     modelId: payload.modelId,
+  });
+  await prisma.sessionRuntimeState.upsert({
+    where: {
+      sessionId_runtime: {
+        sessionId: payload.sessionId,
+        runtime: protocolRuntimeToDb(payload.runtime),
+      },
+    },
+    create: {
+      projectId: project.id,
+      sessionId: payload.sessionId,
+      runtime: protocolRuntimeToDb(payload.runtime),
+      providerSessionId: payload.providerSessionId,
+      modelId: payload.modelId,
+    },
+    update: {
+      providerSessionId: payload.providerSessionId,
+      modelId: payload.modelId,
+      lastUsedAt: new Date(),
+    },
   });
   requestProjectQueueDrain(project.id).catch((error: unknown) => {
     console.error("project queue drain failed", error);

@@ -11,6 +11,7 @@ const sessionFindFirstMock = vi.hoisted(() => vi.fn());
 const agentRunFindManyMock = vi.hoisted(() => vi.fn());
 const agentRunFindFirstMock = vi.hoisted(() => vi.fn());
 const projectQueueStateFindUniqueMock = vi.hoisted(() => vi.fn());
+const sessionRuntimeStateUpsertMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/current-user", () => ({
   requireCurrentUserFromRequest: requireCurrentUserFromRequestMock,
@@ -42,6 +43,9 @@ vi.mock("@/lib/db/client", () => ({
     },
     projectQueueState: {
       findUnique: projectQueueStateFindUniqueMock,
+    },
+    sessionRuntimeState: {
+      upsert: sessionRuntimeStateUpsertMock,
     },
   },
 }));
@@ -120,6 +124,26 @@ describe("/api/projects/[id]/runs", () => {
       runtime: "openai-codex",
       providerSessionId: "provider-session-1",
       modelId: "gpt-test",
+    });
+    expect(sessionRuntimeStateUpsertMock).toHaveBeenCalledWith({
+      where: {
+        sessionId_runtime: {
+          sessionId: "session-1",
+          runtime: "OPENAI_CODEX",
+        },
+      },
+      create: {
+        projectId: PROJECT.id,
+        sessionId: "session-1",
+        runtime: "OPENAI_CODEX",
+        providerSessionId: "provider-session-1",
+        modelId: "gpt-test",
+      },
+      update: {
+        providerSessionId: "provider-session-1",
+        modelId: "gpt-test",
+        lastUsedAt: expect.any(Date),
+      },
     });
     expect(requestProjectQueueDrainMock).toHaveBeenCalledWith(PROJECT.id);
   });

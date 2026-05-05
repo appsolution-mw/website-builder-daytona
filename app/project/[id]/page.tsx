@@ -146,8 +146,28 @@ type BrowserConsoleEntry = {
   timestamp: number;
   url: string;
 };
+type SerializableRunEvent = {
+  id: string;
+  runId: string;
+  attemptId: string | null;
+  projectId: string;
+  sessionId: string;
+  sequence: number;
+  type: "STATUS" | "CHUNK" | "TOOL_USE" | "USAGE" | "DONE" | "ERROR" | "FILE_CHANGED";
+  agentId: string | null;
+  payload: unknown;
+  createdAt: string;
+};
+type ProjectRunQueueState = {
+  state: "IDLE" | "RUNNING" | "BLOCKED";
+  activeRunId: string | null;
+  blockedRunId: string | null;
+  blockedAt: string | null;
+  updatedAt: string | null;
+};
 
 const POLL_INTERVAL_MS = 2_000;
+const EVENT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_CHAT_WIDTH_PCT = 28;
 const MIN_CHAT_WIDTH_PCT = 22;
 const MAX_CHAT_WIDTH_PCT = 45;
@@ -392,16 +412,6 @@ async function captureViewportSelectionAsPngDataUrl(selection: CaptureRect): Pro
   }
 }
 
-function imageAttachmentsForPrompt(attachments: DraftImageAttachment[]): PromptImageAttachment[] {
-  return attachments.map(({ name, mimeType, dataBase64 }) => ({ name, mimeType, dataBase64 }));
-}
-
-function describePersistedImages(attachments: DraftImageAttachment[]): string {
-  if (attachments.length === 0) return "";
-  const names = attachments.map((a) => a.name).join(", ");
-  return `\n\n[Attached images: ${names}]`;
-}
-
 function messagesFromDb(rows: DbMessage[]): ChatMessageView[] {
   return rows.map((m) => {
     const turnId = m.turnId ?? m.id;
@@ -428,6 +438,56 @@ function messagesFromDb(rows: DbMessage[]): ChatMessageView[] {
       text: m.content,
     };
   });
+}
+
+function isAgentStreamEvent(event: ProxyToBrowser): boolean {
+  return (
+    event.type === "agent.session" ||
+    event.type === "agent.status" ||
+    event.type === "agent.chunk" ||
+    event.type === "agent.tool_use" ||
+    event.type === "agent.usage" ||
+    event.type === "agent.done" ||
+    event.type === "agent.error"
+  );
+}
+
+function proxyEventFromRunEvent(event: SerializableRunEvent): ProxyToBrowser | null {
+  const payload = event.payload;
+  if (isProxyEventPayload(payload)) {
+    return payload;
+  }
+  if (event.type === "DONE") {
+    return {
+      type: "agent.done",
+      turnId: event.runId,
+      durationMs: 0,
+      tokensIn: 0,
+      tokensOut: 0,
+      costUsd: 0,
+      exitCode: 0,
+    };
+  }
+  if (event.type === "ERROR") {
+    const message = typeof payload === "object" && payload !== null && "message" in payload
+      ? String((payload as { message?: unknown }).message ?? "Run failed")
+      : "Run failed";
+    return {
+      type: "agent.error",
+      turnId: event.runId,
+      message,
+      ...(event.agentId ? { agentId: event.agentId } : {}),
+    };
+  }
+  return null;
+}
+
+function isProxyEventPayload(value: unknown): value is ProxyToBrowser {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
 }
 
 function runtimeStateForSession(session: ChatSession | null, runtime: AgentRuntime): RuntimeState | undefined {
@@ -550,6 +610,8 @@ export default function ProjectWorkspace({
   const activeSessionRef = useRef<ChatSession | null>(null);
   const draftAttachmentsRef = useRef<DraftImageAttachment[]>([]);
   const selectedRuntimeRef = useRef<AgentRuntime>("claude-code");
+  const turnInFlightRef = useRef<string | null>(null);
+  const eventCursorRef = useRef<number | null>(null);
   const turnRuntimeRef = useRef<Map<string, { runtime: AgentRuntime; modelId: string | null }>>(new Map());
   const modelsRequestStartedRef = useRef(false);
   const mountedRef = useRef(true);
@@ -566,6 +628,7 @@ export default function ProjectWorkspace({
   useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
   useEffect(() => { draftAttachmentsRef.current = draftAttachments; }, [draftAttachments]);
   useEffect(() => { selectedRuntimeRef.current = selectedRuntime; }, [selectedRuntime]);
+  useEffect(() => { turnInFlightRef.current = turnInFlight; }, [turnInFlight]);
   useEffect(() => { selectedPathRef.current = selectedPath; }, [selectedPath]);
   useEffect(() => { pathsRef.current = paths; }, [paths]);
   useEffect(() => { fileContentRef.current = fileContent; }, [fileContent]);
@@ -1024,6 +1087,42 @@ export default function ProjectWorkspace({
     }
   }, [id]);
 
+  const refreshRunEvents = useCallback(async (): Promise<void> => {
+    const runsRes = await fetch(`/api/projects/${id}/runs`, { cache: "no-store" });
+    if (!runsRes.ok) return;
+    const runsData = (await runsRes.json()) as {
+      queueState: ProjectRunQueueState;
+    };
+    const replayRunIds = new Set(
+      [runsData.queueState.activeRunId, runsData.queueState.blockedRunId]
+        .filter((runId): runId is string => Boolean(runId)),
+    );
+    setTurnInFlight(runsData.queueState.activeRunId);
+    if (runsData.queueState.state !== "RUNNING") {
+      setReviewingActive(false);
+    }
+
+    const after = eventCursorRef.current;
+    const eventsRes = await fetch(
+      `/api/projects/${id}/events${after === null ? "" : `?after=${after}`}`,
+      { cache: "no-store" },
+    );
+    if (!eventsRes.ok) return;
+    const eventsData = (await eventsRes.json()) as { events: SerializableRunEvent[] };
+    const events = eventsData.events;
+    if (events.length === 0) return;
+
+    const maxSequence = Math.max(...events.map((event) => event.sequence));
+    const eventsToApply = after === null
+      ? events.filter((event) => replayRunIds.has(event.runId))
+      : events;
+    for (const event of eventsToApply) {
+      const proxyEvent = proxyEventFromRunEvent(event);
+      if (proxyEvent) handleEventRef.current(proxyEvent);
+    }
+    eventCursorRef.current = Math.max(eventCursorRef.current ?? 0, maxSequence);
+  }, [id]);
+
   const loadChatSession = useCallback(async (sessionId: string) => {
     if (turnInFlight) return;
     setSessionLoading(true);
@@ -1062,24 +1161,6 @@ export default function ProjectWorkspace({
     setPrompt("");
     setDraftAttachments([]);
     setAttachmentError(null);
-  }
-
-  async function persistChatMessage(args: {
-    sessionId: string;
-    role: "USER" | "AGENT" | "SYSTEM";
-    content: string;
-    turnId?: string | null;
-    agentId?: string | null;
-    runtime?: AgentRuntime | null;
-    provider?: string | null;
-    modelId?: string | null;
-  }) {
-    await fetch(`/api/projects/${id}/sessions/${args.sessionId}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(args),
-    }).catch(() => undefined);
-    void refreshChatSessions();
   }
 
   async function syncRuntimeState(runtime: AgentRuntime, providerSessionId: string, modelId?: string) {
@@ -1136,26 +1217,6 @@ export default function ProjectWorkspace({
     }).catch(() => null);
     if (res?.ok) {
       void refreshChatSessions();
-    }
-  }
-
-  function persistAgentMessages(turnId: string) {
-    const session = activeSessionRef.current;
-    if (!session) return;
-    const agentMessages = messagesRef.current.filter(
-      (m): m is Extract<ChatMessageView, { kind: "agent" }> =>
-        m.kind === "agent" && m.turnId === turnId && m.text.trim().length > 0,
-    );
-    for (const m of agentMessages) {
-      void persistChatMessage({
-        sessionId: session.id,
-        role: "AGENT",
-        content: m.text,
-        turnId,
-        agentId: m.agentId ?? null,
-        runtime: m.runtime as AgentRuntime | undefined,
-        modelId: m.modelId,
-      });
     }
   }
 
@@ -1350,7 +1411,6 @@ export default function ProjectWorkspace({
         }
         return msgs;
       });
-      persistAgentMessages(ev.turnId);
       turnRuntimeRef.current.delete(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
@@ -1370,18 +1430,6 @@ export default function ProjectWorkspace({
           text: ev.message,
         },
       ]);
-      const session = activeSessionRef.current;
-      if (session) {
-        void persistChatMessage({
-          sessionId: session.id,
-          role: "SYSTEM",
-          content: ev.message,
-          turnId: ev.turnId,
-          agentId: evAgentId ?? null,
-          runtime: runtimeMeta?.runtime,
-          modelId: runtimeMeta?.modelId ?? null,
-        });
-      }
       turnRuntimeRef.current.delete(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
@@ -1584,6 +1632,7 @@ export default function ProjectWorkspace({
         } catch {
           return;
         }
+        if (isAgentStreamEvent(parsed)) return;
         handleEventRef.current(parsed);
       };
     };
@@ -1604,6 +1653,25 @@ export default function ProjectWorkspace({
     loadDevIndicatorSetting,
     syncPreviewConsoleBridge,
   ]);
+
+  useEffect(() => {
+    if (project?.status !== "RUNNING") return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const poll = () => {
+      void refreshRunEvents()
+        .catch(() => undefined)
+        .finally(() => {
+          if (cancelled) return;
+          timer = window.setTimeout(poll, EVENT_POLL_INTERVAL_MS);
+        });
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [project?.status, refreshRunEvents]);
 
   useEffect(() => {
     if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
@@ -1858,7 +1926,6 @@ export default function ProjectWorkspace({
   }
 
   function onPromptPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
-    if (turnInFlight !== null) return;
     const files = Array.from(e.clipboardData.files).filter((file) => ACCEPTED_IMAGE_TYPES.has(file.type));
     if (files.length > 0) {
       void addImageFiles(files);
@@ -1866,7 +1933,6 @@ export default function ProjectWorkspace({
   }
 
   function onChatDragOver(e: DragEvent<HTMLElement>) {
-    if (turnInFlight !== null) return;
     if (!hasImageDataTransferItems(e.dataTransfer.items)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
@@ -1880,7 +1946,6 @@ export default function ProjectWorkspace({
   }
 
   function onChatDrop(e: DragEvent<HTMLElement>) {
-    if (turnInFlight !== null) return;
     if (!hasImageFiles(e.dataTransfer.files)) return;
     e.preventDefault();
     setDraggingImages(false);
@@ -1892,9 +1957,8 @@ export default function ProjectWorkspace({
     setAttachmentError(null);
   }
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
-    const ws = wsRef.current;
     const attachments = draftAttachmentsRef.current;
     const text = prompt.trim() || (attachments.length > 0 ? "Use the attached image as context." : "");
     const session = activeSessionRef.current;
@@ -1902,42 +1966,53 @@ export default function ProjectWorkspace({
     const runtimeState = runtimeStateForSession(session, runtime);
     const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
     const modelId = runtimeState?.modelId ?? null;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !text || turnInFlight || !session) return;
-    const turnId = crypto.randomUUID();
-    const resumeSession = Boolean(runtimeState);
-    turnRuntimeRef.current.set(turnId, { runtime, modelId });
-    updateMessages((msgs) => [...msgs, { kind: "user", turnId, text, attachments }]);
-    void persistChatMessage({
-      sessionId: session.id,
-      role: "USER",
-      content: `${text}${describePersistedImages(attachments)}`,
-      turnId,
-      runtime,
+    if (!text || !session) return;
+    if (attachments.length > 0) {
+      setAttachmentError("Image attachments are not supported for queued durable runs yet");
+      return;
+    }
+    const res = await fetch(`/api/projects/${id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: session.id,
+        prompt: text,
+        runtime,
+        providerSessionId,
+        ...(modelId ? { modelId } : {}),
+      }),
     });
-    const msg: BrowserToProxy = {
-      type: "agent.prompt",
-      prompt: text,
-      turnId,
-      runtime,
-      sessionId: session.id,
-      providerSessionId,
-      resumeSession,
-      ...(modelId ? { modelId } : {}),
-      attachments: imageAttachmentsForPrompt(attachments),
-    };
-    ws.send(JSON.stringify(msg));
-    setTurnInFlight(turnId);
+    const data = (await res.json().catch(() => ({}))) as { runId?: string; error?: string };
+    if (!res.ok || !data.runId) {
+      updateMessages((msgs) => [
+        ...msgs,
+        {
+          kind: "error",
+          turnId: null,
+          text: data.error ?? `Run could not be queued (HTTP ${res.status})`,
+        },
+      ]);
+      return;
+    }
+    const runId = data.runId;
+
+    turnRuntimeRef.current.set(runId, { runtime, modelId });
+    updateMessages((msgs) => [...msgs, { kind: "user", turnId: runId, text }]);
+    if (!turnInFlightRef.current) {
+      setTurnInFlight(runId);
+    }
     setPrompt("");
     setDraftAttachments([]);
     setAttachmentError(null);
+    void refreshChatSessions();
+    void refreshRunEvents();
   }
 
   function onAbort() {
-    console.log("[abort] onAbort invoked", { turnInFlight, wsState: wsRef.current?.readyState });
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN || !turnInFlight) return;
-    const msg: BrowserToProxy = { type: "agent.abort", turnId: turnInFlight };
-    ws.send(JSON.stringify(msg));
+    if (!turnInFlight) return;
+    fetch(`/api/projects/${id}/runs/${turnInFlight}/cancel`, {
+      method: "POST",
+    }).catch(() => undefined);
   }
 
   if (!project) {
@@ -2211,7 +2286,7 @@ export default function ProjectWorkspace({
               onPaste={onPromptPaste}
               placeholder={`Tell ${runtimeLabel(selectedRuntime)} what to change...`}
               rows={3}
-              disabled={wsStatus !== "open" || turnInFlight !== null || !activeSession}
+              disabled={!activeSession}
               className="min-h-28"
             />
             {draftAttachments.length > 0 && (
@@ -2255,7 +2330,7 @@ export default function ProjectWorkspace({
                 {turnInFlight
                   ? reviewingActive
                     ? "Reviewing..."
-                    : `${runtimeLabel(selectedRuntime)} is thinking...`
+                    : "Task running"
                   : wsOpen
                     ? draftAttachments.length > 0
                       ? `${draftAttachments.length} image${draftAttachments.length === 1 ? "" : "s"} attached`
@@ -2278,15 +2353,13 @@ export default function ProjectWorkspace({
                 <Button
                   type="submit"
                   disabled={
-                    wsStatus !== "open" ||
-                    turnInFlight !== null ||
                     (!prompt.trim() && draftAttachments.length === 0) ||
                     !activeSession
                   }
                   size="sm"
                 >
                   <Send />
-                  Send
+                  {turnInFlight ? "Queue" : "Send"}
                 </Button>
               </div>
             </div>
