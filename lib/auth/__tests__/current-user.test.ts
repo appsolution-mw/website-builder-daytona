@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   auth: {
@@ -9,6 +9,12 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 describe("current user helpers", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
   it("uses the explicit dev user fallback outside production", async () => {
     process.env.DEV_USER_ID = "dev-user";
     process.env.NODE_ENV = "test";
@@ -29,5 +35,16 @@ describe("current user helpers", () => {
     const user = await currentUserFromHeaders(new Headers());
 
     expect(user).toBeNull();
+  });
+
+  it("requires explicit admin identity in production", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.ADMIN_USER_IDS = "admin-user";
+
+    vi.resetModules();
+    const { isAdminUser } = await import("../current-user");
+
+    expect(isAdminUser({ id: "admin-user" })).toBe(true);
+    expect(isAdminUser({ id: "other-user" })).toBe(false);
   });
 });

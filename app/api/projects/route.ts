@@ -6,6 +6,7 @@ import { createInstallationAccessToken } from "@/lib/github/app";
 import { projectSourceFromCreateBody } from "@/lib/projects/source";
 import { createRuntime } from "@/lib/runtime";
 import { isRuntimeError } from "@/lib/runtime/errors";
+import type { Runtime, SandboxInfo } from "@/lib/runtime/types";
 import {
   AGENT_RUNTIME_OPTIONS,
   dbRuntimeToProtocol,
@@ -118,6 +119,23 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise
     return await Promise.race([operation, timeout]);
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
+}
+
+async function withSpawnTimeout(
+  operation: Promise<SandboxInfo>,
+  runtime: Pick<Runtime, "destroyProjectSandbox">,
+  timeoutMs: number,
+): Promise<SandboxInfo> {
+  try {
+    return await withTimeout(operation, timeoutMs);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("spawn timeout after ")) {
+      operation
+        .then((info) => runtime.destroyProjectSandbox(info.sandboxId))
+        .catch(() => undefined);
+    }
+    throw error;
   }
 }
 
@@ -341,27 +359,34 @@ export async function POST(request: NextRequest) {
         }
       : { type: "template" as const };
     const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
-    const info = await withTimeout(
+    const info = await withSpawnTimeout(
       sandboxRuntime.spawnProjectSandbox({
         projectId: project.id,
         source: spawnSource,
         projectEnvContent,
         openhandsFiles,
       }),
+      sandboxRuntime,
       SPAWN_TIMEOUT_MS,
     );
 
-    const updated = await prisma.project.update({
-      where: { id: project.id },
-      data: {
-        status: "RUNNING",
-        sandboxId: info.sandboxId,
-        brokerUrl: info.brokerUrl,
-        brokerPreviewToken: info.brokerPreviewToken,
-        previewUrl: info.previewUrl,
-      },
-      select: projectSelect,
-    });
+    let updated: Parameters<typeof serializeProject>[0];
+    try {
+      updated = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          status: "RUNNING",
+          sandboxId: info.sandboxId,
+          brokerUrl: info.brokerUrl,
+          brokerPreviewToken: info.brokerPreviewToken,
+          previewUrl: info.previewUrl,
+        },
+        select: projectSelect,
+      });
+    } catch (error: unknown) {
+      await sandboxRuntime.destroyProjectSandbox(info.sandboxId).catch(() => undefined);
+      throw error;
+    }
     return NextResponse.json({
       project: serializeProject(updated),
     }, { status: 201 });

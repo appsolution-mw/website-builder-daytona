@@ -21,7 +21,6 @@ import {
   Loader2,
   Plus,
   RefreshCw,
-  Server,
   Settings2,
   Trash2,
 } from "lucide-react";
@@ -465,12 +464,6 @@ export default function Dashboard() {
                 <Link href="/usage">
                   <BarChart3 />
                   Usage
-                </Link>
-              </Button>
-              <Button asChild variant="outline" size="sm">
-                <Link href="/admin/workers">
-                  <Server />
-                  Workers
                 </Link>
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={signOut}>

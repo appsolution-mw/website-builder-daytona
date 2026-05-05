@@ -36,7 +36,11 @@ export async function POST(req: Request, { params }: RouteParams): Promise<Respo
 
   await prisma.worker.update({
     where: { id },
-    data: { lastHeartbeatAt: new Date(), status: "READY" },
+    data: {
+      lastHeartbeatAt: new Date(),
+      status: worker.status === "DRAINING" ? "DRAINING" : "READY",
+      readyAt: worker.readyAt ?? new Date(),
+    },
   });
   return new Response(null, { status: 204 });
 }

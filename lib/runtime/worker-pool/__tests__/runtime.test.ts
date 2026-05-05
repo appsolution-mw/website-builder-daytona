@@ -168,6 +168,54 @@ describe("WorkerPoolRuntime", () => {
     expect(handles.requests()).toEqual([]);
   });
 
+  it("reserves worker slots atomically under concurrent spawns", async () => {
+    const handles = createFakeAgentClient();
+    const worker = {
+      id: "worker-one-slot",
+      tailscaleHostname: "worker-one-slot",
+      tailscaleIp: "100.64.1.25",
+      provider: "fake",
+      providerVmId: "vm-worker-one-slot",
+      region: "local",
+      capacity: 1,
+      status: "READY" as const,
+    };
+    await prisma.worker.create({
+      data: {
+        ...worker,
+        name: worker.id,
+      },
+    });
+    const r = createWorkerPoolRuntime({
+      scheduler: { pickWorker: async () => worker },
+      provisioner: createFakeProvisioner(),
+      agentClientFor: () => handles.client,
+      sandboxImage: "wbd/sandbox:dev",
+      autoProvisionWhenFull: false,
+    });
+    const [firstProjectId, secondProjectId] = await Promise.all([project(), project()]);
+
+    const results = await Promise.allSettled([
+      r.spawnProjectSandbox({ projectId: firstProjectId, source: { type: "template" } }),
+      r.spawnProjectSandbox({ projectId: secondProjectId, source: { type: "template" } }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected?.status).toBe("rejected");
+    if (rejected?.status !== "rejected") {
+      throw new Error("expected one spawn to reject");
+    }
+    expect(rejected.reason).toEqual(
+      new RuntimeError(
+        "NO_WORKER_CAPACITY",
+        "No ready worker has a free project slot",
+      ),
+    );
+    expect(await prisma.workerSandbox.count({ where: { workerId: worker.id } })).toBe(1);
+    expect(handles.requests()).toHaveLength(1);
+  });
+
   it("reuses an existing READY worker on subsequent spawns", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));

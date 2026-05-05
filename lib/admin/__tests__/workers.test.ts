@@ -238,6 +238,7 @@ describe("worker admin service", () => {
     const oldWorker = await prisma.worker.findUnique({ where: { id: "worker-failed" } });
     expect(oldWorker?.status).toBe("DECOMMISSIONED");
     expect(oldWorker?.decommissionedAt).toBeInstanceOf(Date);
+    expect(oldWorker?.tailscaleHostname).toBe("worker-failed.tailnet.test-decommissioned-worker-f");
   });
 
   it("does not retry non-retryable workers", async () => {

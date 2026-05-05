@@ -253,6 +253,7 @@ describe("HetznerProvisioner", () => {
     const row = await prisma.worker.findUnique({ where: { id: worker.id } });
     expect(row?.status).toBe("DECOMMISSIONED");
     expect(row?.decommissionedAt).toBeInstanceOf(Date);
+    expect(row?.tailscaleHostname).toBe(`${worker.tailscaleHostname}-decommissioned-${worker.id.slice(0, 8)}`);
   });
 
   it("destroy() is idempotent for missing and non-Hetzner workers", async () => {

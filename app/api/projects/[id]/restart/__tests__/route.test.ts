@@ -132,6 +132,67 @@ describe("POST /api/projects/[id]/restart", () => {
     });
   });
 
+  it("destroys the new sandbox when persisting restarted project state fails", async () => {
+    const project = {
+      id: "project-update-fails",
+      ownerId: "dev-user",
+      name: "Restart Update Fails",
+      status: "RUNNING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-04T00:00:00.000Z"),
+      lastActive: new Date("2026-05-04T00:00:00.000Z"),
+      sandboxId: "sandbox-old",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "old-token",
+      previewUrl: "http://localhost:3000",
+      provisioningError: null,
+      sourceType: "TEMPLATE",
+      githubOwner: null,
+      githubRepo: null,
+      githubBaseBranch: null,
+      githubInstallation: null,
+    };
+    createRuntimeMock.mockReturnValue({
+      destroyProjectSandbox: destroyProjectSandboxMock,
+      spawnProjectSandbox: spawnProjectSandboxMock,
+    });
+    projectFindFirstMock.mockResolvedValue(project);
+    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-new",
+      brokerUrl: "ws://localhost:4001",
+      brokerPreviewToken: "new-token",
+      previewUrl: "http://localhost:3001",
+    });
+    projectUpdateMock
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValueOnce({
+        ...project,
+        status: "DESTROYED",
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
+        provisioningError: "sandbox restart failed",
+      });
+
+    const res = await POST(new Request("http://localhost/api/projects/project-update-fails/restart", {
+      method: "POST",
+    }), {
+      params: Promise.resolve({ id: "project-update-fails" }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("sandbox-old");
+    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("sandbox-new");
+    await expect(res.json()).resolves.toMatchObject({
+      error: "restart failed",
+      message: "sandbox restart failed",
+    });
+  });
+
   it("respawns a GitHub sandbox from the stored source with a fresh installation token", async () => {
     const project = {
       id: "project-github",

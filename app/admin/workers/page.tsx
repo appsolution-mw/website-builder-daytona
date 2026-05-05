@@ -1,14 +1,17 @@
 import type { ReactElement } from "react";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
-import { currentUserFromServerHeaders } from "@/lib/auth/current-user";
+import { currentUserFromServerHeaders, isAdminUser } from "@/lib/auth/current-user";
 import { WorkersClient } from "./WorkersClient";
 
 export default async function WorkersAdminPage(): Promise<ReactElement> {
   const currentUser = await currentUserFromServerHeaders();
   if (!currentUser) {
     redirect("/sign-in");
+  }
+  if (!isAdminUser(currentUser)) {
+    notFound();
   }
 
   return (

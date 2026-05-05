@@ -181,7 +181,11 @@ export function createHetznerProvisioner(args: CreateHetznerProvisionerArgs): Wo
 
       await prisma.worker.updateMany({
         where: { id: workerId, provider: PROVIDER_ID },
-        data: { status: "DECOMMISSIONED", decommissionedAt: now() },
+        data: {
+          status: "DECOMMISSIONED",
+          decommissionedAt: now(),
+          tailscaleHostname: decommissionedHostname(worker.tailscaleHostname, worker.id),
+        },
       });
     },
 
@@ -196,6 +200,11 @@ export function createHetznerProvisioner(args: CreateHetznerProvisionerArgs): Wo
       return rows.map(rowToRecord);
     },
   };
+}
+
+function decommissionedHostname(hostname: string, workerId: string): string {
+  if (hostname.includes("-decommissioned-")) return hostname;
+  return `${hostname}-decommissioned-${workerId.slice(0, 8)}`;
 }
 
 export function createHetznerWorkerProvisionerFromEnv(

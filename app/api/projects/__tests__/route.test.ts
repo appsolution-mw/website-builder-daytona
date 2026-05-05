@@ -4,6 +4,7 @@ import { RuntimeError } from "@/lib/runtime/errors";
 import { AgentError } from "@/lib/runtime/worker-pool/types";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
+const destroyProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentUpsertMock = vi.hoisted(() => vi.fn());
 const projectCreateMock = vi.hoisted(() => vi.fn());
 const projectFindUniqueMock = vi.hoisted(() => vi.fn());
@@ -25,6 +26,7 @@ vi.mock("@/lib/auth/current-user", () => ({
 vi.mock("@/lib/runtime", () => ({
   createRuntime: () => ({
     spawnProjectSandbox: spawnProjectSandboxMock,
+    destroyProjectSandbox: destroyProjectSandboxMock,
   }),
 }));
 
@@ -154,6 +156,52 @@ describe("POST /api/projects", () => {
         id: "project-with-env",
         publicSlug: "project-with-env",
       },
+    });
+  });
+
+  it("destroys a spawned sandbox when persisting the running project fails", async () => {
+    const project = {
+      id: "project-update-fails",
+      name: "Project Update Fails",
+      publicSlug: "project-update-fails",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectFindUniqueMock.mockResolvedValue(null);
+    projectCreateMock.mockResolvedValue(project);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-update-fails",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "token",
+      previewUrl: "http://localhost:3000",
+    });
+    projectUpdateMock
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValueOnce({
+        ...project,
+        status: "DESTROYED",
+        provisioningError: "sandbox provisioning failed",
+      });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Project Update Fails" }),
+    }));
+
+    expect(res.status).toBe(500);
+    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("sandbox-update-fails");
+    await expect(res.json()).resolves.toMatchObject({
+      error: "provisioning failed",
+      message: "sandbox provisioning failed",
     });
   });
 

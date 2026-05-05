@@ -5,6 +5,7 @@ const mockProvision = vi.hoisted(() => vi.fn());
 const mockDestroy = vi.hoisted(() => vi.fn());
 const mockListOwned = vi.hoisted(() => vi.fn());
 const originalDevUserId = process.env.DEV_USER_ID;
+const originalAdminUserIds = process.env.ADMIN_USER_IDS;
 
 vi.mock("@/lib/runtime/provisioner/hetzner", () => ({
   createHetznerWorkerProvisionerFromEnv: vi.fn(() => ({
@@ -38,6 +39,7 @@ describe("/api/admin/workers", () => {
     vi.resetModules();
     vi.clearAllMocks();
     process.env.DEV_USER_ID = "admin-test-user";
+    delete process.env.ADMIN_USER_IDS;
     await prisma.workerSandbox.deleteMany({});
     await prisma.worker.deleteMany({});
     mockProvision.mockResolvedValue({
@@ -61,6 +63,8 @@ describe("/api/admin/workers", () => {
     await prisma.worker.deleteMany({});
     if (originalDevUserId === undefined) delete process.env.DEV_USER_ID;
     else process.env.DEV_USER_ID = originalDevUserId;
+    if (originalAdminUserIds === undefined) delete process.env.ADMIN_USER_IDS;
+    else process.env.ADMIN_USER_IDS = originalAdminUserIds;
   });
 
   it("GET requires authentication", async () => {
@@ -71,6 +75,16 @@ describe("/api/admin/workers", () => {
 
     expect(response.status).toBe(401);
     expect(body).toEqual({ error: "not signed in" });
+  });
+
+  it("GET requires admin access", async () => {
+    process.env.ADMIN_USER_IDS = "other-admin";
+    const { GET } = await import("../route");
+    const response = await GET(new Request("http://localhost/api/admin/workers"));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({ error: "admin access required" });
   });
 
   it("GET returns workers with slot counts", async () => {

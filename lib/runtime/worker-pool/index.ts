@@ -233,6 +233,11 @@ function createPublicRouting(
 } | null {
   const publicBaseDomain = optionalHostname("PUBLIC_BASE_DOMAIN", runtimeEnv);
   const caddyAdminUrl = optionalUrl("CADDY_ADMIN_URL", runtimeEnv);
+  if ((publicBaseDomain && !caddyAdminUrl) || (!publicBaseDomain && caddyAdminUrl)) {
+    throw new Error(
+      "worker-pool runtime requires PUBLIC_BASE_DOMAIN and CADDY_ADMIN_URL to be set together",
+    );
+  }
   if (!publicBaseDomain || !caddyAdminUrl) return null;
 
   const caddyClient = createCaddyClient(caddyAdminUrl.origin);

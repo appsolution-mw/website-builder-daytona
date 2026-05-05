@@ -271,8 +271,23 @@ async function countSlotConsumingSandboxes(workerId: string): Promise<number> {
 }
 
 async function markWorkerDecommissioned(workerId: string): Promise<void> {
+  const worker = await prisma.worker.findUnique({
+    where: { id: workerId },
+    select: { id: true, tailscaleHostname: true },
+  });
+  if (!worker) return;
+
   await prisma.worker.update({
     where: { id: workerId },
-    data: { status: "DECOMMISSIONED", decommissionedAt: new Date() },
+    data: {
+      status: "DECOMMISSIONED",
+      decommissionedAt: new Date(),
+      tailscaleHostname: decommissionedHostname(worker.tailscaleHostname, worker.id),
+    },
   });
+}
+
+function decommissionedHostname(hostname: string, workerId: string): string {
+  if (hostname.includes("-decommissioned-")) return hostname;
+  return `${hostname}-decommissioned-${workerId.slice(0, 8)}`;
 }

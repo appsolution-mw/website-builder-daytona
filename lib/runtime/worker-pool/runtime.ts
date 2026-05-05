@@ -51,15 +51,15 @@ export interface DeleteProjectRouteArgs {
 export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runtime {
   return {
     async spawnProjectSandbox(spawn: SpawnArgs): Promise<SandboxInfo> {
-      const worker = await ensureWorker(args.scheduler, args.provisioner, {
+      const defaults = {
         defaultRegion: args.defaultRegion ?? "local",
         defaultSize: args.defaultSize ?? "local",
         defaultCapacity: args.defaultCapacity ?? 8,
         autoProvisionWhenFull: args.autoProvisionWhenFull ?? true,
-      });
+      };
+      const reservation = await reserveSandboxSlot(args, defaults, spawn.projectId);
+      const { worker, sandboxId, brokerToken, ws } = reservation;
       const agent = args.agentClientFor(worker);
-      const sandboxId = randomBytes(16).toString("hex");
-      const brokerToken = randomBytes(32).toString("hex");
       let sandboxCreatedOnWorker = false;
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
@@ -73,19 +73,6 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       if (spawn.openhandsFiles && spawn.openhandsFiles.length > 0) {
         env.OPENHANDS_FILES_B64 = Buffer.from(JSON.stringify(spawn.openhandsFiles), "utf8").toString("base64");
       }
-      // Reserve DB row up-front so a concurrent spawn for the same project hits
-      // the unique constraint and we know which one to keep.
-      const ws = await prisma.workerSandbox.create({
-        data: {
-          id: sandboxId,
-          workerId: worker.id,
-          projectId: spawn.projectId,
-          containerId: "pending",
-          brokerPort: 0,
-          previewPort: 0,
-          status: "SPAWNING",
-        },
-      });
       try {
         const created = await agent.createSandbox({
           sandboxId,
@@ -168,6 +155,75 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       return mapStatus(got.status);
     },
   };
+}
+
+async function reserveSandboxSlot(
+  args: CreateWorkerPoolRuntimeArgs,
+  defaults: {
+    defaultRegion: string;
+    defaultSize: string;
+    defaultCapacity: number;
+    autoProvisionWhenFull: boolean;
+  },
+  projectId: string,
+): Promise<{
+  worker: WorkerRecord;
+  sandboxId: string;
+  brokerToken: string;
+  ws: { id: string };
+}> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const worker = await ensureWorker(args.scheduler, args.provisioner, defaults);
+    const sandboxId = randomBytes(16).toString("hex");
+    const brokerToken = randomBytes(32).toString("hex");
+    const ws = await reserveWorkerSandbox(worker, sandboxId, projectId);
+    if (ws) {
+      return { worker, sandboxId, brokerToken, ws };
+    }
+  }
+
+  throw new RuntimeError(
+    "NO_WORKER_CAPACITY",
+    "No ready worker has a free project slot",
+  );
+}
+
+async function reserveWorkerSandbox(
+  worker: WorkerRecord,
+  sandboxId: string,
+  projectId: string,
+): Promise<{ id: string } | null> {
+  return prisma.$transaction(async (tx) => {
+    const lockedWorkers = await tx.$queryRaw<Array<{ id: string; capacity: number; status: string }>>`
+      SELECT id, capacity, status
+      FROM "Worker"
+      WHERE id = ${worker.id}
+      FOR UPDATE
+    `;
+    const [lockedWorker] = lockedWorkers;
+    if (!lockedWorker || lockedWorker.status !== "READY") return null;
+
+    const usedSlots = await tx.workerSandbox.count({
+      where: {
+        workerId: worker.id,
+        status: { in: ["SPAWNING", "RUNNING", "STOPPED"] },
+      },
+    });
+    if (usedSlots >= lockedWorker.capacity) return null;
+
+    return tx.workerSandbox.create({
+      data: {
+        id: sandboxId,
+        workerId: worker.id,
+        projectId,
+        containerId: "pending",
+        brokerPort: 0,
+        previewPort: 0,
+        status: "SPAWNING",
+      },
+      select: { id: true },
+    });
+  });
 }
 
 function sourceEnv(source: SpawnArgs["source"]): Record<string, string> {

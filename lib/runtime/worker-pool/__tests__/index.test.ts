@@ -144,6 +144,25 @@ describe("createHetznerWorkerPoolRuntime", () => {
       /WORKER_DEFAULT_CAPACITY/,
     );
   });
+
+  it("requires public routing env values to be set together", () => {
+    process.env = {
+      ...originalEnv,
+      WBD_DISABLE_ENV_FILE_LOAD: "1",
+      SANDBOX_IMAGE: "wbd/sandbox:dev",
+      WORKER_AGENT_IMAGE: "wbd/worker-agent:dev",
+      WORKER_AGENT_HMAC_SECRET: "x".repeat(32),
+      HETZNER_API_TOKEN: "hetzner-token",
+      TAILSCALE_API_KEY: "tailscale-key",
+      TAILSCALE_TAILNET: "example.ts.net",
+      APP_BASE_URL: "https://app.example.com",
+      PUBLIC_BASE_DOMAIN: "example.com",
+    };
+
+    expect(() => createHetznerWorkerPoolRuntime()).toThrow(
+      /PUBLIC_BASE_DOMAIN and CADDY_ADMIN_URL/,
+    );
+  });
 });
 
 describe("createCaddyProjectRouting", () => {

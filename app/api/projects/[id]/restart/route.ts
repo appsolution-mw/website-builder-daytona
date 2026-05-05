@@ -106,17 +106,23 @@ export async function POST(
       projectEnvContent: environment?.content || undefined,
       openhandsFiles,
     });
-    const updated = await prisma.project.update({
-      where: { id: project.id },
-      data: {
-        status: "RUNNING",
-        sandboxId: info.sandboxId,
-        brokerUrl: info.brokerUrl,
-        brokerPreviewToken: info.brokerPreviewToken,
-        previewUrl: info.previewUrl,
-        provisioningError: null,
-      },
-    });
+    let updated;
+    try {
+      updated = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          status: "RUNNING",
+          sandboxId: info.sandboxId,
+          brokerUrl: info.brokerUrl,
+          brokerPreviewToken: info.brokerPreviewToken,
+          previewUrl: info.previewUrl,
+          provisioningError: null,
+        },
+      });
+    } catch (error: unknown) {
+      await runtime.destroyProjectSandbox(info.sandboxId).catch(() => undefined);
+      throw error;
+    }
     return NextResponse.json({ project: updated });
   } catch (error) {
     const isNoWorkerCapacity = isRuntimeError(error, "NO_WORKER_CAPACITY");

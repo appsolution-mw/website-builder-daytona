@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { drainWorker } from "@/lib/admin/workers";
-import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
+import { requireAdminUserFromRequest } from "@/lib/auth/current-user";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -8,7 +8,7 @@ export async function POST(
   _request: Request,
   { params }: RouteContext,
 ): Promise<NextResponse> {
-  const currentUser = await requireCurrentUserFromRequest(_request);
+  const currentUser = await requireAdminUserFromRequest(_request);
   if (!currentUser.ok) return currentUser.response;
 
   const { id } = await params;
