@@ -11,7 +11,9 @@ import type {
   DrainProjectQueueRequest,
   ErrorResponse,
   ExecuteProjectRunRequest,
+  GitStatusRequest,
   HealthResponse,
+  PushProjectGitChangesRequest,
   SandboxStatusResponse,
 } from "./types.js";
 
@@ -158,6 +160,46 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     },
   );
 
+  app.post<{ Params: { id: string } }>(
+    "/sandboxes/:id/git/status",
+    async (req, reply) => {
+      const body = req.body as GitStatusRequest | undefined;
+      if (!body || typeof body.projectId !== "string" || body.projectId.length === 0) {
+        return reply.code(400).send({ error: "bad-request" } satisfies ErrorResponse);
+      }
+      const result = await forwardBrokerCommand({
+        sandboxId: req.params.id,
+        brokerTokens,
+        docker: args.docker,
+        path: `/internal/projects/${encodeURIComponent(body.projectId)}/git/status`,
+      });
+      return sendBrokerCommandResult(reply, result);
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/sandboxes/:id/git/push",
+    async (req, reply) => {
+      const body = req.body as PushProjectGitChangesRequest | undefined;
+      if (!isPushProjectGitChangesRequest(body)) {
+        return reply.code(400).send({ error: "bad-request" } satisfies ErrorResponse);
+      }
+      const result = await forwardBrokerCommand({
+        sandboxId: req.params.id,
+        brokerTokens,
+        docker: args.docker,
+        path: `/internal/projects/${encodeURIComponent(body.projectId)}/git/push`,
+        body: {
+          remoteUrl: body.remoteUrl,
+          ...(body.remoteAuth ? { remoteAuth: body.remoteAuth } : {}),
+          branch: body.branch,
+          commitMessage: body.commitMessage,
+        },
+      });
+      return sendBrokerCommandResult(reply, result);
+    },
+  );
+
   app.post<{ Params: { id: string; runId: string } }>(
     "/sandboxes/:id/runs/:runId/execute",
     async (req, reply) => {
@@ -229,6 +271,7 @@ async function forwardBrokerCommand(args: {
   brokerTokens: Map<string, string>;
   docker: DockerClient;
   path: string;
+  body?: unknown;
 }): Promise<BrokerCommandResult> {
   const token = args.brokerTokens.get(args.sandboxId);
   if (!token) {
@@ -244,12 +287,15 @@ async function forwardBrokerCommand(args: {
   }
 
   let response: Response;
+  const rawBody = args.body === undefined ? undefined : JSON.stringify(args.body);
   try {
     response = await fetch(`http://127.0.0.1:${status.brokerPort}${args.path}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
+        ...(rawBody ? { "content-type": "application/json" } : {}),
       },
+      ...(rawBody ? { body: rawBody } : {}),
     });
   } catch (err) {
     return {
@@ -335,7 +381,7 @@ async function parseBrokerCommandResponse(response: Response): Promise<BrokerCom
   }
   try {
     const parsed = JSON.parse(text) as Partial<BrokerCommandResponse>;
-    return parsed.ok === true ? { ok: true } : { ok: true };
+    return typeof parsed.ok === "boolean" ? parsed as BrokerCommandResponse : { ok: true };
   } catch {
     return { ok: true };
   }
@@ -369,6 +415,30 @@ function isExecuteProjectRunRequest(value: unknown): value is ExecuteProjectRunR
     isWorkerAgentRuntime(body.runtime) &&
     typeof body.resumeSession === "boolean" &&
     (body.modelId === undefined || typeof body.modelId === "string")
+  );
+}
+
+function isPushProjectGitChangesRequest(value: unknown): value is PushProjectGitChangesRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    typeof body.projectId === "string" &&
+    body.projectId.length > 0 &&
+    typeof body.remoteUrl === "string" &&
+    body.remoteUrl.length > 0 &&
+    (
+      body.remoteAuth === undefined ||
+      (
+        typeof body.remoteAuth === "object" &&
+        body.remoteAuth !== null &&
+        typeof (body.remoteAuth as Record<string, unknown>).username === "string" &&
+        typeof (body.remoteAuth as Record<string, unknown>).password === "string"
+      )
+    ) &&
+    typeof body.branch === "string" &&
+    body.branch.length > 0 &&
+    typeof body.commitMessage === "string" &&
+    body.commitMessage.length > 0
   );
 }
 

@@ -223,6 +223,93 @@ describe("worker-agent server", () => {
     ]);
   });
 
+  it("POST /sandboxes/:id/git/status forwards to broker with bearer token", async () => {
+    const { port } = await startBrokerCommandServer(200, {
+      ok: true,
+      hasChanges: true,
+      entries: [" M README.md"],
+      porcelain: [" M README.md"],
+    });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/git/status",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/git/status", body),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      hasChanges: true,
+      entries: [" M README.md"],
+      porcelain: [" M README.md"],
+    });
+    expect(brokerRequests).toEqual([
+      {
+        method: "POST",
+        url: "/internal/projects/p1/git/status",
+        authorization: "Bearer broker-token",
+        body: "",
+      },
+    ]);
+  });
+
+  it("POST /sandboxes/:id/git/push forwards push body to broker", async () => {
+    const { port } = await startBrokerCommandServer(200, {
+      ok: true,
+      branch: "saveback/test",
+      commitSha: "1111111111111111111111111111111111111111",
+    });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({
+      projectId: "p1",
+      remoteUrl: "https://github.com/acme/repo.git",
+      branch: "saveback/test",
+      commitMessage: "Save sandbox changes",
+    });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/git/push",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/git/push", body),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      branch: "saveback/test",
+      commitSha: "1111111111111111111111111111111111111111",
+    });
+    expect(brokerRequests).toEqual([
+      {
+        method: "POST",
+        url: "/internal/projects/p1/git/push",
+        authorization: "Bearer broker-token",
+        body: JSON.stringify({
+          remoteUrl: "https://github.com/acme/repo.git",
+          branch: "saveback/test",
+          commitMessage: "Save sandbox changes",
+        }),
+      },
+    ]);
+  });
+
   it("POST /sandboxes/:id/runs/:runId/cancel validates body run id consistency", async () => {
     const { port } = await startBrokerCommandServer(200, { ok: true });
     const app2 = await buildServer({

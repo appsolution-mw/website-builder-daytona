@@ -31,6 +31,32 @@ export interface CancelProjectRunRequest {
   runId: string;
 }
 
+export interface GitStatusRequest {
+  projectId: string;
+}
+
+export interface GitStatusResponse {
+  ok: true;
+  hasChanges: boolean;
+  entries: string[];
+  porcelain: string[];
+}
+
+export interface PushProjectGitChangesRequest {
+  projectId: string;
+  remoteUrl: string;
+  remoteAuth?: {
+    username: string;
+    password: string;
+  };
+  branch: string;
+  commitMessage: string;
+}
+
+export type PushProjectGitChangesResponse =
+  | { ok: true; branch: string; commitSha: string }
+  | { ok: false; reason: "no_changes"; message: string };
+
 export type WorkerAgentRuntime =
   | "claude-code"
   | "openai-codex"
@@ -50,7 +76,7 @@ export interface ExecuteProjectRunRequest {
 }
 
 export interface BrokerCommandResponse {
-  ok: true;
+  ok: boolean;
 }
 
 export interface HealthResponse {

@@ -253,6 +253,68 @@ describe("broker ws server", () => {
     );
   });
 
+  it("serves internal git status and push commands", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-git-"));
+    const remote = await mkdtemp(join(tmpdir(), "wbd-ws-git-remote-"));
+    const git = async (args: string[], cwd = root): Promise<string> => {
+      const { stdout } = await execFileAsync("git", args, { cwd });
+      return stdout.trim();
+    };
+    await git(["init"]);
+    await git(["config", "user.name", "Test User"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "README.md"), "initial\n");
+    await git(["add", "README.md"]);
+    await git(["commit", "-m", "Initial commit"]);
+    await git(["init", "--bare", remote], process.cwd());
+    await writeFile(join(root, "README.md"), "changed\n");
+    process.env.BROKER_TOKEN = "broker-token";
+    handle = await startBroker({ port: 0, projectRoot: root, enableFsTracker: false });
+
+    const statusResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/status`,
+      {
+        method: "POST",
+        headers: { authorization: "Bearer broker-token" },
+      },
+    );
+    expect(statusResponse.status).toBe(200);
+    expect(await statusResponse.json()).toEqual({
+      ok: true,
+      hasChanges: true,
+      entries: [" M README.md"],
+      porcelain: [" M README.md"],
+    });
+
+    const pushResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/push`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer broker-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          remoteUrl: remote,
+          branch: "saveback/ws-route",
+          commitMessage: "Save route changes",
+        }),
+      },
+    );
+
+    expect(pushResponse.status).toBe(200);
+    const pushResult = await pushResponse.json() as { ok: true; branch: string; commitSha: string };
+    expect(pushResult).toMatchObject({ ok: true, branch: "saveback/ws-route" });
+    const remoteSha = await git(["--git-dir", remote, "rev-parse", "saveback/ws-route"], process.cwd());
+    expect(pushResult.commitSha).toBe(remoteSha);
+  });
+
   it("streams file.changed events from the fs tracker during an internal durable run", async () => {
     const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
     const { mkdtemp, writeFile } = await import("node:fs/promises");

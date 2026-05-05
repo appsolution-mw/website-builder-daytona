@@ -23,6 +23,11 @@ import {
   type PtySpawnFn,
   type TerminalCommandHandle,
 } from "./terminal-runner";
+import {
+  commitAndPushChanges,
+  getGitStatus,
+  GitCommandError,
+} from "./git-handlers";
 
 export interface BrokerHandle {
   port: number;
@@ -465,6 +470,39 @@ async function handleInternalHttpRequest(
     return;
   }
 
+  const gitStatusMatch = /^\/internal\/projects\/([^/]+)\/git\/status$/.exec(url.pathname);
+  if (gitStatusMatch) {
+    try {
+      const result = await getGitStatus({ projectRoot: opts.projectRoot });
+      writeJson(res, 200, result);
+    } catch (error) {
+      writeGitError(res, error);
+    }
+    return;
+  }
+
+  const gitPushMatch = /^\/internal\/projects\/([^/]+)\/git\/push$/.exec(url.pathname);
+  if (gitPushMatch) {
+    const body = await readJsonBody(req);
+    if (!isGitPushBody(body)) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    try {
+      const result = await commitAndPushChanges({
+        projectRoot: opts.projectRoot,
+        remoteUrl: body.remoteUrl,
+        ...(body.remoteAuth ? { remoteAuth: body.remoteAuth } : {}),
+        branch: body.branch,
+        commitMessage: body.commitMessage,
+      });
+      writeJson(res, 200, result);
+    } catch (error) {
+      writeGitError(res, error);
+    }
+    return;
+  }
+
   const executeMatch = /^\/internal\/projects\/([^/]+)\/runs\/([^/]+)\/execute$/.exec(url.pathname);
   if (executeMatch) {
     const projectId = decodeURIComponent(executeMatch[1]);
@@ -566,6 +604,36 @@ function isExecuteRunCommand(value: unknown): value is ExecuteRunCommand {
   );
 }
 
+function isGitPushBody(value: unknown): value is {
+  remoteUrl: string;
+  remoteAuth?: {
+    username: string;
+    password: string;
+  };
+  branch: string;
+  commitMessage: string;
+} {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    typeof body.remoteUrl === "string" &&
+    body.remoteUrl.length > 0 &&
+    (
+      body.remoteAuth === undefined ||
+      (
+        typeof body.remoteAuth === "object" &&
+        body.remoteAuth !== null &&
+        typeof (body.remoteAuth as Record<string, unknown>).username === "string" &&
+        typeof (body.remoteAuth as Record<string, unknown>).password === "string"
+      )
+    ) &&
+    typeof body.branch === "string" &&
+    body.branch.length > 0 &&
+    typeof body.commitMessage === "string" &&
+    body.commitMessage.length > 0
+  );
+}
+
 function isAgentRuntime(value: unknown): value is AgentRuntime {
   return (
     value === "claude-code" ||
@@ -595,6 +663,14 @@ function verifyBrokerBearer(authHeader: string | undefined): (
 function writeJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+function writeGitError(res: ServerResponse, error: unknown): void {
+  if (error instanceof GitCommandError) {
+    writeJson(res, 500, { error: "git-command-failed", reason: error.message });
+    return;
+  }
+  writeJson(res, 500, { error: "internal" });
 }
 
 function noop(): void {

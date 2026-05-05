@@ -36,6 +36,32 @@ export interface CancelProjectRunRequest {
   runId: string;
 }
 
+export interface GitStatusRequest {
+  projectId: string;
+}
+
+export interface GitStatusResponse {
+  ok: true;
+  hasChanges: boolean;
+  entries: string[];
+  porcelain: string[];
+}
+
+export interface PushProjectGitChangesRequest {
+  projectId: string;
+  remoteUrl: string;
+  remoteAuth?: {
+    username: string;
+    password: string;
+  };
+  branch: string;
+  commitMessage: string;
+}
+
+export type PushProjectGitChangesResponse =
+  | { ok: true; branch: string; commitSha: string }
+  | { ok: false; reason: "no_changes"; message: string };
+
 export type WorkerAgentRuntime =
   | "claude-code"
   | "openai-codex"
@@ -61,6 +87,11 @@ export interface AgentClient {
   listSandboxes(): Promise<SandboxStatusResponse[]>;
   drainProjectQueue(sandboxId: string, projectId: string): Promise<void>;
   cancelProjectRun(sandboxId: string, projectId: string, runId: string): Promise<void>;
+  getProjectGitStatus(sandboxId: string, projectId: string): Promise<GitStatusResponse>;
+  pushProjectGitChanges(
+    sandboxId: string,
+    request: PushProjectGitChangesRequest,
+  ): Promise<PushProjectGitChangesResponse>;
   executeProjectRun(
     sandboxId: string,
     request: ExecuteProjectRunRequest,

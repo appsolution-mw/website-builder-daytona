@@ -117,6 +117,70 @@ describe("agent-client", () => {
     );
   });
 
+  it("getProjectGitStatus sends an HMAC-signed status request", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        hasChanges: true,
+        entries: [" M README.md"],
+        porcelain: [" M README.md"],
+      }));
+    };
+    const c = client();
+
+    const result = await c.getProjectGitStatus("sandbox-1", "project-1");
+
+    expect(result).toEqual({
+      ok: true,
+      hasChanges: true,
+      entries: [" M README.md"],
+      porcelain: [" M README.md"],
+    });
+    expect(captured[0].method).toBe("POST");
+    expect(captured[0].url).toBe("/sandboxes/sandbox-1/git/status");
+    expect(captured[0].body).toBe(JSON.stringify({ projectId: "project-1" }));
+    expect(captured[0].headers["x-signature"]).toBe(
+      signatureFor(captured[0]),
+    );
+  });
+
+  it("pushProjectGitChanges sends an HMAC-signed push request", async () => {
+    respond = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        ok: true,
+        branch: "saveback/test",
+        commitSha: "1111111111111111111111111111111111111111",
+      }));
+    };
+    const c = client();
+
+    const result = await c.pushProjectGitChanges("sandbox-1", {
+      projectId: "project-1",
+      remoteUrl: "https://github.com/acme/repo.git",
+      branch: "saveback/test",
+      commitMessage: "Save sandbox changes",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      branch: "saveback/test",
+      commitSha: "1111111111111111111111111111111111111111",
+    });
+    expect(captured[0].method).toBe("POST");
+    expect(captured[0].url).toBe("/sandboxes/sandbox-1/git/push");
+    expect(captured[0].body).toBe(JSON.stringify({
+      projectId: "project-1",
+      remoteUrl: "https://github.com/acme/repo.git",
+      branch: "saveback/test",
+      commitMessage: "Save sandbox changes",
+    }));
+    expect(captured[0].headers["x-signature"]).toBe(
+      signatureFor(captured[0]),
+    );
+  });
+
   it("executeProjectRun sends an HMAC-signed request and streams NDJSON events", async () => {
     respond = (_req, res) => {
       res.writeHead(200, { "content-type": "application/x-ndjson" });

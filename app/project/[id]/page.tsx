@@ -20,6 +20,7 @@ import {
   Camera,
   Code2,
   ExternalLink,
+  GitPullRequest,
   Globe2,
   History,
   ImagePlus,
@@ -130,6 +131,11 @@ type Project = {
   name: string;
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
   daytonaSandboxId: string | null;
+  sourceType: "TEMPLATE" | "GITHUB";
+  githubOwner: string | null;
+  githubRepo: string | null;
+  githubWorkingBranch: string | null;
+  githubPullRequestUrl: string | null;
   agentRuntime: AgentRuntime;
   desiredRuntime: AgentRuntime;
   runtimeSwitchStatus: "IDLE" | "PENDING" | "SWITCHING" | "FAILED";
@@ -158,6 +164,10 @@ type BrowserConsoleEntry = {
   values: string[];
   timestamp: number;
   url: string;
+};
+type PullRequestStatus = {
+  hasChanges: boolean;
+  entries: string[];
 };
 type SerializableRunEvent = {
   id: string;
@@ -572,6 +582,10 @@ export default function ProjectWorkspace({
   const [reviewingActive, setReviewingActive] = useState(false);
   const [sandboxRestarting, setSandboxRestarting] = useState(false);
   const [sandboxRestartError, setSandboxRestartError] = useState<string | null>(null);
+  const [pullRequestStatus, setPullRequestStatus] = useState<PullRequestStatus | null>(null);
+  const [pullRequestLoading, setPullRequestLoading] = useState(false);
+  const [pullRequestCreating, setPullRequestCreating] = useState(false);
+  const [pullRequestError, setPullRequestError] = useState<string | null>(null);
   const [workspaceWs, setWorkspaceWs] = useState<WebSocket | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -1628,6 +1642,71 @@ export default function ProjectWorkspace({
     }
   }
 
+  const refreshPullRequestStatus = useCallback(async (): Promise<void> => {
+    if (project?.sourceType !== "GITHUB") return;
+    setPullRequestLoading(true);
+    setPullRequestError(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/pull-request`, { cache: "no-store" });
+      const data = (await res.json().catch(() => ({}))) as {
+        status?: PullRequestStatus;
+        pullRequestUrl?: string | null;
+        branch?: string | null;
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok || !data.status) {
+        throw new Error(data.message ?? data.error ?? `HTTP ${res.status}`);
+      }
+      setPullRequestStatus(data.status);
+      setProject((current) => current
+        ? {
+            ...current,
+            githubPullRequestUrl: data.pullRequestUrl ?? current.githubPullRequestUrl,
+            githubWorkingBranch: data.branch ?? current.githubWorkingBranch,
+          }
+        : current);
+    } catch (err) {
+      setPullRequestError(err instanceof Error ? err.message : "git status failed");
+    } finally {
+      setPullRequestLoading(false);
+    }
+  }, [id, project?.sourceType]);
+
+  async function createPullRequest(): Promise<void> {
+    if (!project || project.sourceType !== "GITHUB" || pullRequestCreating || turnInFlight !== null) return;
+    setPullRequestCreating(true);
+    setPullRequestError(null);
+    try {
+      const res = await fetch(`/api/projects/${id}/pull-request`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: `Website Builder changes for ${project.name}` }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        pullRequest?: { url: string; branch: string };
+        error?: string;
+        message?: string;
+      };
+      const pullRequest = data.pullRequest;
+      if (!res.ok || !pullRequest) {
+        throw new Error(data.message ?? data.error ?? `HTTP ${res.status}`);
+      }
+      setProject((current) => current
+        ? {
+            ...current,
+            githubPullRequestUrl: pullRequest.url,
+            githubWorkingBranch: pullRequest.branch,
+          }
+        : current);
+      await refreshPullRequestStatus();
+    } catch (err) {
+      setPullRequestError(err instanceof Error ? err.message : "pull request failed");
+    } finally {
+      setPullRequestCreating(false);
+    }
+  }
+
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
     const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
@@ -1651,6 +1730,7 @@ export default function ProjectWorkspace({
         void (async () => {
           await requestFileList();
           await loadDevIndicatorSetting();
+          await refreshPullRequestStatus();
           await syncPreviewConsoleBridge().catch(() => undefined);
         })();
       };
@@ -1700,6 +1780,7 @@ export default function ProjectWorkspace({
     id,
     requestFileList,
     loadDevIndicatorSetting,
+    refreshPullRequestStatus,
     syncPreviewConsoleBridge,
   ]);
 
@@ -2178,6 +2259,55 @@ export default function ProjectWorkspace({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {project.sourceType === "GITHUB" && (
+            <>
+              {pullRequestError && (
+                <span
+                  role="status"
+                  className="hidden max-w-xs truncate text-xs text-red-200 lg:inline"
+                  title={pullRequestError}
+                >
+                  {pullRequestError}
+                </span>
+              )}
+              {project.githubPullRequestUrl ? (
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Open pull request"
+                  title="Open pull request"
+                >
+                  <a href={project.githubPullRequestUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink />
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Create pull request"
+                  title={
+                    pullRequestStatus?.hasChanges === false
+                      ? "No workspace changes to save"
+                      : "Create pull request"
+                  }
+                  disabled={
+                    pullRequestCreating ||
+                    pullRequestLoading ||
+                    turnInFlight !== null ||
+                    pullRequestStatus?.hasChanges === false
+                  }
+                  onClick={() => void createPullRequest()}
+                >
+                  {pullRequestCreating || pullRequestLoading
+                    ? <Loader2 className="animate-spin" />
+                    : <GitPullRequest />}
+                </Button>
+              )}
+            </>
+          )}
           {sandboxRestartError && (
             <span
               role="status"

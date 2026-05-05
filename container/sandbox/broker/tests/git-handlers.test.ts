@@ -1,0 +1,161 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import {
+  commitAndPushChanges,
+  getGitStatus,
+  sanitizeGitOutput,
+} from "../src/git-handlers";
+
+const execFileAsync = promisify(execFile);
+
+describe("git handlers", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  it("reports porcelain status lines for changed files", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "README.md"), "changed\n");
+    await writeFile(join(root, "new.txt"), "new\n");
+
+    const result = await getGitStatus({ projectRoot: root });
+
+    expect(result).toEqual({
+      ok: true,
+      hasChanges: true,
+      entries: [" M README.md", "?? new.txt"],
+      porcelain: [" M README.md", "?? new.txt"],
+    });
+  });
+
+  it("returns no_changes without committing when the repository is clean", async () => {
+    const root = await createRepository();
+    const before = await git(root, ["rev-parse", "HEAD"]);
+
+    const result = await commitAndPushChanges({
+      projectRoot: root,
+      remoteUrl: await createBareRemote(),
+      branch: "saveback/clean",
+      commitMessage: "Save clean state",
+    });
+    const after = await git(root, ["rev-parse", "HEAD"]);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "no_changes",
+      message: "No changes to commit",
+    });
+    expect(after).toBe(before);
+  });
+
+  it("commits changed files and pushes them to the requested remote branch", async () => {
+    const root = await createRepository();
+    const remote = await createBareRemote();
+    await writeFile(join(root, "README.md"), "changed\n");
+
+    const result = await commitAndPushChanges({
+      projectRoot: root,
+      remoteUrl: remote,
+      branch: "saveback/test-branch",
+      commitMessage: "Save sandbox changes",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      branch: "saveback/test-branch",
+    });
+    expect(result.ok && result.commitSha).toMatch(/^[0-9a-f]{40}$/);
+    const remoteSha = await execGit(["--git-dir", remote, "rev-parse", "saveback/test-branch"]);
+    expect(result.ok && result.commitSha).toBe(remoteSha);
+  });
+
+  it("retries pushing an existing saveback commit when the workspace is clean", async () => {
+    const root = await createRepository();
+    const unreachableRemote = await createTempDir("wbd-git-not-bare-");
+    await writeFile(join(root, "README.md"), "changed once\n");
+    await expect(commitAndPushChanges({
+      projectRoot: root,
+      remoteUrl: unreachableRemote,
+      branch: "saveback/retry",
+      commitMessage: "Save sandbox changes",
+    })).rejects.toThrow();
+    const retryRemote = await createBareRemote();
+
+    const result = await commitAndPushChanges({
+      projectRoot: root,
+      remoteUrl: retryRemote,
+      branch: "saveback/retry",
+      commitMessage: "Save sandbox changes",
+    });
+
+    expect(result).toMatchObject({ ok: true, branch: "saveback/retry" });
+    const remoteSha = await execGit(["--git-dir", retryRemote, "rev-parse", "saveback/retry"]);
+    expect(result.ok && result.commitSha).toBe(remoteSha);
+  });
+
+  it("pushes authenticated remotes without putting credentials in the remote argv", async () => {
+    const root = await createRepository();
+    const remote = await createBareRemote();
+    await writeFile(join(root, "README.md"), "changed\n");
+
+    await commitAndPushChanges({
+      projectRoot: root,
+      remoteUrl: remote,
+      remoteAuth: { username: "x-access-token", password: "secret-token" },
+      branch: "saveback/auth",
+      commitMessage: "Save sandbox changes",
+    });
+
+    const remotes = await git(root, ["remote", "-v"]);
+    expect(remotes).not.toContain("secret-token");
+  });
+
+  it("redacts credentials from git output", () => {
+    const sanitized = sanitizeGitOutput(
+      "fatal: unable to access 'https://user:ghp_secret123@github.com/acme/repo.git/'",
+    );
+
+    expect(sanitized).not.toContain("user");
+    expect(sanitized).not.toContain("ghp_secret123");
+    expect(sanitized).toContain("https://[redacted]@github.com/acme/repo.git/");
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await createTempDir("wbd-git-repo-");
+    await git(root, ["init"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "README.md"), "initial\n");
+    await git(root, ["add", "README.md"]);
+    await git(root, ["commit", "-m", "Initial commit"]);
+    return root;
+  }
+
+  async function createBareRemote(): Promise<string> {
+    const remote = await createTempDir("wbd-git-remote-");
+    await execGit(["init", "--bare", remote]);
+    return remote;
+  }
+
+  async function createTempDir(prefix: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+});
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  return execGit(["-C", cwd, ...args]);
+}
+
+async function execGit(args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args);
+  return stdout.trim();
+}

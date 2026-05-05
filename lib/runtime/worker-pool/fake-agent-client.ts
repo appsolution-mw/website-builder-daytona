@@ -2,13 +2,17 @@ import type {
   AgentClient,
   CreateSandboxRequest,
   CreateSandboxResponse,
+  PushProjectGitChangesRequest,
+  PushProjectGitChangesResponse,
   SandboxStatusResponse,
 } from "./types";
 
 export type FakeAgentCommandRequest =
   | { type: "queue.drain"; sandboxId: string; projectId: string }
   | { type: "run.cancel"; sandboxId: string; projectId: string; runId: string }
-  | { type: "run.execute"; sandboxId: string; projectId: string; runId: string };
+  | { type: "run.execute"; sandboxId: string; projectId: string; runId: string }
+  | { type: "git.status"; sandboxId: string; projectId: string }
+  | { type: "git.push"; sandboxId: string; request: PushProjectGitChangesRequest };
 
 export interface FakeAgentClientHandles {
   client: AgentClient;
@@ -58,6 +62,14 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
     },
     async cancelProjectRun(sandboxId, projectId, runId) {
       commandRequests.push({ type: "run.cancel", sandboxId, projectId, runId });
+    },
+    async getProjectGitStatus(sandboxId, projectId) {
+      commandRequests.push({ type: "git.status", sandboxId, projectId });
+      return { ok: true, hasChanges: false, entries: [], porcelain: [] };
+    },
+    async pushProjectGitChanges(sandboxId, request): Promise<PushProjectGitChangesResponse> {
+      commandRequests.push({ type: "git.push", sandboxId, request });
+      return { ok: false, reason: "no_changes", message: "No changes to commit" };
     },
     async executeProjectRun(sandboxId, request, onEvent) {
       commandRequests.push({

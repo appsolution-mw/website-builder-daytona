@@ -7,6 +7,10 @@ import {
   type CreateSandboxResponse,
   type DrainProjectQueueRequest,
   type ExecuteProjectRunRequest,
+  type GitStatusRequest,
+  type GitStatusResponse,
+  type PushProjectGitChangesRequest,
+  type PushProjectGitChangesResponse,
   type SandboxStatusResponse,
 } from "./types";
 
@@ -131,6 +135,20 @@ export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
         req,
       );
     },
+    getProjectGitStatus: (sandboxId, projectId) => {
+      const req: GitStatusRequest = { projectId };
+      return call<GitStatusResponse>(
+        "POST",
+        `/sandboxes/${encodeURIComponent(sandboxId)}/git/status`,
+        req,
+      );
+    },
+    pushProjectGitChanges: (sandboxId, request: PushProjectGitChangesRequest) =>
+      call<PushProjectGitChangesResponse>(
+        "POST",
+        `/sandboxes/${encodeURIComponent(sandboxId)}/git/push`,
+        request,
+      ),
     executeProjectRun: (sandboxId, request, onEvent) => {
       const req: ExecuteProjectRunRequest = request;
       return streamCall(
