@@ -1,18 +1,11 @@
 import { prisma } from "@/lib/db/client";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
+import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
 import type { AgentClient } from "@/lib/runtime/worker-pool/types";
 
 interface ProjectAgentTarget {
   sandboxId: string;
   client: AgentClient;
-}
-
-function workerAgentSecret(): string {
-  const value = process.env.WORKER_AGENT_HMAC_SECRET;
-  if (!value) {
-    throw new Error("WORKER_AGENT_HMAC_SECRET is not set");
-  }
-  return value;
 }
 
 async function agentClientForProject(
@@ -36,10 +29,9 @@ async function agentClientForProject(
 
   return {
     sandboxId: sandbox.id,
-    client: createAgentClient({
-      baseUrl: `http://${sandbox.worker.tailscaleIp}:4500`,
-      hmacSecret: workerAgentSecret(),
-    }),
+    client: createAgentClient(resolveWorkerAgentClientConfig({
+      worker: sandbox.worker,
+    })),
   };
 }
 

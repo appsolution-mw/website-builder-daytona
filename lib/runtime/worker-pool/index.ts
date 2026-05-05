@@ -1,6 +1,6 @@
 import { createSimpleScheduler } from "../scheduler/simple";
 import { createFakeProvisioner } from "../provisioner/fake";
-import { createAgentClient } from "./agent-client";
+import { createAgentClient, type CreateAgentClientArgs } from "./agent-client";
 import { createWorkerPoolRuntime } from "./runtime";
 import type { Runtime, WorkerRecord } from "../types";
 import type { AgentClient } from "./types";
@@ -13,6 +13,12 @@ const DEFAULT_WORKER_AGENT_TIMEOUT_MS = 120_000;
 export interface CreateLocalWorkerPoolRuntimeArgs {
   sandboxImage?: string;
   hmacSecret?: string;
+}
+
+export interface ResolveWorkerAgentClientConfigArgs {
+  worker: Pick<WorkerRecord, "tailscaleIp">;
+  hmacSecret?: string;
+  runtimeEnv?: Record<string, string>;
 }
 
 /**
@@ -28,16 +34,14 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
   const sandboxImage = args.sandboxImage ?? required("SANDBOX_IMAGE", runtimeEnv);
   const hmacSecret = args.hmacSecret ?? required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
   const configuredAgentUrl = optionalUrl("WORKER_AGENT_URL", runtimeEnv);
-  const timeoutMs = optionalPositiveInt("WORKER_AGENT_TIMEOUT_MS", runtimeEnv) ??
-    DEFAULT_WORKER_AGENT_TIMEOUT_MS;
   const scheduler = createSimpleScheduler();
   const provisioner = createFakeProvisioner();
   const agentClientFor = (w: WorkerRecord): AgentClient =>
-    createAgentClient({
-      baseUrl: configuredAgentUrl?.origin ?? `http://${w.tailscaleIp}:4500`,
+    createAgentClient(resolveWorkerAgentClientConfig({
+      worker: w,
       hmacSecret,
-      timeoutMs,
-    });
+      runtimeEnv,
+    }));
   return createWorkerPoolRuntime({
     scheduler,
     provisioner,
@@ -46,6 +50,20 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
     brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
     publicHostFor: configuredAgentUrl ? () => configuredAgentUrl.hostname : undefined,
   });
+}
+
+export function resolveWorkerAgentClientConfig(
+  args: ResolveWorkerAgentClientConfigArgs,
+): CreateAgentClientArgs {
+  const runtimeEnv = args.runtimeEnv ?? collectRuntimeEnv();
+  const configuredAgentUrl = optionalUrl("WORKER_AGENT_URL", runtimeEnv);
+  const timeoutMs = optionalPositiveInt("WORKER_AGENT_TIMEOUT_MS", runtimeEnv) ??
+    DEFAULT_WORKER_AGENT_TIMEOUT_MS;
+  return {
+    baseUrl: configuredAgentUrl?.origin ?? `http://${args.worker.tailscaleIp}:4500`,
+    hmacSecret: args.hmacSecret ?? required("WORKER_AGENT_HMAC_SECRET", runtimeEnv),
+    timeoutMs,
+  };
 }
 
 export function collectBrokerEnv(runtimeEnv: Record<string, string> = collectRuntimeEnv()): Record<string, string> {

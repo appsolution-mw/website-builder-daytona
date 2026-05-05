@@ -22,6 +22,15 @@ export interface SandboxStatusResponse {
   status: "spawning" | "running" | "stopped" | "gone";
 }
 
+export interface DrainProjectQueueRequest {
+  projectId: string;
+}
+
+export interface CancelProjectRunRequest {
+  projectId: string;
+  runId: string;
+}
+
 export interface HealthResponse {
   ok: true;
   dockerVersion: string;

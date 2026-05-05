@@ -24,8 +24,10 @@ const TEST_PREFIX = "executor-client-";
 const originalEnv = { ...process.env };
 
 beforeEach(async (): Promise<void> => {
-  process.env = { ...originalEnv };
+  process.env = { ...originalEnv, WBD_DISABLE_ENV_FILE_LOAD: "1" };
   delete process.env.WORKER_AGENT_HMAC_SECRET;
+  delete process.env.WORKER_AGENT_TIMEOUT_MS;
+  delete process.env.WORKER_AGENT_URL;
   mockedAgent.createAgentClient.mockReset();
   mockedAgent.drainProjectQueue.mockClear();
   mockedAgent.cancelProjectRun.mockClear();
@@ -135,6 +137,7 @@ describe("executor-client", () => {
     expect(mockedAgent.createAgentClient).toHaveBeenCalledWith({
       baseUrl: "http://100.64.0.42:4500",
       hmacSecret: "secret-for-worker-agent",
+      timeoutMs: 120_000,
     });
     expect(mockedAgent.drainProjectQueue).toHaveBeenCalledWith(
       sandboxId,
@@ -156,12 +159,28 @@ describe("executor-client", () => {
     );
   });
 
+  it("uses the configured local worker-agent URL and timeout when present", async () => {
+    process.env.WORKER_AGENT_HMAC_SECRET = "secret-for-worker-agent";
+    process.env.WORKER_AGENT_URL = "http://127.0.0.1:4500/ignored-path";
+    process.env.WORKER_AGENT_TIMEOUT_MS = "45000";
+    const project = await createProject();
+    await createSandbox(project.id);
+
+    await requestProjectQueueDrain(project.id);
+
+    expect(mockedAgent.createAgentClient).toHaveBeenCalledWith({
+      baseUrl: "http://127.0.0.1:4500",
+      hmacSecret: "secret-for-worker-agent",
+      timeoutMs: 45_000,
+    });
+  });
+
   it("throws for a missing worker-agent secret only when a command has a target sandbox", async () => {
     const project = await createProject();
     await createSandbox(project.id);
 
     await expect(requestProjectQueueDrain(project.id)).rejects.toThrow(
-      "WORKER_AGENT_HMAC_SECRET is not set",
+      /WORKER_AGENT_HMAC_SECRET/,
     );
     expect(mockedAgent.createAgentClient).not.toHaveBeenCalled();
   });
