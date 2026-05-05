@@ -11,11 +11,12 @@ const transactionMock = vi.hoisted(() => vi.fn());
 const createInstallationAccessTokenMock = vi.hoisted(() => vi.fn());
 const getEffectiveAgentConfigMock = vi.hoisted(() => vi.fn());
 const materializeOpenHandsFilesMock = vi.hoisted(() => vi.fn());
+const ensureDefaultWorkspaceForUserMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/current-user", () => ({
   requireCurrentUserFromRequest: vi.fn(async () => ({
     ok: true,
-    user: { id: "dev-user" },
+    user: { id: "dev-user", email: "dev@example.com", name: "Dev User" },
   })),
 }));
 
@@ -54,6 +55,10 @@ vi.mock("@/lib/agent-config/materialize", () => ({
   materializeOpenHandsFiles: materializeOpenHandsFilesMock,
 }));
 
+vi.mock("@/lib/workspaces/access", () => ({
+  ensureDefaultWorkspaceForUser: ensureDefaultWorkspaceForUserMock,
+}));
+
 import { POST } from "../route";
 
 const originalRuntimeMode = process.env.RUNTIME_MODE;
@@ -70,6 +75,7 @@ describe("POST /api/projects", () => {
     }));
     getEffectiveAgentConfigMock.mockResolvedValue({ agentsMd: "# AGENTS.md\n", agentsMode: "EXTEND", skills: [], agents: [] });
     materializeOpenHandsFilesMock.mockReturnValue([{ path: "AGENTS.md", content: "# AGENTS.md\n" }]);
+    ensureDefaultWorkspaceForUserMock.mockResolvedValue({ id: "workspace-1", name: "Dev User" });
   });
 
   afterEach(() => {
@@ -118,7 +124,15 @@ describe("POST /api/projects", () => {
 
     expect(res.status).toBe(201);
     expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(ensureDefaultWorkspaceForUserMock).toHaveBeenCalledWith({
+      id: "dev-user",
+      email: "dev@example.com",
+      name: "Dev User",
+    });
     expect(projectCreateMock).toHaveBeenCalledTimes(1);
+    expect(projectCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ workspaceId: "workspace-1" }),
+    }));
     expect(projectEnvironmentUpsertMock).toHaveBeenCalledTimes(1);
     expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
       projectId: "project-with-env",

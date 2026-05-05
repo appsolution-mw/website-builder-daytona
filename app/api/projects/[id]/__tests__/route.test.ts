@@ -16,6 +16,13 @@ vi.mock("@/lib/runtime", () => ({
   }),
 }));
 
+vi.mock("@/lib/auth/current-user", () => ({
+  requireCurrentUserFromRequest: vi.fn(async () => ({
+    ok: true,
+    user: { id: "dev-user", email: "dev@example.com", name: "Dev User" },
+  })),
+}));
+
 vi.mock("@/lib/db/client", () => ({
   prisma: {
     project: {

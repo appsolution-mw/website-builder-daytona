@@ -15,6 +15,7 @@ import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-st
 import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
 import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 import { AgentError } from "@/lib/runtime/worker-pool/types";
+import { ensureDefaultWorkspaceForUser } from "@/lib/workspaces/access";
 
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
@@ -204,6 +205,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "repository not found" }, { status: 404 });
   }
 
+  const workspace = await ensureDefaultWorkspaceForUser({
+    id: currentUser.user.id,
+    email: currentUser.user.email ?? "",
+    name: currentUser.user.name,
+  });
+
   let project: Prisma.ProjectGetPayload<{ select: typeof projectSelect }>;
   let projectEnvContent: string | undefined;
   try {
@@ -212,6 +219,7 @@ export async function POST(request: NextRequest) {
         data: {
           name,
           ownerId: currentUser.user.id,
+          workspaceId: workspace.id,
           status: "PROVISIONING",
           agentRuntime: protocolRuntimeToDb(runtime),
           desiredRuntime: protocolRuntimeToDb(runtime),
