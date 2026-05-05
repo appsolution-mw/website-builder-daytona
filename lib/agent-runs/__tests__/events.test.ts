@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
-import { appendRunEvent, listProjectEvents } from "../events";
+import {
+  appendRunEvent,
+  isEventSequenceConflict,
+  listProjectEvents,
+} from "../events";
 
 const TEST_PREFIX = "agent-events-";
 
@@ -130,5 +135,18 @@ describe("agent run events", () => {
     await expect(listProjectEvents({ projectId: project.id })).resolves.toHaveLength(
       5,
     );
+  });
+
+  it("does not classify unrelated unique conflicts as retryable sequence conflicts", () => {
+    const unrelatedConflict = new Prisma.PrismaClientKnownRequestError(
+      "Unique constraint failed on the fields: (`email`)",
+      {
+        clientVersion: "test",
+        code: "P2002",
+        meta: { target: ["email"] },
+      },
+    );
+
+    expect(isEventSequenceConflict(unrelatedConflict)).toBe(false);
   });
 });

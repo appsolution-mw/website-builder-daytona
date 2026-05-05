@@ -5,6 +5,8 @@ import type { SerializableRunEvent } from "./types";
 const DEFAULT_EVENT_REPLAY_LIMIT = 200;
 const MAX_EVENT_REPLAY_LIMIT = 500;
 const MAX_APPEND_RETRIES = 5;
+const EVENT_SEQUENCE_TARGET = ["projectId", "sequence"] as const;
+const EVENT_SEQUENCE_CONSTRAINT = "AgentRunEvent_projectId_sequence_key";
 
 type RunEventRecord = {
   id: string;
@@ -117,9 +119,54 @@ function clampReplayLimit(limit: number | undefined): number {
   );
 }
 
-function isEventSequenceConflict(error: unknown): boolean {
+export function isEventSequenceConflict(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const meta = error.meta;
+  if (meta?.modelName !== undefined && meta.modelName !== "AgentRunEvent") {
+    return false;
+  }
+
   return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2002"
+    isEventSequenceTarget(meta?.target) ||
+    meta?.constraint === EVENT_SEQUENCE_CONSTRAINT ||
+    isEventSequenceTarget(readDriverAdapterConstraintFields(meta))
   );
+}
+
+function isEventSequenceTarget(target: unknown): boolean {
+  return (
+    Array.isArray(target) &&
+    target.length === EVENT_SEQUENCE_TARGET.length &&
+    target.every(
+      (field, index) =>
+        typeof field === "string" &&
+        normalizeConstraintField(field) === EVENT_SEQUENCE_TARGET[index],
+    )
+  );
+}
+
+function normalizeConstraintField(field: string): string {
+  return field.replace(/^"+|"+$/g, "");
+}
+
+function readDriverAdapterConstraintFields(
+  meta: Record<string, unknown> | undefined,
+): unknown {
+  const driverAdapterError = toRecord(meta?.driverAdapterError);
+  const cause = toRecord(driverAdapterError?.cause);
+  const constraint = toRecord(cause?.constraint);
+  return constraint?.fields;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
