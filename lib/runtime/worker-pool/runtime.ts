@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "../../db/client";
+import { RuntimeError } from "../errors";
 import type {
   PickWorkerArgs,
   Runtime,
@@ -19,8 +20,12 @@ export interface CreateWorkerPoolRuntimeArgs {
   sandboxImage: string;
   /** Region to ask the provisioner for if no worker exists. */
   defaultRegion?: string;
+  /** Provider-specific size passed to provisioner.provision. */
+  defaultSize?: string;
   /** Per-worker capacity passed to provisioner.provision. */
   defaultCapacity?: number;
+  /** Provision a new worker when no ready worker has capacity. Defaults to true. */
+  autoProvisionWhenFull?: boolean;
   /** Forwarded to sandbox container env (optional). */
   brokerEnv?: () => Record<string, string>;
   /** Hostname clients should use for broker/preview URLs. Defaults to worker.tailscaleIp. */
@@ -32,7 +37,9 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
     async spawnProjectSandbox(spawn: SpawnArgs): Promise<SandboxInfo> {
       const worker = await ensureWorker(args.scheduler, args.provisioner, {
         defaultRegion: args.defaultRegion ?? "local",
+        defaultSize: args.defaultSize ?? "local",
         defaultCapacity: args.defaultCapacity ?? 8,
+        autoProvisionWhenFull: args.autoProvisionWhenFull ?? true,
       });
       const agent = args.agentClientFor(worker);
       const sandboxId = randomBytes(16).toString("hex");
@@ -161,14 +168,25 @@ function workerRecord(w: {
 async function ensureWorker(
   scheduler: Scheduler,
   provisioner: WorkerProvisioner,
-  defaults: { defaultRegion: string; defaultCapacity: number },
+  defaults: {
+    defaultRegion: string;
+    defaultSize: string;
+    defaultCapacity: number;
+    autoProvisionWhenFull: boolean;
+  },
 ): Promise<WorkerRecord> {
   const args: PickWorkerArgs = {};
   const picked = await scheduler.pickWorker(args);
   if (picked) return picked;
+  if (!defaults.autoProvisionWhenFull) {
+    throw new RuntimeError(
+      "NO_WORKER_CAPACITY",
+      "No ready worker has a free project slot",
+    );
+  }
   return await provisioner.provision({
     region: defaults.defaultRegion,
-    size: "local",
+    size: defaults.defaultSize,
     capacity: defaults.defaultCapacity,
   });
 }

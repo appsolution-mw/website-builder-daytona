@@ -1,9 +1,15 @@
 import { createDaytonaRuntime } from "./daytona";
-import { createLocalWorkerPoolRuntime } from "./worker-pool";
+import {
+  createHetznerWorkerPoolRuntime,
+  createLocalWorkerPoolRuntime,
+} from "./worker-pool";
 import type { Runtime } from "./types";
 
 export { createDaytonaRuntime };
-export { createLocalWorkerPoolRuntime } from "./worker-pool";
+export {
+  createHetznerWorkerPoolRuntime,
+  createLocalWorkerPoolRuntime,
+} from "./worker-pool";
 
 export type {
   Runtime,
@@ -26,7 +32,7 @@ export type {
  *   daytona-cloud      — real Daytona API
  *   daytona-fake       — in-process local broker
  *   worker-pool-local  — WorkerPoolRuntime against a locally running worker-agent (H.1b)
- *   worker-pool-hetzner — reserved for H.1c+, throws today
+ *   worker-pool-hetzner — WorkerPoolRuntime against managed Hetzner workers
  */
 export function createRuntime(): Runtime {
   const explicit = process.env.RUNTIME_MODE;
@@ -40,9 +46,7 @@ export function createRuntime(): Runtime {
     return createLocalWorkerPoolRuntime();
   }
   if (mode === "worker-pool-hetzner") {
-    throw new Error(
-      `RUNTIME_MODE='${mode}' is reserved for Phase H.1c+; not implemented in H.1b`,
-    );
+    return createHetznerWorkerPoolRuntime();
   }
   // Old reserved names from H.1a — keep throwing helpful errors
   if (mode === "hetzner-fake" || mode === "hetzner-cloud") {

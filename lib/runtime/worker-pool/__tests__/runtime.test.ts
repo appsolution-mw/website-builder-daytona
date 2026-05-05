@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../../../db/client";
+import { RuntimeError } from "../../errors";
 import { createFakeProvisioner } from "../../provisioner/fake";
 import { createSimpleScheduler } from "../../scheduler/simple";
 import { createFakeAgentClient } from "../fake-agent-client";
@@ -81,6 +82,33 @@ describe("WorkerPoolRuntime", () => {
     const tok = await prisma.sandboxToken.findFirst({ where: { sandboxId: ws!.id } });
     expect(tok?.token).toMatch(/^[a-f0-9]{64}$/);
     expect(info.brokerUrl).toContain(tok!.token);
+  });
+
+  it("throws NO_WORKER_CAPACITY when provisioning is disabled and no worker is available", async () => {
+    const handles = createFakeAgentClient();
+    const provisioner = createFakeProvisioner();
+    const r = createWorkerPoolRuntime({
+      scheduler: {
+        pickWorker: async () => null,
+      },
+      provisioner,
+      agentClientFor: () => handles.client,
+      sandboxImage: "wbd/sandbox:dev",
+      autoProvisionWhenFull: false,
+    });
+    const projectId = await project();
+
+    await expect(r.spawnProjectSandbox({
+      projectId,
+      source: { type: "template" },
+    })).rejects.toEqual(
+      new RuntimeError(
+        "NO_WORKER_CAPACITY",
+        "No ready worker has a free project slot",
+      ),
+    );
+    expect(await prisma.worker.count()).toBe(0);
+    expect(handles.requests()).toEqual([]);
   });
 
   it("reuses an existing READY worker on subsequent spawns", async () => {

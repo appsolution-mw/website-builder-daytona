@@ -1,5 +1,6 @@
 import { createSimpleScheduler } from "../scheduler/simple";
 import { createFakeProvisioner } from "../provisioner/fake";
+import { createHetznerWorkerProvisionerFromEnv } from "../provisioner/hetzner";
 import { createAgentClient, type CreateAgentClientArgs } from "./agent-client";
 import { createWorkerPoolRuntime } from "./runtime";
 import type { Runtime, WorkerRecord } from "../types";
@@ -9,6 +10,9 @@ import { resolve } from "node:path";
 
 const OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
 const DEFAULT_WORKER_AGENT_TIMEOUT_MS = 120_000;
+const DEFAULT_HETZNER_REGION = "fsn1";
+const DEFAULT_HETZNER_SERVER_TYPE = "ccx33";
+const DEFAULT_HETZNER_WORKER_CAPACITY = 10;
 
 export interface CreateLocalWorkerPoolRuntimeArgs {
   sandboxImage?: string;
@@ -19,6 +23,7 @@ export interface ResolveWorkerAgentClientConfigArgs {
   worker: Pick<WorkerRecord, "tailscaleIp">;
   hmacSecret?: string;
   runtimeEnv?: Record<string, string>;
+  ignoreConfiguredAgentUrl?: boolean;
 }
 
 /**
@@ -47,8 +52,37 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
     provisioner,
     agentClientFor,
     sandboxImage,
+    autoProvisionWhenFull: true,
     brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
     publicHostFor: configuredAgentUrl ? () => configuredAgentUrl.hostname : undefined,
+  });
+}
+
+export function createHetznerWorkerPoolRuntime(): Runtime {
+  const runtimeEnv = collectRuntimeEnv();
+  const sandboxImage = required("SANDBOX_IMAGE", runtimeEnv);
+  const hmacSecret = required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
+  const scheduler = createSimpleScheduler();
+  const provisioner = createHetznerWorkerProvisionerFromEnv(runtimeEnv);
+  const agentClientFor = (w: WorkerRecord): AgentClient =>
+    createAgentClient(resolveWorkerAgentClientConfig({
+      worker: w,
+      hmacSecret,
+      runtimeEnv,
+      ignoreConfiguredAgentUrl: true,
+    }));
+
+  return createWorkerPoolRuntime({
+    scheduler,
+    provisioner,
+    agentClientFor,
+    sandboxImage,
+    defaultRegion: runtimeEnv.HETZNER_DEFAULT_REGION ?? DEFAULT_HETZNER_REGION,
+    defaultSize: runtimeEnv.HETZNER_DEFAULT_SERVER_TYPE ?? DEFAULT_HETZNER_SERVER_TYPE,
+    defaultCapacity: optionalPositiveInt("WORKER_DEFAULT_CAPACITY", runtimeEnv) ??
+      DEFAULT_HETZNER_WORKER_CAPACITY,
+    autoProvisionWhenFull: false,
+    brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
   });
 }
 
@@ -56,7 +90,9 @@ export function resolveWorkerAgentClientConfig(
   args: ResolveWorkerAgentClientConfigArgs,
 ): CreateAgentClientArgs {
   const runtimeEnv = args.runtimeEnv ?? collectRuntimeEnv();
-  const configuredAgentUrl = optionalUrl("WORKER_AGENT_URL", runtimeEnv);
+  const configuredAgentUrl = args.ignoreConfiguredAgentUrl
+    ? null
+    : optionalUrl("WORKER_AGENT_URL", runtimeEnv);
   const timeoutMs = optionalPositiveInt("WORKER_AGENT_TIMEOUT_MS", runtimeEnv) ??
     DEFAULT_WORKER_AGENT_TIMEOUT_MS;
   return {
