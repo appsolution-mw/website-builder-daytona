@@ -95,7 +95,8 @@ export function parseCreateWorkerInput(input: unknown): ParseCreateWorkerInputRe
   const serverType = parseRequiredString(input.serverType, "serverType");
   if (!serverType.ok) return serverType;
 
-  if (!Number.isSafeInteger(input.capacity) || input.capacity <= 0) {
+  const capacity = typeof input.capacity === "number" ? input.capacity : NaN;
+  if (!Number.isSafeInteger(capacity) || capacity <= 0) {
     return { ok: false, error: "capacity must be a positive integer" };
   }
 
@@ -105,7 +106,7 @@ export function parseCreateWorkerInput(input: unknown): ParseCreateWorkerInputRe
       name: name.value,
       region: region.value,
       serverType: serverType.value,
-      capacity: input.capacity,
+      capacity,
     },
   };
 }
