@@ -18,6 +18,7 @@ export interface CaddyHostMatcher {
 }
 
 export interface CaddyRoute {
+  "@id"?: string;
   match: CaddyHostMatcher[];
   handle: CaddyReverseProxyHandler[];
   terminal: boolean;

@@ -1,8 +1,12 @@
 import { createSimpleScheduler } from "../scheduler/simple";
 import { createFakeProvisioner } from "../provisioner/fake";
 import { createHetznerWorkerProvisionerFromEnv } from "../provisioner/hetzner";
+import { prisma } from "../../db/client";
+import { buildProjectPreviewRoute } from "../../routing/caddy-config";
+import { createCaddyClient, type CaddyClient } from "../../routing/caddy-client";
 import { createAgentClient, type CreateAgentClientArgs } from "./agent-client";
 import { createWorkerPoolRuntime } from "./runtime";
+import type { CreateWorkerPoolRuntimeArgs } from "./runtime";
 import type { Runtime, WorkerRecord } from "../types";
 import type { AgentClient } from "./types";
 import { existsSync, readFileSync } from "node:fs";
@@ -64,6 +68,7 @@ export function createHetznerWorkerPoolRuntime(): Runtime {
   const hmacSecret = required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
   const scheduler = createSimpleScheduler();
   const provisioner = createHetznerWorkerProvisionerFromEnv(runtimeEnv);
+  const publicRouting = createPublicRouting(runtimeEnv);
   const agentClientFor = (w: WorkerRecord): AgentClient =>
     createAgentClient(resolveWorkerAgentClientConfig({
       worker: w,
@@ -83,6 +88,8 @@ export function createHetznerWorkerPoolRuntime(): Runtime {
       DEFAULT_HETZNER_WORKER_CAPACITY,
     autoProvisionWhenFull: false,
     brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
+    projectRouteFor: publicRouting?.projectRouteFor,
+    deleteProjectRouteFor: publicRouting?.deleteProjectRouteFor,
   });
 }
 
@@ -216,6 +223,72 @@ function optionalPositiveInt(name: string, runtimeEnv: Record<string, string>): 
     throw new Error(`worker-pool runtime requires ${name} to be a positive integer`);
   }
   return parsed;
+}
+
+function createPublicRouting(
+  runtimeEnv: Record<string, string>,
+): {
+  projectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["projectRouteFor"]>;
+  deleteProjectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["deleteProjectRouteFor"]>;
+} | null {
+  const publicBaseDomain = optionalHostname("PUBLIC_BASE_DOMAIN", runtimeEnv);
+  const caddyAdminUrl = optionalUrl("CADDY_ADMIN_URL", runtimeEnv);
+  if (!publicBaseDomain || !caddyAdminUrl) return null;
+
+  const caddyClient = createCaddyClient(caddyAdminUrl.origin);
+  return createCaddyProjectRouting(publicBaseDomain, caddyClient);
+}
+
+export function createCaddyProjectRouting(
+  publicBaseDomain: string,
+  caddyClient: CaddyClient,
+): {
+  projectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["projectRouteFor"]>;
+  deleteProjectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["deleteProjectRouteFor"]>;
+} {
+  return {
+    projectRouteFor: async ({ projectId, worker, previewPort }) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { publicSlug: true },
+      });
+      if (!project?.publicSlug) {
+        return { previewUrl: `http://${worker.tailscaleIp}:${previewPort}` };
+      }
+
+      const hostname = `${project.publicSlug}.${publicBaseDomain}`;
+      await caddyClient.applyRoute(
+        project.publicSlug,
+        buildProjectPreviewRoute({
+          hostname,
+          targetHost: worker.tailscaleIp,
+          targetPort: previewPort,
+        }),
+      );
+      return { previewUrl: `https://${hostname}` };
+    },
+    deleteProjectRouteFor: async ({ projectId }) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { publicSlug: true },
+      });
+      if (!project?.publicSlug) return;
+      await caddyClient.deleteRoute(project.publicSlug);
+    },
+  };
+}
+
+function optionalHostname(name: string, runtimeEnv: Record<string, string>): string | null {
+  const value = runtimeEnv[name]?.trim();
+  if (!value) return null;
+  if (value.includes("://")) {
+    throw new Error(`worker-pool runtime requires ${name} to be a hostname, not a URL`);
+  }
+  const normalized = value.trim().replace(/^\*\./, "").replace(/\.+$/, "").toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(normalized)) {
+    throw new Error(`worker-pool runtime requires ${name} to be a valid hostname`);
+  }
+  return normalized;
 }
 
 export { createWorkerPoolRuntime } from "./runtime";

@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { prisma } from "../../../db/client";
 import {
   collectBrokerEnv,
+  createCaddyProjectRouting,
   createHetznerWorkerPoolRuntime,
   resolveWorkerAgentClientConfig,
 } from "../index";
+import type { CaddyRoute } from "../../../routing/caddy-config";
+import type { WorkerRecord } from "../../types";
 
 const originalEnv = { ...process.env };
 
@@ -139,6 +143,96 @@ describe("createHetznerWorkerPoolRuntime", () => {
     expect(() => createHetznerWorkerPoolRuntime()).toThrow(
       /WORKER_DEFAULT_CAPACITY/,
     );
+  });
+});
+
+describe("createCaddyProjectRouting", () => {
+  const userId = "test-user-caddy-routing";
+  const worker: WorkerRecord = {
+    id: "worker-1",
+    tailscaleHostname: "worker-1",
+    tailscaleIp: "100.64.1.25",
+    provider: "hetzner",
+    providerVmId: "vm-1",
+    region: "fsn1",
+    capacity: 10,
+    status: "READY",
+  };
+
+  afterEach(async () => {
+    await prisma.project.deleteMany({ where: { ownerId: userId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("applies Caddy routes using the project's public slug", async () => {
+    await prisma.user.create({
+      data: { id: userId, email: `${userId}@test.local` },
+    });
+    const project = await prisma.project.create({
+      data: {
+        name: "Routed Project",
+        ownerId: userId,
+        publicSlug: "routed-project",
+      },
+    });
+    const appliedRoutes: Array<{ routeId: string; route: CaddyRoute }> = [];
+    const routing = createCaddyProjectRouting("example.com", {
+      applyRoute: async (routeId, route) => {
+        appliedRoutes.push({ routeId, route });
+      },
+      deleteRoute: async () => undefined,
+    });
+
+    const routed = await routing.projectRouteFor({
+      projectId: project.id,
+      sandboxId: "sandbox-1",
+      worker,
+      previewPort: 33002,
+    });
+
+    expect(routed).toEqual({ previewUrl: "https://routed-project.example.com" });
+    expect(appliedRoutes).toEqual([
+      {
+        routeId: "routed-project",
+        route: {
+          match: [{ host: ["routed-project.example.com"] }],
+          handle: [
+            {
+              handler: "reverse_proxy",
+              upstreams: [{ dial: "100.64.1.25:33002" }],
+            },
+          ],
+          terminal: true,
+        },
+      },
+    ]);
+  });
+
+  it("deletes Caddy routes using the project's public slug", async () => {
+    await prisma.user.create({
+      data: { id: userId, email: `${userId}@test.local` },
+    });
+    const project = await prisma.project.create({
+      data: {
+        name: "Deleted Route Project",
+        ownerId: userId,
+        publicSlug: "deleted-route-project",
+      },
+    });
+    const deletedRouteIds: string[] = [];
+    const routing = createCaddyProjectRouting("example.com", {
+      applyRoute: async () => undefined,
+      deleteRoute: async (routeId) => {
+        deletedRouteIds.push(routeId);
+      },
+    });
+
+    await routing.deleteProjectRouteFor({
+      projectId: project.id,
+      sandboxId: "sandbox-1",
+    });
+
+    expect(deletedRouteIds).toEqual(["deleted-route-project"]);
   });
 });
 

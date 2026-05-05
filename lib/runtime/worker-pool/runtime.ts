@@ -30,6 +30,22 @@ export interface CreateWorkerPoolRuntimeArgs {
   brokerEnv?: () => Record<string, string>;
   /** Hostname clients should use for broker/preview URLs. Defaults to worker.tailscaleIp. */
   publicHostFor?: (worker: WorkerRecord) => string;
+  /** Optional public route hook for provider-managed project preview URLs. */
+  projectRouteFor?: (args: ProjectRouteArgs) => Promise<{ previewUrl: string }>;
+  /** Optional cleanup hook for provider-managed project preview routes. */
+  deleteProjectRouteFor?: (args: DeleteProjectRouteArgs) => Promise<void>;
+}
+
+export interface ProjectRouteArgs {
+  projectId: string;
+  sandboxId: string;
+  worker: WorkerRecord;
+  previewPort: number;
+}
+
+export interface DeleteProjectRouteArgs {
+  projectId: string;
+  sandboxId: string;
 }
 
 export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runtime {
@@ -44,6 +60,7 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       const agent = args.agentClientFor(worker);
       const sandboxId = randomBytes(16).toString("hex");
       const brokerToken = randomBytes(32).toString("hex");
+      let sandboxCreatedOnWorker = false;
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
@@ -77,6 +94,7 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
           env,
           brokerToken,
         });
+        sandboxCreatedOnWorker = true;
         await prisma.workerSandbox.update({
           where: { id: sandboxId },
           data: {
@@ -93,14 +111,28 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
           },
         });
         const publicHost = args.publicHostFor?.(worker) ?? worker.tailscaleIp;
+        const routed = await args.projectRouteFor?.({
+          projectId: spawn.projectId,
+          sandboxId,
+          worker,
+          previewPort: created.previewPort,
+        });
         return {
           sandboxId,
           brokerUrl: `ws://${publicHost}:${created.brokerPort}/?token=${brokerToken}`,
           brokerPreviewToken: brokerToken,
-          previewUrl: `http://${publicHost}:${created.previewPort}`,
+          previewUrl: routed?.previewUrl ?? `http://${publicHost}:${created.previewPort}`,
         };
       } catch (err) {
-        // Rollback: delete the WorkerSandbox row so retries can proceed cleanly.
+        if (sandboxCreatedOnWorker) {
+          await args.deleteProjectRouteFor?.({
+            projectId: spawn.projectId,
+            sandboxId,
+          }).catch(() => {});
+          await agent.destroySandbox(sandboxId).catch(() => {});
+        }
+        // Rollback: delete token and WorkerSandbox row so retries can proceed cleanly.
+        await prisma.sandboxToken.deleteMany({ where: { sandboxId } }).catch(() => {});
         await prisma.workerSandbox.delete({ where: { id: ws.id } }).catch(() => {});
         throw err;
       }
@@ -109,6 +141,10 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
     async destroyProjectSandbox(sandboxId: string): Promise<void> {
       const ws = await prisma.workerSandbox.findUnique({ where: { id: sandboxId } });
       if (!ws) return;
+      await args.deleteProjectRouteFor?.({
+        projectId: ws.projectId,
+        sandboxId,
+      }).catch(() => {});
       const worker = await prisma.worker.findUnique({ where: { id: ws.workerId } });
       if (!worker) {
         // Worker is gone (decommissioned). Just clean DB.
