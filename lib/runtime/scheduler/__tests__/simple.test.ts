@@ -11,6 +11,7 @@ async function seedWorker(args: {
 }) {
   return prisma.worker.create({
     data: {
+      name: `test-worker-${Math.random().toString(36).slice(2, 8)}`,
       tailscaleHostname: `w-${Math.random().toString(36).slice(2, 8)}`,
       tailscaleIp: "100.64.1.1",
       provider: args.provider ?? "fake",

@@ -71,7 +71,7 @@ describe("POST /api/projects/[id]/restart", () => {
       runtimeGeneration: 0,
       createdAt: new Date("2026-05-04T00:00:00.000Z"),
       lastActive: new Date("2026-05-04T00:00:00.000Z"),
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       brokerUrl: "ws://localhost:4000",
       brokerPreviewToken: "old-token",
       previewUrl: "http://localhost:3000",
@@ -98,7 +98,7 @@ describe("POST /api/projects/[id]/restart", () => {
     });
     projectUpdateMock.mockResolvedValue({
       ...project,
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
       brokerUrl: "ws://localhost:4001",
       brokerPreviewToken: "new-token",
       previewUrl: "http://localhost:3001",
@@ -122,7 +122,7 @@ describe("POST /api/projects/[id]/restart", () => {
       where: { id: "project-1" },
       data: {
         status: "RUNNING",
-        daytonaSandboxId: "sandbox-new",
+        sandboxId: "sandbox-new",
         brokerUrl: "ws://localhost:4001",
         brokerPreviewToken: "new-token",
         previewUrl: "http://localhost:3001",
@@ -137,7 +137,7 @@ describe("POST /api/projects/[id]/restart", () => {
       ownerId: "dev-user",
       name: "GitHub Restart",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       sourceType: "GITHUB",
       githubOwner: "octo",
       githubRepo: "hello-world",
@@ -165,7 +165,7 @@ describe("POST /api/projects/[id]/restart", () => {
       id: project.id,
       name: project.name,
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
       brokerUrl: "ws://localhost:4001",
       brokerPreviewToken: "new-token",
       previewUrl: "http://localhost:3001",
@@ -207,7 +207,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-openhands",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,
@@ -225,7 +225,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectUpdateMock.mockResolvedValue({
       id: "project-openhands",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
     });
 
     const res = await POST(new Request("http://localhost/api/projects/project-openhands/restart", {
@@ -251,7 +251,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-fake",
       status: "RUNNING",
-      daytonaSandboxId: "fake-project-fake-4000",
+      sandboxId: "fake-project-fake-4000",
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,
@@ -268,7 +268,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectUpdateMock.mockResolvedValue({
       id: "project-fake",
       status: "RUNNING",
-      daytonaSandboxId: "fake-project-fake-4001",
+      sandboxId: "fake-project-fake-4001",
     });
 
     const res = await POST(new Request("http://localhost/api/projects/project-fake/restart", {
@@ -287,7 +287,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-provisioning",
       status: "PROVISIONING",
-      daytonaSandboxId: null,
+      sandboxId: null,
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,

@@ -78,7 +78,7 @@ describe("GET /api/projects/[id]", () => {
       runtimeGeneration: 0,
       createdAt: new Date("2026-05-03T00:00:00.000Z"),
       lastActive: new Date("2026-05-03T00:00:00.000Z"),
-      daytonaSandboxId: "fake-stale",
+      sandboxId: "fake-stale",
       brokerUrl: "ws://localhost:4000",
       brokerPreviewToken: "old-token",
       previewUrl: "http://localhost:3000",
@@ -101,7 +101,7 @@ describe("GET /api/projects/[id]", () => {
       brokerPreviewToken: "new-token",
       previewUrl: "http://localhost:3001",
     });
-    projectUpdateMock.mockResolvedValue({ ...project, daytonaSandboxId: "fake-new" });
+    projectUpdateMock.mockResolvedValue({ ...project, sandboxId: "fake-new" });
     sessionFindFirstMock.mockResolvedValue(session);
     sessionFindManyMock.mockResolvedValue([session]);
     vi.stubGlobal("fetch", vi.fn(async () => new Response("missing", { status: 503 })));

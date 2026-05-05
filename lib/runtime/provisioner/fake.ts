@@ -36,6 +36,7 @@ export function createFakeProvisioner(): WorkerProvisioner {
       const ipC = (parseInt(suffix.slice(2, 4), 16) % 253) + 1;
       const row = await prisma.worker.create({
         data: {
+          name: `Fake worker ${suffix}`,
           tailscaleHostname: `fake-worker-${suffix}`,
           tailscaleIp: `100.64.${ipB}.${ipC}`,
           provider: PROVIDER_ID,

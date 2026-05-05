@@ -76,8 +76,8 @@ async function agentTargetForProject(projectId: string): Promise<{
   sandboxId: string;
   client: ReturnType<typeof createAgentClient>;
 }> {
-  const sandbox = await prisma.workerSandbox.findUnique({
-    where: { projectId },
+  const sandbox = await prisma.workerSandbox.findFirst({
+    where: { projectId, status: { not: "DESTROYED" } },
     select: {
       id: true,
       worker: { select: { tailscaleIp: true } },

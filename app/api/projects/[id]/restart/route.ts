@@ -12,7 +12,7 @@ const SANITIZED_RESTART_ERROR = "sandbox restart failed";
 type RestartProject = {
   id: string;
   status: string;
-  daytonaSandboxId: string | null;
+  sandboxId: string | null;
   sourceType: string;
   githubOwner: string | null;
   githubRepo: string | null;
@@ -61,7 +61,7 @@ export async function POST(
     select: {
       id: true,
       status: true,
-      daytonaSandboxId: true,
+      sandboxId: true,
       sourceType: true,
       githubOwner: true,
       githubRepo: true,
@@ -83,12 +83,12 @@ export async function POST(
     where: { projectId: project.id },
     select: { content: true },
   });
-  const runtime = runtimeForSandbox(project.daytonaSandboxId);
+  const runtime = runtimeForSandbox(project.sandboxId);
   const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
 
   try {
-    if (project.daytonaSandboxId) {
-      await runtime.destroyProjectSandbox(project.daytonaSandboxId);
+    if (project.sandboxId) {
+      await runtime.destroyProjectSandbox(project.sandboxId);
     }
     const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
@@ -100,7 +100,7 @@ export async function POST(
       where: { id: project.id },
       data: {
         status: "RUNNING",
-        daytonaSandboxId: info.sandboxId,
+        sandboxId: info.sandboxId,
         brokerUrl: info.brokerUrl,
         brokerPreviewToken: info.brokerPreviewToken,
         previewUrl: info.previewUrl,

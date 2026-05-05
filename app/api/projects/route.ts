@@ -296,7 +296,7 @@ export async function POST(request: NextRequest) {
       where: { id: project.id },
       data: {
         status: "RUNNING",
-        daytonaSandboxId: info.sandboxId,
+        sandboxId: info.sandboxId,
         brokerUrl: info.brokerUrl,
         brokerPreviewToken: info.brokerPreviewToken,
         previewUrl: info.previewUrl,
