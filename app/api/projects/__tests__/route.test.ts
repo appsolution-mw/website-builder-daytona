@@ -5,6 +5,7 @@ import { AgentError } from "@/lib/runtime/worker-pool/types";
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentUpsertMock = vi.hoisted(() => vi.fn());
 const projectCreateMock = vi.hoisted(() => vi.fn());
+const projectFindUniqueMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
 const githubRepositoryFindFirstMock = vi.hoisted(() => vi.fn());
 const transactionMock = vi.hoisted(() => vi.fn());
@@ -34,6 +35,7 @@ vi.mock("@/lib/db/client", () => ({
     },
     project: {
       create: projectCreateMock,
+      findUnique: projectFindUniqueMock,
       findMany: vi.fn(),
       update: projectUpdateMock,
     },
@@ -94,6 +96,7 @@ describe("POST /api/projects", () => {
     const project = {
       id: "project-with-env",
       name: "Project With Env",
+      publicSlug: "project-with-env",
       status: "PROVISIONING",
       agentRuntime: "CLAUDE_CODE",
       desiredRuntime: "CLAUDE_CODE",
@@ -107,6 +110,7 @@ describe("POST /api/projects", () => {
     };
     const projectEnv = "NEXT_PUBLIC_LABEL=Host\nSECRET_VALUE=hidden\n";
     process.env.RUNTIME_MODE = "worker-pool-local";
+    projectFindUniqueMock.mockResolvedValue(null);
     projectCreateMock.mockResolvedValue(project);
     projectEnvironmentUpsertMock.mockResolvedValue({ content: projectEnv });
     spawnProjectSandboxMock.mockResolvedValue({
@@ -131,13 +135,142 @@ describe("POST /api/projects", () => {
     });
     expect(projectCreateMock).toHaveBeenCalledTimes(1);
     expect(projectCreateMock).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ workspaceId: "workspace-1" }),
+      data: expect.objectContaining({
+        publicSlug: "project-with-env",
+        workspaceId: "workspace-1",
+      }),
+    }));
+    expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ publicSlug: true }),
     }));
     expect(projectEnvironmentUpsertMock).toHaveBeenCalledTimes(1);
     expect(spawnProjectSandboxMock).toHaveBeenCalledWith(expect.objectContaining({
       projectId: "project-with-env",
       projectEnvContent: projectEnv,
     }));
+    await expect(res.json()).resolves.toMatchObject({
+      project: {
+        id: "project-with-env",
+        publicSlug: "project-with-env",
+      },
+    });
+  });
+
+  it("allocates deterministic public slug suffixes when project names collide", async () => {
+    const project = {
+      id: "project-collision",
+      name: "Same Name",
+      publicSlug: "same-name-2",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectFindUniqueMock
+      .mockResolvedValueOnce({ id: "existing-project" })
+      .mockResolvedValueOnce(null);
+    projectCreateMock.mockResolvedValue(project);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-1",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "token",
+      previewUrl: "http://localhost:3000",
+    });
+    projectUpdateMock.mockResolvedValue({ ...project, status: "RUNNING" });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Same Name" }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(projectFindUniqueMock).toHaveBeenNthCalledWith(1, {
+      where: { publicSlug: "same-name" },
+      select: { id: true },
+    });
+    expect(projectFindUniqueMock).toHaveBeenNthCalledWith(2, {
+      where: { publicSlug: "same-name-2" },
+      select: { id: true },
+    });
+    expect(projectCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ publicSlug: "same-name-2" }),
+    }));
+    await expect(res.json()).resolves.toMatchObject({
+      project: {
+        id: "project-collision",
+        publicSlug: "same-name-2",
+      },
+    });
+  });
+
+  it("retries with the next public slug when create loses a unique race", async () => {
+    const project = {
+      id: "project-race",
+      name: "Race Name",
+      publicSlug: "race-name-2",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      brokerUrl: null,
+      previewUrl: null,
+      sessions: [],
+    };
+    const uniquePublicSlugError = Object.assign(new Error("Unique constraint failed"), {
+      code: "P2002",
+      meta: { target: ["publicSlug"] },
+    });
+    const projectEnv = "NEXT_PUBLIC_LABEL=Race\n";
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectFindUniqueMock.mockResolvedValue(null);
+    projectCreateMock
+      .mockRejectedValueOnce(uniquePublicSlugError)
+      .mockResolvedValueOnce(project);
+    projectEnvironmentUpsertMock.mockResolvedValue({ content: projectEnv });
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-1",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "token",
+      previewUrl: "http://localhost:3000",
+    });
+    projectUpdateMock.mockResolvedValue({ ...project, status: "RUNNING" });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Race Name", environmentContent: projectEnv }),
+    }));
+
+    expect(res.status).toBe(201);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    expect(projectCreateMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      data: expect.objectContaining({ publicSlug: "race-name" }),
+    }));
+    expect(projectCreateMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      data: expect.objectContaining({ publicSlug: "race-name-2" }),
+    }));
+    expect(projectEnvironmentUpsertMock).toHaveBeenCalledTimes(1);
+    expect(projectEnvironmentUpsertMock).toHaveBeenCalledWith({
+      where: { projectId: "project-race" },
+      create: { projectId: "project-race", content: projectEnv },
+      update: { content: projectEnv },
+      select: { content: true },
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      project: {
+        id: "project-race",
+        publicSlug: "race-name-2",
+      },
+    });
   });
 
   it("does not spawn or mark a project running when initial env persistence fails", async () => {

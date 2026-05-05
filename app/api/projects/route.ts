@@ -16,6 +16,7 @@ import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
 import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 import { AgentError } from "@/lib/runtime/worker-pool/types";
 import { ensureDefaultWorkspaceForUser } from "@/lib/workspaces/access";
+import { createProjectPublicSlugCandidate } from "@/lib/routing/project-slug";
 
 const SPAWN_TIMEOUT_MS = 120_000;
 const MAX_ENV_BYTES = 64 * 1024;
@@ -29,6 +30,7 @@ const SANDBOX_SPAWN_TIMEOUT_ERROR = "sandbox provisioning timed out";
 const projectSelect = {
   id: true,
   name: true,
+  publicSlug: true,
   status: true,
   agentRuntime: true,
   desiredRuntime: true,
@@ -55,6 +57,7 @@ const projectSelect = {
 function serializeProject(project: {
   id: string;
   name: string;
+  publicSlug: string | null;
   status: string;
   agentRuntime: PrismaAgentRuntime;
   desiredRuntime: PrismaAgentRuntime;
@@ -113,6 +116,35 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
+}
+
+async function availablePublicSlugCandidate(
+  base: string,
+  startIndex: number,
+): Promise<{ publicSlug: string; index: number } | null> {
+  for (let i = startIndex; i < 100; i += 1) {
+    const candidate = publicSlugCandidate(base, i);
+    const existing = await prisma.project.findUnique({
+      where: { publicSlug: candidate },
+      select: { id: true },
+    });
+    if (!existing) return { publicSlug: candidate, index: i };
+  }
+  return null;
+}
+
+function publicSlugCandidate(base: string, index: number): string {
+  return index === 0 ? base : `${base}-${index + 1}`;
+}
+
+function isPublicSlugUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; meta?: { target?: unknown } };
+  if (candidate.code !== "P2002") return false;
+
+  const target = candidate.meta?.target;
+  if (Array.isArray(target)) return target.includes("publicSlug");
+  return typeof target === "string" && target.includes("publicSlug");
 }
 
 function safeProvisioningError(error: unknown): string {
@@ -211,49 +243,66 @@ export async function POST(request: NextRequest) {
     name: currentUser.user.name,
   });
 
-  let project: Prisma.ProjectGetPayload<{ select: typeof projectSelect }>;
+  let project: Prisma.ProjectGetPayload<{ select: typeof projectSelect }> | undefined;
   let projectEnvContent: string | undefined;
   try {
-    const created = await prisma.$transaction(async (tx) => {
-      const project = await tx.project.create({
-        data: {
-          name,
-          ownerId: currentUser.user.id,
-          workspaceId: workspace.id,
-          status: "PROVISIONING",
-          agentRuntime: protocolRuntimeToDb(runtime),
-          desiredRuntime: protocolRuntimeToDb(runtime),
-          sourceType: source.type === "github" ? "GITHUB" : "TEMPLATE",
-          githubInstallationId: githubRepository?.installationId ?? null,
-          githubRepositoryId: githubRepository?.id ?? null,
-          githubOwner: githubRepository?.ownerLogin ?? null,
-          githubRepo: githubRepository?.name ?? null,
-          githubBaseBranch: source.type === "github" ? source.branch : null,
-          sessions: {
-            create: {
-              title: "Main chat",
-              defaultRuntime: protocolRuntimeToDb(runtime),
+    const basePublicSlug = createProjectPublicSlugCandidate(name);
+    let nextSlugIndex = 0;
+    while (nextSlugIndex < 100) {
+      const candidate = await availablePublicSlugCandidate(basePublicSlug, nextSlugIndex);
+      if (!candidate) break;
+      try {
+        const created = await prisma.$transaction(async (tx) => {
+          const project = await tx.project.create({
+            data: {
+              name,
+              publicSlug: candidate.publicSlug,
+              ownerId: currentUser.user.id,
+              workspaceId: workspace.id,
+              status: "PROVISIONING",
+              agentRuntime: protocolRuntimeToDb(runtime),
+              desiredRuntime: protocolRuntimeToDb(runtime),
+              sourceType: source.type === "github" ? "GITHUB" : "TEMPLATE",
+              githubInstallationId: githubRepository?.installationId ?? null,
+              githubRepositoryId: githubRepository?.id ?? null,
+              githubOwner: githubRepository?.ownerLogin ?? null,
+              githubRepo: githubRepository?.name ?? null,
+              githubBaseBranch: source.type === "github" ? source.branch : null,
+              sessions: {
+                create: {
+                  title: "Main chat",
+                  defaultRuntime: protocolRuntimeToDb(runtime),
+                },
+              },
             },
-          },
-        },
-        select: projectSelect,
-      });
+            select: projectSelect,
+          });
 
-      let projectEnvContent: string | undefined;
-      if (initialEnvironmentContent !== undefined) {
-        const environment = await tx.projectEnvironment.upsert({
-          where: { projectId: project.id },
-          create: { projectId: project.id, content: initialEnvironmentContent },
-          update: { content: initialEnvironmentContent },
-          select: { content: true },
+          let projectEnvContent: string | undefined;
+          if (initialEnvironmentContent !== undefined) {
+            const environment = await tx.projectEnvironment.upsert({
+              where: { projectId: project.id },
+              create: { projectId: project.id, content: initialEnvironmentContent },
+              update: { content: initialEnvironmentContent },
+              select: { content: true },
+            });
+            projectEnvContent = environment.content;
+          }
+
+          return { project, projectEnvContent };
         });
-        projectEnvContent = environment.content;
+        project = created.project;
+        projectEnvContent = created.projectEnvContent;
+        break;
+      } catch (error) {
+        if (isPublicSlugUniqueConstraintError(error)) {
+          nextSlugIndex = candidate.index + 1;
+          continue;
+        }
+        throw error;
       }
-
-      return { project, projectEnvContent };
-    });
-    project = created.project;
-    projectEnvContent = created.projectEnvContent;
+    }
+    if (!project) throw new Error("could not allocate public slug");
   } catch {
     return NextResponse.json(
       { error: "project creation failed" },
