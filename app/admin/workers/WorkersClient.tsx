@@ -325,6 +325,10 @@ function WorkerRow({
   const isDrainActive = activeWorkerId === `${worker.id}:drain`;
   const isRetryActive = activeWorkerId === `${worker.id}:retry`;
   const isDeleteActive = activeWorkerId === `${worker.id}:delete`;
+  const canRetry = worker.status === "PROVISIONING" && Boolean(worker.provisioningError);
+  const canDecommission =
+    worker.status === "DECOMMISSIONED" ||
+    (worker.status === "DRAINING" && worker.slotsUsed === 0);
 
   return (
     <Card className="shadow-none">
@@ -361,7 +365,7 @@ function WorkerRow({
               {isDrainActive ? <Loader2 className="animate-spin" /> : <Waves />}
               Drain
             </Button>
-            {worker.provisioningError && (
+            {canRetry && (
               <Button
                 type="button"
                 variant="outline"
@@ -378,11 +382,16 @@ function WorkerRow({
               variant="destructive"
               size="xs"
               onClick={() => void onAction(worker, "delete")}
-              disabled={isDeleteActive}
+              disabled={!canDecommission || isDeleteActive}
               aria-label={`Decommission ${worker.name}`}
+              title={
+                canDecommission
+                  ? `Decommission ${worker.name}`
+                  : "Drain the worker and wait for slots to empty first"
+              }
             >
               {isDeleteActive ? <Loader2 className="animate-spin" /> : <Trash2 />}
-              Delete
+              Decommission
             </Button>
           </div>
         </div>

@@ -448,7 +448,7 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex flex-col gap-3 sm:items-end">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 sm:justify-end">
               <Button asChild variant="outline" size="sm">
                 <Link href="/agent-config">
                   <Settings2 />
