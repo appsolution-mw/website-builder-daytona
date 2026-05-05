@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/client";
 import {
   enqueueAgentRun,
@@ -205,6 +205,60 @@ describe("agent run queue transitions", () => {
     });
   });
 
+  it("does not create duplicate attempts when starting the same running run again", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const firstStart = await markRunStarting(runId);
+
+    const secondStart = await markRunStarting(runId);
+
+    expect(secondStart).toEqual(firstStart);
+    await expect(
+      prisma.agentRunAttempt.count({ where: { runId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "RUNNING",
+      activeRunId: runId,
+    });
+  });
+
+  it("rejects starting another queued run while the project already has an active run", async () => {
+    const {
+      user,
+      project,
+      session,
+      runId: firstRunId,
+    } = await enqueueFixtureRun();
+    const secondRun = await enqueueAgentRun({
+      projectId: project.id,
+      sessionId: session.id,
+      userId: user.id,
+      prompt: "Second",
+      runtime: "openai-codex",
+      providerSessionId: "provider-2",
+      modelId: "gpt-test",
+    });
+    await markRunStarting(firstRunId);
+
+    await expect(markRunStarting(secondRun.runId)).rejects.toThrow(
+      "Project already has an active run",
+    );
+    await expect(
+      prisma.agentRunAttempt.count({ where: { runId: secondRun.runId } }),
+    ).resolves.toBe(0);
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "RUNNING",
+      activeRunId: firstRunId,
+    });
+  });
+
   it("blocks the project queue on failure", async () => {
     const { user, project, session, runId } = await enqueueFixtureRun();
     await enqueueAgentRun({
@@ -259,6 +313,86 @@ describe("agent run queue transitions", () => {
     });
   });
 
+  it("rejects stale success completion when the run is no longer the active project run", async () => {
+    const { user, project, session, runId } = await enqueueFixtureRun();
+    const secondRun = await enqueueAgentRun({
+      projectId: project.id,
+      sessionId: session.id,
+      userId: user.id,
+      prompt: "Second",
+      runtime: "openai-codex",
+      providerSessionId: "provider-2",
+      modelId: "gpt-test",
+    });
+    const { attemptId } = await markRunStarting(runId);
+    await prisma.projectQueueState.update({
+      where: { projectId: project.id },
+      data: { activeRunId: secondRun.runId },
+    });
+
+    await expect(
+      markRunSucceeded({
+        runId,
+        attemptId,
+        agentMessage: "Stale result",
+      }),
+    ).rejects.toThrow("Run is not the active project run");
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({ status: "RUNNING" });
+    await expect(
+      prisma.agentRunAttempt.findUniqueOrThrow({ where: { id: attemptId } }),
+    ).resolves.toMatchObject({ status: "STARTING" });
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "RUNNING",
+      activeRunId: secondRun.runId,
+    });
+    await expect(
+      prisma.message.count({
+        where: {
+          projectId: project.id,
+          sessionId: session.id,
+          role: "AGENT",
+        },
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("rejects stale failure completion after the attempt already finished", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const { attemptId } = await markRunStarting(runId);
+    await prisma.agentRunAttempt.update({
+      where: { id: attemptId },
+      data: { status: "SUCCEEDED", finishedAt: new Date(), exitCode: 0 },
+    });
+
+    await expect(
+      markRunFailed({
+        runId,
+        attemptId,
+        message: "Late failure",
+      }),
+    ).rejects.toThrow("Run attempt is not in flight");
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({ status: "RUNNING", blockedReason: null });
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "RUNNING",
+      activeRunId: runId,
+      blockedRunId: null,
+    });
+  });
+
   it("persists final agent message on success", async () => {
     const { project, session, runId } = await enqueueFixtureRun();
     const { attemptId } = await markRunStarting(runId);
@@ -310,5 +444,46 @@ describe("agent run queue transitions", () => {
     ).resolves.toMatchObject({
       payload: { status: "SUCCEEDED" },
     });
+  });
+
+  it("keeps the durable enqueue result when queued event append fails", async () => {
+    vi.resetModules();
+    vi.doMock("../events", () => ({
+      appendRunEvent: vi
+        .fn()
+        .mockRejectedValue(new Error("event store unavailable")),
+    }));
+    try {
+      const { enqueueAgentRun: enqueueWithFailingEvent } = await import(
+        "../queue"
+      );
+      const { user, project, session } = await createFixture();
+
+      const result = await enqueueWithFailingEvent({
+        projectId: project.id,
+        sessionId: session.id,
+        userId: user.id,
+        prompt: "Durable prompt",
+        runtime: "openai-codex",
+        providerSessionId: "provider-event-fail",
+        modelId: "gpt-test",
+      });
+
+      expect(result.queueSequence).toBe(1);
+      await expect(
+        prisma.agentRun.count({ where: { projectId: project.id } }),
+      ).resolves.toBe(1);
+      await expect(
+        prisma.message.count({
+          where: { projectId: project.id, role: "USER" },
+        }),
+      ).resolves.toBe(1);
+      await expect(
+        prisma.agentRunEvent.count({ where: { projectId: project.id } }),
+      ).resolves.toBe(0);
+    } finally {
+      vi.doUnmock("../events");
+      vi.resetModules();
+    }
   });
 });

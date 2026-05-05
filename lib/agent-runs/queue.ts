@@ -7,6 +7,7 @@ import { appendRunEvent } from "./events";
 const MAX_QUEUE_SEQUENCE_RETRIES = 5;
 const QUEUE_SEQUENCE_TARGET = ["projectId", "queueSequence"] as const;
 const QUEUE_SEQUENCE_CONSTRAINT = "AgentRun_projectId_queueSequence_key";
+const IN_FLIGHT_ATTEMPT_STATUSES = ["STARTING", "RUNNING"] as const;
 
 type QueuedRunResult = {
   runId: string;
@@ -34,7 +35,7 @@ export async function enqueueAgentRun(input: {
   for (let attempt = 1; attempt <= MAX_QUEUE_SEQUENCE_RETRIES; attempt += 1) {
     try {
       const result = await createQueuedRun(input);
-      await appendRunEvent({
+      await appendRunEventBestEffort({
         projectId: input.projectId,
         sessionId: input.sessionId,
         runId: result.runId,
@@ -86,11 +87,76 @@ export async function markRunStarting(
         id: true,
         projectId: true,
         sessionId: true,
+        status: true,
         lastAttemptNumber: true,
       },
     });
+    const queueState = await tx.projectQueueState.findUnique({
+      where: { projectId: run.projectId },
+      select: { state: true, activeRunId: true },
+    });
+
+    if (run.status === "RUNNING") {
+      if (
+        queueState?.state !== "RUNNING" ||
+        queueState.activeRunId !== run.id
+      ) {
+        throw new Error("Run is not the active project run");
+      }
+
+      const existingAttempt = await tx.agentRunAttempt.findFirst({
+        where: {
+          runId: run.id,
+          status: { in: [...IN_FLIGHT_ATTEMPT_STATUSES] },
+        },
+        select: { id: true, attemptNumber: true },
+        orderBy: { attemptNumber: "desc" },
+      });
+      if (!existingAttempt) {
+        throw new Error("Run is already running without an in-flight attempt");
+      }
+
+      return {
+        projectId: run.projectId,
+        sessionId: run.sessionId,
+        attemptId: existingAttempt.id,
+        attemptNumber: existingAttempt.attemptNumber,
+        startedNow: false,
+      };
+    }
+
+    if (run.status !== "QUEUED") {
+      throw new Error(`Cannot start run with status ${run.status}`);
+    }
+
+    if (queueState?.state === "BLOCKED") {
+      throw new Error("Project queue is blocked");
+    }
+    if (
+      queueState?.state === "RUNNING" &&
+      queueState.activeRunId !== run.id
+    ) {
+      throw new Error("Project already has an active run");
+    }
+
     const now = new Date();
     const attemptNumber = run.lastAttemptNumber + 1;
+    await reserveProjectQueueForRun(tx, {
+      projectId: run.projectId,
+      runId: run.id,
+    });
+    const updatedRun = await tx.agentRun.updateMany({
+      where: { id: run.id, status: "QUEUED" },
+      data: {
+        status: "RUNNING",
+        startedAt: now,
+        lastAttemptNumber: attemptNumber,
+      },
+    });
+    if (updatedRun.count !== 1) {
+      throw new Error("Run is no longer queued");
+    }
+
     const attempt = await tx.agentRunAttempt.create({
       data: {
         runId: run.id,
@@ -101,45 +167,25 @@ export async function markRunStarting(
       select: { id: true },
     });
 
-    await tx.agentRun.update({
-      where: { id: run.id },
-      data: {
-        status: "RUNNING",
-        startedAt: now,
-        lastAttemptNumber: attemptNumber,
-      },
-    });
-    await tx.projectQueueState.upsert({
-      where: { projectId: run.projectId },
-      create: {
-        projectId: run.projectId,
-        state: "RUNNING",
-        activeRunId: run.id,
-      },
-      update: {
-        state: "RUNNING",
-        activeRunId: run.id,
-        blockedRunId: null,
-        blockedAt: null,
-      },
-    });
-
     return {
       projectId: run.projectId,
       sessionId: run.sessionId,
       attemptId: attempt.id,
       attemptNumber,
+      startedNow: true,
     };
   });
 
-  await appendRunEvent({
-    projectId: result.projectId,
-    sessionId: result.sessionId,
-    runId,
-    attemptId: result.attemptId,
-    type: "STATUS",
-    payload: { status: "RUNNING", attemptNumber: result.attemptNumber },
-  });
+  if (result.startedNow) {
+    await appendRunEvent({
+      projectId: result.projectId,
+      sessionId: result.sessionId,
+      runId,
+      attemptId: result.attemptId,
+      type: "STATUS",
+      payload: { status: "RUNNING", attemptNumber: result.attemptNumber },
+    });
+  }
 
   return { runId, attemptId: result.attemptId };
 }
@@ -157,32 +203,56 @@ export async function markRunSucceeded(input: {
         sessionId: true,
         runtime: true,
         modelId: true,
+        status: true,
       },
+    });
+    await assertRunCompletionIsCurrent(tx, {
+      projectId: run.projectId,
+      runId: input.runId,
+      runStatus: run.status,
+      attemptId: input.attemptId,
     });
     const now = new Date();
 
-    await tx.agentRunAttempt.update({
-      where: { id: input.attemptId },
+    const updatedAttempt = await tx.agentRunAttempt.updateMany({
+      where: {
+        id: input.attemptId,
+        runId: input.runId,
+        status: { in: [...IN_FLIGHT_ATTEMPT_STATUSES] },
+      },
       data: {
         status: "SUCCEEDED",
         finishedAt: now,
         exitCode: 0,
       },
     });
-    await tx.agentRun.update({
-      where: { id: input.runId },
+    assertSingleUpdate(updatedAttempt.count, "Run attempt is not in flight");
+
+    const updatedRun = await tx.agentRun.updateMany({
+      where: { id: input.runId, status: "RUNNING" },
       data: {
         status: "SUCCEEDED",
         finishedAt: now,
       },
     });
-    await tx.projectQueueState.update({
-      where: { projectId: run.projectId },
+    assertSingleUpdate(updatedRun.count, "Cannot complete run with stale status");
+
+    const updatedQueueState = await tx.projectQueueState.updateMany({
+      where: {
+        projectId: run.projectId,
+        state: "RUNNING",
+        activeRunId: input.runId,
+      },
       data: {
         state: "IDLE",
         activeRunId: null,
       },
     });
+    assertSingleUpdate(
+      updatedQueueState.count,
+      "Run is not the active project run",
+    );
+
     await tx.message.create({
       data: {
         projectId: run.projectId,
@@ -224,12 +294,23 @@ export async function markRunFailed(input: {
       select: {
         projectId: true,
         sessionId: true,
+        status: true,
       },
+    });
+    await assertRunCompletionIsCurrent(tx, {
+      projectId: run.projectId,
+      runId: input.runId,
+      runStatus: run.status,
+      attemptId: input.attemptId,
     });
     const now = new Date();
 
-    await tx.agentRunAttempt.update({
-      where: { id: input.attemptId },
+    const updatedAttempt = await tx.agentRunAttempt.updateMany({
+      where: {
+        id: input.attemptId,
+        runId: input.runId,
+        status: { in: [...IN_FLIGHT_ATTEMPT_STATUSES] },
+      },
       data: {
         status,
         finishedAt: now,
@@ -237,30 +318,35 @@ export async function markRunFailed(input: {
         exitCode,
       },
     });
-    await tx.agentRun.update({
-      where: { id: input.runId },
+    assertSingleUpdate(updatedAttempt.count, "Run attempt is not in flight");
+
+    const updatedRun = await tx.agentRun.updateMany({
+      where: { id: input.runId, status: "RUNNING" },
       data: {
         status,
         finishedAt: now,
         blockedReason: input.message,
       },
     });
-    await tx.projectQueueState.upsert({
-      where: { projectId: run.projectId },
-      create: {
+    assertSingleUpdate(updatedRun.count, "Cannot complete run with stale status");
+
+    const updatedQueueState = await tx.projectQueueState.updateMany({
+      where: {
         projectId: run.projectId,
-        state: "BLOCKED",
-        activeRunId: null,
-        blockedRunId: input.runId,
-        blockedAt: now,
+        state: "RUNNING",
+        activeRunId: input.runId,
       },
-      update: {
+      data: {
         state: "BLOCKED",
         activeRunId: null,
         blockedRunId: input.runId,
         blockedAt: now,
       },
     });
+    assertSingleUpdate(
+      updatedQueueState.count,
+      "Run is not the active project run",
+    );
 
     return {
       projectId: run.projectId,
@@ -279,6 +365,111 @@ export async function markRunFailed(input: {
       message: input.message,
     },
   });
+}
+
+async function reserveProjectQueueForRun(
+  tx: QueueTransaction,
+  input: { projectId: string; runId: string },
+): Promise<void> {
+  const queueState = await tx.projectQueueState.findUnique({
+    where: { projectId: input.projectId },
+    select: { state: true, activeRunId: true },
+  });
+
+  if (!queueState) {
+    await tx.projectQueueState.create({
+      data: {
+        projectId: input.projectId,
+        state: "RUNNING",
+        activeRunId: input.runId,
+      },
+    });
+    return;
+  }
+
+  if (queueState.state === "BLOCKED") {
+    throw new Error("Project queue is blocked");
+  }
+
+  const reserved = await tx.projectQueueState.updateMany({
+    where: {
+      projectId: input.projectId,
+      state: "IDLE",
+      activeRunId: null,
+    },
+    data: {
+      state: "RUNNING",
+      activeRunId: input.runId,
+      blockedRunId: null,
+      blockedAt: null,
+    },
+  });
+  if (reserved.count !== 1) {
+    throw new Error("Project already has an active run");
+  }
+}
+
+async function appendRunEventBestEffort(input: {
+  runId: string;
+  attemptId?: string | null;
+  projectId: string;
+  sessionId: string;
+  type: Parameters<typeof appendRunEvent>[0]["type"];
+  agentId?: string | null;
+  payload: Prisma.InputJsonValue;
+}): Promise<void> {
+  try {
+    await appendRunEvent(input);
+  } catch {
+    // The durable queued run is the source of truth; queue recovery must not
+    // rely on the advisory status event being present.
+  }
+}
+
+async function assertRunCompletionIsCurrent(
+  tx: QueueTransaction,
+  input: {
+    projectId: string;
+    runId: string;
+    runStatus: string;
+    attemptId: string;
+  },
+): Promise<void> {
+  if (input.runStatus !== "RUNNING") {
+    throw new Error(`Cannot complete run with status ${input.runStatus}`);
+  }
+
+  const queueState = await tx.projectQueueState.findUnique({
+    where: { projectId: input.projectId },
+    select: { state: true, activeRunId: true },
+  });
+  if (
+    queueState?.state !== "RUNNING" ||
+    queueState.activeRunId !== input.runId
+  ) {
+    throw new Error("Run is not the active project run");
+  }
+
+  const attempt = await tx.agentRunAttempt.findUniqueOrThrow({
+    where: { id: input.attemptId },
+    select: { runId: true, status: true },
+  });
+  if (attempt.runId !== input.runId) {
+    throw new Error("Run attempt does not belong to run");
+  }
+  if (!isInFlightAttemptStatus(attempt.status)) {
+    throw new Error("Run attempt is not in flight");
+  }
+}
+
+function isInFlightAttemptStatus(status: string): boolean {
+  return status === "STARTING" || status === "RUNNING";
+}
+
+function assertSingleUpdate(count: number, message: string): void {
+  if (count !== 1) {
+    throw new Error(message);
+  }
 }
 
 async function createQueuedRun(input: {
