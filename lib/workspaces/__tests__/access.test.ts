@@ -104,6 +104,25 @@ describe("workspace access helpers", () => {
     })).toBe(1);
   });
 
+  it("promotes existing default workspace membership to owner", async () => {
+    const owner = await createUser("owner", "Katherine Johnson");
+    const workspace = await prisma.workspace.create({
+      data: { id: `default-${owner.id}`, name: "Existing workspace" },
+      select: { id: true, name: true },
+    });
+    await prisma.workspaceMember.create({
+      data: { workspaceId: workspace.id, userId: owner.id, role: "MEMBER" },
+    });
+
+    const repairedWorkspace = await ensureDefaultWorkspaceForUser(owner);
+
+    expect(repairedWorkspace).toEqual(workspace);
+    await expect(prisma.workspaceMember.findUniqueOrThrow({
+      where: { workspaceId_userId: { workspaceId: workspace.id, userId: owner.id } },
+      select: { role: true },
+    })).resolves.toEqual({ role: "OWNER" });
+  });
+
   it("allows workspace members to access projects", async () => {
     const owner = await createUser("owner");
     const member = await createUser("member");

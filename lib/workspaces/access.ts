@@ -21,7 +21,6 @@ export async function ensureDefaultWorkspaceForUser(user: {
     create: {
       id: defaultWorkspaceId,
       name: defaultWorkspaceName,
-      members: { create: { userId: user.id, role: "OWNER" } },
     },
     update: {},
     select: { id: true, name: true },
