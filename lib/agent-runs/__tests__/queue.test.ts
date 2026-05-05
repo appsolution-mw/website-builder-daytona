@@ -594,6 +594,28 @@ describe("agent run queue transitions", () => {
     ).rejects.toThrow("Run does not belong to project");
   });
 
+  it("retries only the terminal run blocking the project queue", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const { attemptId } = await markRunStarting(runId);
+    await markRunFailed({
+      runId,
+      attemptId,
+      message: "Worker failed",
+    });
+    await skipAgentRun({ projectId: project.id, runId });
+
+    await expect(
+      retryAgentRun({ projectId: project.id, runId }),
+    ).rejects.toThrow("Project queue is not blocked by run");
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({
+      status: "FAILED",
+      blockedReason: "Worker failed",
+    });
+  });
+
   it("skips only the run blocking the project queue", async () => {
     const { project, runId } = await enqueueFixtureRun();
     const { attemptId } = await markRunStarting(runId);

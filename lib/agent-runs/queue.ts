@@ -412,7 +412,7 @@ export async function retryAgentRun(input: {
     });
     assertSingleUpdate(updatedRun.count, "Run is no longer retryable");
 
-    await tx.projectQueueState.updateMany({
+    const updatedQueueState = await tx.projectQueueState.updateMany({
       where: {
         projectId: input.projectId,
         state: "BLOCKED",
@@ -425,6 +425,10 @@ export async function retryAgentRun(input: {
         blockedAt: null,
       },
     });
+    assertSingleUpdate(
+      updatedQueueState.count,
+      "Project queue is not blocked by run",
+    );
 
     return {
       projectId: run.projectId,

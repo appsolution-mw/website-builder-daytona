@@ -276,6 +276,23 @@ describe("/api/projects/[id]/runs", () => {
     expect(requestProjectQueueDrainMock).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when retrying a terminal run that is not blocking the queue", async () => {
+    requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
+    requireAccessibleProjectMock.mockResolvedValue(PROJECT);
+    agentRunFindFirstMock.mockResolvedValue({ id: "run-1", status: "FAILED" });
+    retryAgentRunMock.mockRejectedValue(new Error("Project queue is not blocked by run"));
+
+    const res = await retryPOST(new Request("http://localhost/api/projects/project-1/runs/run-1/retry", {
+      method: "POST",
+    }), runContext());
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "run is not blocking the project queue",
+    });
+    expect(requestProjectQueueDrainMock).not.toHaveBeenCalled();
+  });
+
   it("skips a blocking run and triggers the drain", async () => {
     requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
     requireAccessibleProjectMock.mockResolvedValue(PROJECT);

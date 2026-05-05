@@ -29,7 +29,20 @@ export async function POST(
     return NextResponse.json({ error: "run is not retryable" }, { status: 400 });
   }
 
-  await retryAgentRun({ projectId: project.id, runId });
+  try {
+    await retryAgentRun({ projectId: project.id, runId });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Project queue is not blocked by run"
+    ) {
+      return NextResponse.json(
+        { error: "run is not blocking the project queue" },
+        { status: 400 },
+      );
+    }
+    throw error;
+  }
   await requestProjectQueueDrain(project.id);
 
   return NextResponse.json({ ok: true });
