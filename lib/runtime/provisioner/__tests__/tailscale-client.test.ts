@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createTailscaleClient } from "../tailscale-client";
 
 describe("createTailscaleClient", () => {
-  it("createAuthKey posts key capabilities and returns the auth key", async () => {
+  it("createAuthKey posts key capabilities and returns the auth key details", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
-      new Response(JSON.stringify({ key: "tskey-auth-123" }), { status: 200 }),
+      new Response(JSON.stringify({ id: "k123", key: "tskey-auth-123" }), { status: 200 }),
     );
     const client = createTailscaleClient({
       apiKey: "tailscale-key",
@@ -36,7 +36,23 @@ describe("createTailscaleClient", () => {
         },
       },
     });
-    expect(key).toBe("tskey-auth-123");
+    expect(key).toEqual({ id: "k123", key: "tskey-auth-123" });
+  });
+
+  it("deleteAuthKey deletes by key id and treats missing keys as already deleted", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
+    const client = createTailscaleClient({
+      apiKey: "tailscale-key",
+      tailnet: "example.com",
+      fetchImpl: fetchMock,
+    });
+
+    await expect(client.deleteAuthKey("k123")).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.tailscale.com/api/v2/tailnet/example.com/keys/k123",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   it("findDeviceIpByHostname returns the first Tailscale IPv4 address", async () => {

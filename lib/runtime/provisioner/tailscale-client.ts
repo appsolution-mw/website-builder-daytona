@@ -6,8 +6,14 @@ export interface TailscaleClient {
     tags: string[];
     reusable: boolean;
     expirySeconds: number;
-  }): Promise<string>;
+  }): Promise<TailscaleAuthKey>;
+  deleteAuthKey(keyId: string): Promise<void>;
   findDeviceIpByHostname(hostname: string): Promise<string | null>;
+}
+
+export interface TailscaleAuthKey {
+  id: string | null;
+  key: string;
 }
 
 export function createTailscaleClient(args: {
@@ -23,7 +29,7 @@ export function createTailscaleClient(args: {
   };
 
   return {
-    async createAuthKey(keyArgs): Promise<string> {
+    async createAuthKey(keyArgs): Promise<TailscaleAuthKey> {
       const response = await fetchFn(`${baseUrl}/keys`, {
         method: "POST",
         headers,
@@ -47,7 +53,17 @@ export function createTailscaleClient(args: {
       }
 
       const parsed = await readJson<TailscaleAuthKeyResponse>(response);
-      return parsed.key;
+      return { id: parsed.id ?? null, key: parsed.key };
+    },
+    async deleteAuthKey(keyId): Promise<void> {
+      const response = await fetchFn(`${baseUrl}/keys/${encodeURIComponent(keyId)}`, {
+        method: "DELETE",
+        headers,
+      });
+
+      if (response.ok || response.status === 404) return;
+
+      throw new Error(`Tailscale deleteAuthKey failed with HTTP ${response.status}`);
     },
     async findDeviceIpByHostname(hostname): Promise<string | null> {
       const response = await fetchFn(`${baseUrl}/devices`, {
@@ -67,6 +83,7 @@ export function createTailscaleClient(args: {
 }
 
 interface TailscaleAuthKeyResponse {
+  id?: string | null;
   key: string;
 }
 
