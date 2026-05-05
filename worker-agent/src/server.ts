@@ -201,6 +201,9 @@ async function forwardBrokerCommand(args: {
   }
 
   const status = await args.docker.getStatus(args.sandboxId);
+  if (status.status !== "running") {
+    return { ok: false, statusCode: 409, error: "sandbox-not-running" };
+  }
   if (typeof status.brokerPort !== "number") {
     return { ok: false, statusCode: 409, error: "broker-port-missing" };
   }

@@ -281,6 +281,29 @@ describe("worker-agent server", () => {
     expect(res.json().error).toBe("broker-port-missing");
   });
 
+  it("POST /sandboxes/:id/queue/drain refuses non-running sandboxes without contacting broker", async () => {
+    const { port } = await startBrokerCommandServer(200, { ok: true });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "stopped", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", body),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("sandbox-not-running");
+    expect(brokerRequests).toEqual([]);
+  });
+
   it("POST /sandboxes/:id/runs/:runId/cancel reports broker failure", async () => {
     const { port } = await startBrokerCommandServer(503, { error: "busy" });
     const app2 = await buildServer({

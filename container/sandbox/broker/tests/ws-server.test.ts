@@ -821,6 +821,32 @@ describe("broker ws server", () => {
     expect(drained).toEqual(["p1"]);
   });
 
+  it("returns JSON 500 when an internal queue drain hook throws", async () => {
+    process.env.BROKER_TOKEN = "broker-secret";
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      onDrainProjectQueue: async () => {
+        throw new Error("drain failed");
+      },
+    });
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 500);
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/internal/projects/p1/queue/drain`, {
+        method: "POST",
+        headers: { authorization: "Bearer broker-secret" },
+        signal: abort.signal,
+      });
+
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "internal" });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
   it("calls the run cancel hook for valid internal requests", async () => {
     process.env.BROKER_TOKEN = "broker-secret";
     const canceled: Array<{ projectId: string; runId: string }> = [];

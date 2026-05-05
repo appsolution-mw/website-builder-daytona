@@ -231,7 +231,11 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   console.log(`[broker] default agent runtime=${agentRuntimeFromEnv()}`);
 
   const server = createServer((req, res) => {
-    void handleInternalHttpRequest(req, res, opts);
+    void handleInternalHttpRequest(req, res, opts).catch(() => {
+      if (!res.writableEnded) {
+        writeJson(res, 500, { error: "internal" });
+      }
+    });
   });
   const wss = new WebSocketServer({ server });
 
