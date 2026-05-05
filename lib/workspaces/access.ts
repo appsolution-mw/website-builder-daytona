@@ -7,6 +7,8 @@ export async function ensureDefaultWorkspaceForUser(user: {
   email: string;
   name?: string | null;
 }): Promise<{ id: string; name: string }> {
+  const defaultWorkspaceId = `default-${user.id}`;
+  const defaultWorkspaceName = user.name?.trim() || user.email || "My workspace";
   const existing = await prisma.workspace.findFirst({
     where: { members: { some: { userId: user.id, role: "OWNER" } } },
     select: { id: true, name: true },
@@ -14,13 +16,24 @@ export async function ensureDefaultWorkspaceForUser(user: {
   });
   if (existing) return existing;
 
-  return prisma.workspace.create({
-    data: {
-      name: user.name?.trim() || user.email || "My workspace",
+  const workspace = await prisma.workspace.upsert({
+    where: { id: defaultWorkspaceId },
+    create: {
+      id: defaultWorkspaceId,
+      name: defaultWorkspaceName,
       members: { create: { userId: user.id, role: "OWNER" } },
     },
+    update: {},
     select: { id: true, name: true },
   });
+
+  await prisma.workspaceMember.upsert({
+    where: { workspaceId_userId: { workspaceId: workspace.id, userId: user.id } },
+    create: { workspaceId: workspace.id, userId: user.id, role: "OWNER" },
+    update: { role: "OWNER" },
+  });
+
+  return workspace;
 }
 
 export async function findAccessibleProject(input: {

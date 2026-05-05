@@ -89,6 +89,21 @@ describe("workspace access helpers", () => {
     expect(ownedWorkspaces).toHaveLength(1);
   });
 
+  it("creates one default owner workspace under concurrent first requests", async () => {
+    const owner = await createUser("owner", "Grace Hopper");
+
+    const [first, second] = await Promise.all([
+      ensureDefaultWorkspaceForUser(owner),
+      ensureDefaultWorkspaceForUser(owner),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(await prisma.workspace.count({ where: { id: first.id } })).toBe(1);
+    expect(await prisma.workspaceMember.count({
+      where: { workspaceId: first.id, userId: owner.id, role: "OWNER" },
+    })).toBe(1);
+  });
+
   it("allows workspace members to access projects", async () => {
     const owner = await createUser("owner");
     const member = await createUser("member");
