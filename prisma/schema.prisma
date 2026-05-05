@@ -7,23 +7,50 @@ datasource db {
 }
 
 model User {
-  id                  String               @id
-  name                String               @default("")
-  email               String               @unique
-  emailVerified       Boolean              @default(false)
-  image               String?
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  accounts            Account[]
-  authSessions        AuthSession[]
-  projects            Project[]
-  githubInstallations GitHubInstallation[]
+  id                   String               @id
+  name                 String               @default("")
+  email                String               @unique
+  emailVerified        Boolean              @default(false)
+  image                String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  accounts             Account[]
+  authSessions         AuthSession[]
+  projects             Project[]
+  githubInstallations  GitHubInstallation[]
+  workspaceMemberships WorkspaceMember[]
+  createdAgentRuns     AgentRun[]
+}
+
+model Workspace {
+  id        String            @id @default(cuid())
+  name      String
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  members   WorkspaceMember[]
+  projects  Project[]
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([workspaceId, userId])
+  @@index([userId])
 }
 
 model Project {
   id                  String              @id @default(cuid())
   ownerId             String
   owner               User                @relation(fields: [ownerId], references: [id])
+  workspaceId         String?
+  workspace           Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name                String
   status              ProjectStatus       @default(PROVISIONING)
   agentRuntime        AgentRuntime        @default(CLAUDE_CODE)
@@ -52,6 +79,9 @@ model Project {
   sessionRuntimeStates SessionRuntimeState[]
   messages             Message[]
   tokenUsages          TokenUsage[]
+  queueState           ProjectQueueState?
+  agentRuns            AgentRun[]
+  runEvents            AgentRunEvent[]
   environment          ProjectEnvironment?
   agentConfig          ProjectAgentConfig?
   skillEnablements     AgentSkillEnablement[]
@@ -60,8 +90,90 @@ model Project {
   githubRepository     GitHubRepository?     @relation(fields: [githubRepositoryId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
+  @@index([workspaceId])
   @@index([githubInstallationId])
   @@index([githubRepositoryId])
+}
+
+model ProjectQueueState {
+  projectId    String             @id
+  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  state        ProjectQueueStatus @default(IDLE)
+  activeRunId  String?
+  blockedRunId String?
+  blockedAt    DateTime?
+  updatedAt    DateTime           @updatedAt
+  createdAt    DateTime           @default(now())
+}
+
+model AgentRun {
+  id                String            @id @default(cuid())
+  projectId         String
+  project           Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId         String
+  session           Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userMessageId     String?
+  userMessage       Message?          @relation("AgentRunUserMessage", fields: [userMessageId], references: [id], onDelete: SetNull)
+  createdById       String
+  createdBy         User              @relation(fields: [createdById], references: [id])
+  status            AgentRunStatus    @default(QUEUED)
+  runtime           AgentRuntime
+  providerSessionId String
+  modelId           String?
+  queueSequence     Int
+  queuedAt          DateTime          @default(now())
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  blockedReason     String?
+  lastAttemptNumber Int               @default(0)
+  attempts          AgentRunAttempt[]
+  events            AgentRunEvent[]
+
+  @@unique([projectId, queueSequence])
+  @@index([projectId, status, queueSequence])
+  @@index([sessionId, queuedAt])
+}
+
+model AgentRunAttempt {
+  id                     String                @id @default(cuid())
+  runId                  String
+  run                    AgentRun              @relation(fields: [runId], references: [id], onDelete: Cascade)
+  attemptNumber          Int
+  status                 AgentRunAttemptStatus @default(STARTING)
+  startedAt              DateTime?
+  finishedAt             DateTime?
+  exitCode               Int?
+  errorMessage           String?
+  baseCommitSha          String?
+  gitStatusBefore        String?               @db.Text
+  gitDiffStatBefore      String?               @db.Text
+  providerConversationId String?
+  providerResumeState    Json?
+  events                 AgentRunEvent[]
+
+  @@unique([runId, attemptNumber])
+  @@index([runId, status])
+}
+
+model AgentRunEvent {
+  id        String            @id @default(cuid())
+  runId     String
+  run       AgentRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  attemptId String?
+  attempt   AgentRunAttempt?  @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  projectId String
+  project   Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId String
+  session   Session           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sequence  Int
+  type      AgentRunEventType
+  agentId   String?
+  payload   Json
+  createdAt DateTime          @default(now())
+
+  @@unique([projectId, sequence])
+  @@index([runId, sequence])
+  @@index([sessionId, sequence])
 }
 
 model Account {
@@ -242,6 +354,44 @@ enum EnablementState {
   INHERITED
 }
 
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum AgentRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AgentRunAttemptStatus {
+  STARTING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum AgentRunEventType {
+  STATUS
+  CHUNK
+  TOOL_USE
+  USAGE
+  DONE
+  ERROR
+  FILE_CHANGED
+}
+
+enum ProjectQueueStatus {
+  IDLE
+  RUNNING
+  BLOCKED
+}
+
 enum ProjectStatus {
   PROVISIONING
   RUNNING
@@ -265,22 +415,25 @@ model Session {
   lastMessageAt  DateTime              @default(now())
   messages       Message[]
   runtimeStates  SessionRuntimeState[]
+  agentRuns      AgentRun[]
+  runEvents      AgentRunEvent[]
 }
 
 model Message {
-  id        String        @id @default(cuid())
-  projectId String
-  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sessionId String?
-  session   Session?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  turnId    String?
-  agentId   String?
-  runtime   AgentRuntime?
-  provider  String?
-  modelId   String?
-  role      MessageRole
-  content   String
-  createdAt DateTime      @default(now())
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessionId       String?
+  session         Session?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  turnId          String?
+  agentId         String?
+  runtime         AgentRuntime?
+  provider        String?
+  modelId         String?
+  role            MessageRole
+  content         String
+  createdAt       DateTime      @default(now())
+  agentRunUserFor AgentRun[]    @relation("AgentRunUserMessage")
 
   @@index([projectId, createdAt])
   @@index([sessionId, createdAt])
