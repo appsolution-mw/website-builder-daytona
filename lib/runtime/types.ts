@@ -68,6 +68,7 @@ export type SandboxStatus =
  */
 export interface WorkerRecord {
   id: string;
+  name?: string;
   tailscaleHostname: string;
   tailscaleIp: string;
   provider: string;       // 'hetzner' | 'vultr' | 'linode' | 'fake' | …
@@ -75,6 +76,9 @@ export interface WorkerRecord {
   region: string;         // provider-specific region code
   capacity: number;       // max concurrent sandboxes
   status: WorkerStatus;
+  serverType?: string | null;
+  provisioningError?: string | null;
+  readyAt?: Date | null;
 }
 
 export type WorkerStatus =
@@ -106,6 +110,7 @@ export interface ProvisionArgs {
   region: string;
   size: string;            // provider-specific size code, e.g. 'ccx33'
   capacity: number;        // how many sandboxes this worker should be sized for
+  name?: string;
 }
 
 /**

@@ -20,8 +20,8 @@ const pendingProjectDrains = new Set<string>();
 async function agentClientForProject(
   projectId: string,
 ): Promise<ProjectAgentTarget | null> {
-  const sandbox = await prisma.workerSandbox.findUnique({
-    where: { projectId },
+  const sandbox = await prisma.workerSandbox.findFirst({
+    where: { projectId, status: { not: "DESTROYED" } },
     select: {
       id: true,
       worker: {

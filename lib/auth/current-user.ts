@@ -58,3 +58,44 @@ export async function requireCurrentUserFromRequest(request: Request): Promise<C
     response: NextResponse.json({ error: "not signed in" }, { status: 401 }),
   };
 }
+
+export async function requireAdminUserFromRequest(request: Request): Promise<CurrentUserResult> {
+  const currentUser = await requireCurrentUserFromRequest(request);
+  if (!currentUser.ok) return currentUser;
+  if (isAdminUser(currentUser.user)) return currentUser;
+  return {
+    ok: false,
+    response: NextResponse.json({ error: "admin access required" }, { status: 403 }),
+  };
+}
+
+export function isAdminUser(user: CurrentUser): boolean {
+  const adminUserIds = csvEnv("ADMIN_USER_IDS");
+  if (adminUserIds.has(user.id.toLowerCase())) return true;
+
+  const email = user.email?.trim().toLowerCase();
+  if (email && csvEnv("ADMIN_EMAILS").has(email)) return true;
+
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.DEV_USER_ID &&
+    user.id === process.env.DEV_USER_ID &&
+    adminUserIds.size === 0 &&
+    csvEnv("ADMIN_EMAILS").size === 0
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function csvEnv(name: "ADMIN_USER_IDS" | "ADMIN_EMAILS"): Set<string> {
+  const value = process.env[name];
+  if (!value) return new Set();
+  return new Set(
+    value
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}

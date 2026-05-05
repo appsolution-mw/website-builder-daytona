@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "../../db/client";
+import { RuntimeError } from "../errors";
 import type {
   PickWorkerArgs,
   Runtime,
@@ -19,24 +20,47 @@ export interface CreateWorkerPoolRuntimeArgs {
   sandboxImage: string;
   /** Region to ask the provisioner for if no worker exists. */
   defaultRegion?: string;
+  /** Provider-specific size passed to provisioner.provision. */
+  defaultSize?: string;
   /** Per-worker capacity passed to provisioner.provision. */
   defaultCapacity?: number;
+  /** Provision a new worker when no ready worker has capacity. Defaults to true. */
+  autoProvisionWhenFull?: boolean;
   /** Forwarded to sandbox container env (optional). */
   brokerEnv?: () => Record<string, string>;
   /** Hostname clients should use for broker/preview URLs. Defaults to worker.tailscaleIp. */
   publicHostFor?: (worker: WorkerRecord) => string;
+  /** Optional public route hook for provider-managed project preview URLs. */
+  projectRouteFor?: (args: ProjectRouteArgs) => Promise<{ previewUrl: string }>;
+  /** Optional cleanup hook for provider-managed project preview routes. */
+  deleteProjectRouteFor?: (args: DeleteProjectRouteArgs) => Promise<void>;
+}
+
+export interface ProjectRouteArgs {
+  projectId: string;
+  sandboxId: string;
+  worker: WorkerRecord;
+  previewPort: number;
+}
+
+export interface DeleteProjectRouteArgs {
+  projectId: string;
+  sandboxId: string;
 }
 
 export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runtime {
   return {
     async spawnProjectSandbox(spawn: SpawnArgs): Promise<SandboxInfo> {
-      const worker = await ensureWorker(args.scheduler, args.provisioner, {
+      const defaults = {
         defaultRegion: args.defaultRegion ?? "local",
+        defaultSize: args.defaultSize ?? "local",
         defaultCapacity: args.defaultCapacity ?? 8,
-      });
+        autoProvisionWhenFull: args.autoProvisionWhenFull ?? true,
+      };
+      const reservation = await reserveSandboxSlot(args, defaults, spawn.projectId);
+      const { worker, sandboxId, brokerToken, ws } = reservation;
       const agent = args.agentClientFor(worker);
-      const sandboxId = randomBytes(16).toString("hex");
-      const brokerToken = randomBytes(32).toString("hex");
+      let sandboxCreatedOnWorker = false;
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
@@ -49,19 +73,6 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       if (spawn.openhandsFiles && spawn.openhandsFiles.length > 0) {
         env.OPENHANDS_FILES_B64 = Buffer.from(JSON.stringify(spawn.openhandsFiles), "utf8").toString("base64");
       }
-      // Reserve DB row up-front so a concurrent spawn for the same project hits
-      // the unique constraint and we know which one to keep.
-      const ws = await prisma.workerSandbox.create({
-        data: {
-          id: sandboxId,
-          workerId: worker.id,
-          projectId: spawn.projectId,
-          containerId: "pending",
-          brokerPort: 0,
-          previewPort: 0,
-          status: "SPAWNING",
-        },
-      });
       try {
         const created = await agent.createSandbox({
           sandboxId,
@@ -70,6 +81,7 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
           env,
           brokerToken,
         });
+        sandboxCreatedOnWorker = true;
         await prisma.workerSandbox.update({
           where: { id: sandboxId },
           data: {
@@ -86,14 +98,28 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
           },
         });
         const publicHost = args.publicHostFor?.(worker) ?? worker.tailscaleIp;
+        const routed = await args.projectRouteFor?.({
+          projectId: spawn.projectId,
+          sandboxId,
+          worker,
+          previewPort: created.previewPort,
+        });
         return {
           sandboxId,
           brokerUrl: `ws://${publicHost}:${created.brokerPort}/?token=${brokerToken}`,
           brokerPreviewToken: brokerToken,
-          previewUrl: `http://${publicHost}:${created.previewPort}`,
+          previewUrl: routed?.previewUrl ?? `http://${publicHost}:${created.previewPort}`,
         };
       } catch (err) {
-        // Rollback: delete the WorkerSandbox row so retries can proceed cleanly.
+        if (sandboxCreatedOnWorker) {
+          await args.deleteProjectRouteFor?.({
+            projectId: spawn.projectId,
+            sandboxId,
+          }).catch(() => {});
+          await agent.destroySandbox(sandboxId).catch(() => {});
+        }
+        // Rollback: delete token and WorkerSandbox row so retries can proceed cleanly.
+        await prisma.sandboxToken.deleteMany({ where: { sandboxId } }).catch(() => {});
         await prisma.workerSandbox.delete({ where: { id: ws.id } }).catch(() => {});
         throw err;
       }
@@ -102,6 +128,10 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
     async destroyProjectSandbox(sandboxId: string): Promise<void> {
       const ws = await prisma.workerSandbox.findUnique({ where: { id: sandboxId } });
       if (!ws) return;
+      await args.deleteProjectRouteFor?.({
+        projectId: ws.projectId,
+        sandboxId,
+      }).catch(() => {});
       const worker = await prisma.worker.findUnique({ where: { id: ws.workerId } });
       if (!worker) {
         // Worker is gone (decommissioned). Just clean DB.
@@ -125,6 +155,75 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       return mapStatus(got.status);
     },
   };
+}
+
+async function reserveSandboxSlot(
+  args: CreateWorkerPoolRuntimeArgs,
+  defaults: {
+    defaultRegion: string;
+    defaultSize: string;
+    defaultCapacity: number;
+    autoProvisionWhenFull: boolean;
+  },
+  projectId: string,
+): Promise<{
+  worker: WorkerRecord;
+  sandboxId: string;
+  brokerToken: string;
+  ws: { id: string };
+}> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const worker = await ensureWorker(args.scheduler, args.provisioner, defaults);
+    const sandboxId = randomBytes(16).toString("hex");
+    const brokerToken = randomBytes(32).toString("hex");
+    const ws = await reserveWorkerSandbox(worker, sandboxId, projectId);
+    if (ws) {
+      return { worker, sandboxId, brokerToken, ws };
+    }
+  }
+
+  throw new RuntimeError(
+    "NO_WORKER_CAPACITY",
+    "No ready worker has a free project slot",
+  );
+}
+
+async function reserveWorkerSandbox(
+  worker: WorkerRecord,
+  sandboxId: string,
+  projectId: string,
+): Promise<{ id: string } | null> {
+  return prisma.$transaction(async (tx) => {
+    const lockedWorkers = await tx.$queryRaw<Array<{ id: string; capacity: number; status: string }>>`
+      SELECT id, capacity, status
+      FROM "Worker"
+      WHERE id = ${worker.id}
+      FOR UPDATE
+    `;
+    const [lockedWorker] = lockedWorkers;
+    if (!lockedWorker || lockedWorker.status !== "READY") return null;
+
+    const usedSlots = await tx.workerSandbox.count({
+      where: {
+        workerId: worker.id,
+        status: { in: ["SPAWNING", "RUNNING", "STOPPED"] },
+      },
+    });
+    if (usedSlots >= lockedWorker.capacity) return null;
+
+    return tx.workerSandbox.create({
+      data: {
+        id: sandboxId,
+        workerId: worker.id,
+        projectId,
+        containerId: "pending",
+        brokerPort: 0,
+        previewPort: 0,
+        status: "SPAWNING",
+      },
+      select: { id: true },
+    });
+  });
 }
 
 function sourceEnv(source: SpawnArgs["source"]): Record<string, string> {
@@ -161,14 +260,25 @@ function workerRecord(w: {
 async function ensureWorker(
   scheduler: Scheduler,
   provisioner: WorkerProvisioner,
-  defaults: { defaultRegion: string; defaultCapacity: number },
+  defaults: {
+    defaultRegion: string;
+    defaultSize: string;
+    defaultCapacity: number;
+    autoProvisionWhenFull: boolean;
+  },
 ): Promise<WorkerRecord> {
   const args: PickWorkerArgs = {};
   const picked = await scheduler.pickWorker(args);
   if (picked) return picked;
+  if (!defaults.autoProvisionWhenFull) {
+    throw new RuntimeError(
+      "NO_WORKER_CAPACITY",
+      "No ready worker has a free project slot",
+    );
+  }
   return await provisioner.provision({
     region: defaults.defaultRegion,
-    size: "local",
+    size: defaults.defaultSize,
     capacity: defaults.defaultCapacity,
   });
 }

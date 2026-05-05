@@ -5,8 +5,13 @@ describe("createRuntime factory", () => {
   const originalRuntimeMode = process.env.RUNTIME_MODE;
   const originalDaytonaMode = process.env.DAYTONA_MODE;
   const originalSandboxImage = process.env.SANDBOX_IMAGE;
+  const originalWorkerAgentImage = process.env.WORKER_AGENT_IMAGE;
   const originalHmac = process.env.WORKER_AGENT_HMAC_SECRET;
   const originalDisableEnvFileLoad = process.env.WBD_DISABLE_ENV_FILE_LOAD;
+  const originalHetznerApiToken = process.env.HETZNER_API_TOKEN;
+  const originalTailscaleApiKey = process.env.TAILSCALE_API_KEY;
+  const originalTailscaleTailnet = process.env.TAILSCALE_TAILNET;
+  const originalAppBaseUrl = process.env.APP_BASE_URL;
 
   afterEach(() => {
     if (originalRuntimeMode === undefined) delete process.env.RUNTIME_MODE;
@@ -15,10 +20,20 @@ describe("createRuntime factory", () => {
     else process.env.DAYTONA_MODE = originalDaytonaMode;
     if (originalSandboxImage === undefined) delete process.env.SANDBOX_IMAGE;
     else process.env.SANDBOX_IMAGE = originalSandboxImage;
+    if (originalWorkerAgentImage === undefined) delete process.env.WORKER_AGENT_IMAGE;
+    else process.env.WORKER_AGENT_IMAGE = originalWorkerAgentImage;
     if (originalHmac === undefined) delete process.env.WORKER_AGENT_HMAC_SECRET;
     else process.env.WORKER_AGENT_HMAC_SECRET = originalHmac;
     if (originalDisableEnvFileLoad === undefined) delete process.env.WBD_DISABLE_ENV_FILE_LOAD;
     else process.env.WBD_DISABLE_ENV_FILE_LOAD = originalDisableEnvFileLoad;
+    if (originalHetznerApiToken === undefined) delete process.env.HETZNER_API_TOKEN;
+    else process.env.HETZNER_API_TOKEN = originalHetznerApiToken;
+    if (originalTailscaleApiKey === undefined) delete process.env.TAILSCALE_API_KEY;
+    else process.env.TAILSCALE_API_KEY = originalTailscaleApiKey;
+    if (originalTailscaleTailnet === undefined) delete process.env.TAILSCALE_TAILNET;
+    else process.env.TAILSCALE_TAILNET = originalTailscaleTailnet;
+    if (originalAppBaseUrl === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = originalAppBaseUrl;
     vi.resetModules();
   });
 
@@ -51,9 +66,36 @@ describe("createRuntime factory", () => {
     expect(() => createRuntime()).toThrow(/SANDBOX_IMAGE|WORKER_AGENT_HMAC_SECRET/);
   });
 
-  it("throws for worker-pool-hetzner (not yet implemented)", () => {
+  it("returns WorkerPoolRuntime for worker-pool-hetzner", () => {
     process.env.RUNTIME_MODE = "worker-pool-hetzner";
-    expect(() => createRuntime()).toThrow(/H\.1c\+/);
+    process.env.WBD_DISABLE_ENV_FILE_LOAD = "1";
+    process.env.SANDBOX_IMAGE = "wbd/sandbox:dev";
+    process.env.WORKER_AGENT_IMAGE = "wbd/worker-agent:dev";
+    process.env.WORKER_AGENT_HMAC_SECRET = "x".repeat(32);
+    process.env.HETZNER_API_TOKEN = "hetzner-token";
+    process.env.TAILSCALE_API_KEY = "tailscale-key";
+    process.env.TAILSCALE_TAILNET = "example.ts.net";
+    process.env.APP_BASE_URL = "https://app.example.com";
+
+    const runtime = createRuntime();
+
+    expect(typeof runtime.spawnProjectSandbox).toBe("function");
+  });
+
+  it("throws helpful error if worker-pool-hetzner missing env", () => {
+    process.env.RUNTIME_MODE = "worker-pool-hetzner";
+    process.env.WBD_DISABLE_ENV_FILE_LOAD = "1";
+    delete process.env.SANDBOX_IMAGE;
+    delete process.env.WORKER_AGENT_IMAGE;
+    delete process.env.WORKER_AGENT_HMAC_SECRET;
+    delete process.env.HETZNER_API_TOKEN;
+    delete process.env.TAILSCALE_API_KEY;
+    delete process.env.TAILSCALE_TAILNET;
+    delete process.env.APP_BASE_URL;
+
+    expect(() => createRuntime()).toThrow(
+      /SANDBOX_IMAGE|WORKER_AGENT_IMAGE|WORKER_AGENT_HMAC_SECRET|HETZNER_API_TOKEN|TAILSCALE_API_KEY|TAILSCALE_TAILNET|APP_BASE_URL/,
+    );
   });
 
   it("throws for legacy hetzner-fake/hetzner-cloud with rename hint", () => {

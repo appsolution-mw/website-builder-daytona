@@ -1,6 +1,6 @@
 # Agent Runtime Options
 
-Stand: 2026-04-29.
+Stand: 2026-05-05.
 
 ## Ziel
 
@@ -44,6 +44,62 @@ subscribes to persisted events; reconnects replay missed `AgentRunEvent` rows.
 OpenHands runs use project-scoped conversation persistence under
 `.agent-artifacts/openhands/conversations` so follow-up runs in the same chat
 session can resume provider context.
+
+## Sandbox Runtime Modes
+
+`RUNTIME_MODE` selects where project sandboxes run. The Daytona modes remain
+available; the managed worker-pool modes use the host scheduler, worker-agent,
+and `Worker` / `WorkerSandbox` database records.
+
+```env
+RUNTIME_MODE=daytona-cloud
+RUNTIME_MODE=daytona-fake
+RUNTIME_MODE=worker-pool-local
+RUNTIME_MODE=worker-pool-hetzner
+```
+
+### `worker-pool-hetzner`
+
+Managed Hetzner mode provisions admin-created worker VMs through the Hetzner
+Cloud API, joins them to Tailscale, starts the worker-agent container, and
+assigns new projects to ready workers with free slots. `WORKER_DEFAULT_CAPACITY`
+is the default max-project count for newly created workers; the Admin UI can
+set a per-worker capacity such as `10`.
+
+Required host env:
+
+```env
+RUNTIME_MODE=worker-pool-hetzner
+SANDBOX_IMAGE=ghcr.io/<org>/<sandbox-image>:<tag>
+WORKER_AGENT_IMAGE=ghcr.io/<org>/<worker-agent-image>:<tag>
+WORKER_AGENT_HMAC_SECRET=<32-byte-random-secret>
+APP_BASE_URL=https://<host-app-domain>
+
+HETZNER_API_TOKEN=<hetzner-cloud-api-token>
+HETZNER_DEFAULT_REGION=fsn1
+HETZNER_DEFAULT_SERVER_TYPE=ccx33
+WORKER_DEFAULT_CAPACITY=10
+
+TAILSCALE_API_KEY=<tailscale-api-key>
+TAILSCALE_TAILNET=<tailnet-name>
+```
+
+Optional public preview routing:
+
+```env
+PUBLIC_BASE_DOMAIN=example.com
+CADDY_ADMIN_URL=http://127.0.0.1:2019
+```
+
+When both public-routing env vars are present, project previews use
+`https://<project-public-slug>.PUBLIC_BASE_DOMAIN`; otherwise they fall back to
+the worker Tailnet address and preview port. Cloudflare DNS-01 credentials for
+the wildcard certificate belong to the Caddy deployment. The Next.js app only
+needs `PUBLIC_BASE_DOMAIN` and `CADDY_ADMIN_URL` to apply and delete Caddy
+routes.
+
+Before live use, run the checklist in
+`scripts/validate-hetzner-worker-pool.md`.
 
 ## Eingebaute Optionen
 

@@ -52,6 +52,7 @@ describe("FakeProvisioner", () => {
     // Insert a non-fake worker that listOwned should NOT see
     await prisma.worker.create({
       data: {
+        name: "real-1",
         tailscaleHostname: "real-1",
         tailscaleIp: "100.1.1.1",
         provider: "hetzner",

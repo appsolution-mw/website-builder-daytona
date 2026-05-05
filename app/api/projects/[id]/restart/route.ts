@@ -2,17 +2,20 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createDaytonaRuntime, createRuntime, type Runtime } from "@/lib/runtime";
+import { isRuntimeError } from "@/lib/runtime/errors";
 import type { ProjectSource } from "@/lib/runtime/types";
 import { createInstallationAccessToken } from "@/lib/github/app";
 import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
 import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 
 const SANITIZED_RESTART_ERROR = "sandbox restart failed";
+const NO_WORKER_CAPACITY_ERROR = "no worker capacity";
+const NO_WORKER_CAPACITY_FALLBACK_MESSAGE = "No worker capacity is currently available";
 
 type RestartProject = {
   id: string;
   status: string;
-  daytonaSandboxId: string | null;
+  sandboxId: string | null;
   sourceType: string;
   githubOwner: string | null;
   githubRepo: string | null;
@@ -25,6 +28,13 @@ function runtimeForSandbox(sandboxId: string | null): Runtime {
     return createDaytonaRuntime("fake");
   }
   return createRuntime();
+}
+
+function noWorkerCapacityMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return NO_WORKER_CAPACITY_FALLBACK_MESSAGE;
 }
 
 async function restartSource(project: RestartProject): Promise<ProjectSource | NextResponse> {
@@ -61,7 +71,7 @@ export async function POST(
     select: {
       id: true,
       status: true,
-      daytonaSandboxId: true,
+      sandboxId: true,
       sourceType: true,
       githubOwner: true,
       githubRepo: true,
@@ -83,12 +93,12 @@ export async function POST(
     where: { projectId: project.id },
     select: { content: true },
   });
-  const runtime = runtimeForSandbox(project.daytonaSandboxId);
+  const runtime = runtimeForSandbox(project.sandboxId);
   const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
 
   try {
-    if (project.daytonaSandboxId) {
-      await runtime.destroyProjectSandbox(project.daytonaSandboxId);
+    if (project.sandboxId) {
+      await runtime.destroyProjectSandbox(project.sandboxId);
     }
     const info = await runtime.spawnProjectSandbox({
       projectId: project.id,
@@ -96,19 +106,29 @@ export async function POST(
       projectEnvContent: environment?.content || undefined,
       openhandsFiles,
     });
-    const updated = await prisma.project.update({
-      where: { id: project.id },
-      data: {
-        status: "RUNNING",
-        daytonaSandboxId: info.sandboxId,
-        brokerUrl: info.brokerUrl,
-        brokerPreviewToken: info.brokerPreviewToken,
-        previewUrl: info.previewUrl,
-        provisioningError: null,
-      },
-    });
+    let updated;
+    try {
+      updated = await prisma.project.update({
+        where: { id: project.id },
+        data: {
+          status: "RUNNING",
+          sandboxId: info.sandboxId,
+          brokerUrl: info.brokerUrl,
+          brokerPreviewToken: info.brokerPreviewToken,
+          previewUrl: info.previewUrl,
+          provisioningError: null,
+        },
+      });
+    } catch (error: unknown) {
+      await runtime.destroyProjectSandbox(info.sandboxId).catch(() => undefined);
+      throw error;
+    }
     return NextResponse.json({ project: updated });
-  } catch {
+  } catch (error) {
+    const isNoWorkerCapacity = isRuntimeError(error, "NO_WORKER_CAPACITY");
+    const message = isNoWorkerCapacity
+      ? noWorkerCapacityMessage(error)
+      : SANITIZED_RESTART_ERROR;
     const updated = await prisma.project.update({
       where: { id: project.id },
       data: {
@@ -116,16 +136,16 @@ export async function POST(
         brokerUrl: null,
         brokerPreviewToken: null,
         previewUrl: null,
-        provisioningError: SANITIZED_RESTART_ERROR,
+        provisioningError: message,
       },
     });
     return NextResponse.json(
       {
-        error: "restart failed",
+        error: isNoWorkerCapacity ? NO_WORKER_CAPACITY_ERROR : "restart failed",
         project: updated,
-        message: SANITIZED_RESTART_ERROR,
+        message,
       },
-      { status: 500 },
+      { status: isNoWorkerCapacity ? 409 : 500 },
     );
   }
 }

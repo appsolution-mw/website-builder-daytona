@@ -61,10 +61,11 @@ model Project {
   createdAt           DateTime            @default(now())
   lastActive          DateTime            @default(now())
 
-  daytonaSandboxId     String?
+  sandboxId            String?
   brokerUrl            String?
   brokerPreviewToken   String?
   previewUrl           String?
+  publicSlug           String?             @unique
   provisioningError    String?
   sourceType           ProjectSourceType @default(TEMPLATE)
   githubInstallationId String?
@@ -603,12 +604,14 @@ enum WorkerStatus {
 enum SandboxLifecycleStatus {
   SPAWNING
   RUNNING
+  STOPPED
   PAUSED
   DESTROYED
 }
 
 model Worker {
   id                String          @id @default(cuid())
+  name              String
   tailscaleHostname String          @unique
   tailscaleIp       String
   provider          String
@@ -619,6 +622,9 @@ model Worker {
   lastHeartbeatAt   DateTime?
   createdAt         DateTime        @default(now())
   decommissionedAt  DateTime?
+  serverType        String?
+  provisioningError String?
+  readyAt           DateTime?
   sandboxes         WorkerSandbox[]
 
   @@index([status])
@@ -629,7 +635,7 @@ model WorkerSandbox {
   id             String                 @id @default(cuid())
   workerId       String
   worker         Worker                 @relation(fields: [workerId], references: [id], onDelete: Restrict)
-  projectId      String                 @unique
+  projectId      String
   containerId    String
   brokerPort     Int
   previewPort    Int

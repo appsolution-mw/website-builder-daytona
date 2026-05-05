@@ -95,7 +95,7 @@ export async function GET(
 
   if (
     project.status === "RUNNING" &&
-    project.daytonaSandboxId?.startsWith("fake-") &&
+    project.sandboxId?.startsWith("fake-") &&
     !(await isFakePreviewReachable(project.previewUrl))
   ) {
     // Branch only reached for fake-* sandboxes — use fake runtime unconditionally
@@ -111,7 +111,7 @@ export async function GET(
     project = await prisma.project.update({
       where: { id: project.id },
       data: {
-        daytonaSandboxId: info.sandboxId,
+        sandboxId: info.sandboxId,
         brokerUrl: info.brokerUrl,
         brokerPreviewToken: info.brokerPreviewToken,
         previewUrl: info.previewUrl,
@@ -149,17 +149,17 @@ export async function DELETE(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  if (project.daytonaSandboxId) {
+  if (project.sandboxId) {
     try {
       // Pick runtime by stored sandbox-id shape so a mode change between
       // provision and destroy can't leak resources or no-op a real destroy.
-      const runtime = project.daytonaSandboxId.startsWith("fake-")
+      const runtime = project.sandboxId.startsWith("fake-")
         ? createDaytonaRuntime("fake")
         : createRuntime();
-      await runtime.destroyProjectSandbox(project.daytonaSandboxId);
+      await runtime.destroyProjectSandbox(project.sandboxId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(`[api] destroy sandbox ${project.daytonaSandboxId} failed: ${message}`);
+      console.warn(`[api] destroy sandbox ${project.sandboxId} failed: ${message}`);
       // Continue — fall through to marking the project DESTROYED
     }
   }

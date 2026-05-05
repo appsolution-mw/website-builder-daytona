@@ -113,6 +113,7 @@ async function createSandbox(projectId: string): Promise<{ sandboxId: string }> 
   const suffix = crypto.randomUUID();
   const worker = await prisma.worker.create({
     data: {
+      name: `${TEST_PREFIX}worker-${suffix}`,
       tailscaleHostname: `${TEST_PREFIX}worker-${suffix}`,
       tailscaleIp: "100.64.0.42",
       provider: "fake",

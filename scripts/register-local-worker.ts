@@ -7,6 +7,7 @@ async function main() {
     where: { id },
     create: {
       id,
+      name: "Local dev worker",
       tailscaleHostname: "local-dev",
       tailscaleIp: "127.0.0.1",
       provider: "fake",

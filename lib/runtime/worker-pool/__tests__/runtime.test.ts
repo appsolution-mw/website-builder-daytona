@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../../../db/client";
+import { RuntimeError } from "../../errors";
 import { createFakeProvisioner } from "../../provisioner/fake";
 import { createSimpleScheduler } from "../../scheduler/simple";
 import { createFakeAgentClient } from "../fake-agent-client";
@@ -81,6 +82,138 @@ describe("WorkerPoolRuntime", () => {
     const tok = await prisma.sandboxToken.findFirst({ where: { sandboxId: ws!.id } });
     expect(tok?.token).toMatch(/^[a-f0-9]{64}$/);
     expect(info.brokerUrl).toContain(tok!.token);
+  });
+
+  it("uses project route hook preview URLs after sandbox creation", async () => {
+    const handles = createFakeAgentClient();
+    const appliedRoutes: Array<{
+      projectId: string;
+      sandboxId: string;
+      workerId: string;
+      previewPort: number;
+    }> = [];
+    const r = createWorkerPoolRuntime({
+      ...RUNTIME_ARGS(handles),
+      projectRouteFor: async ({ projectId, sandboxId, worker, previewPort }) => {
+        appliedRoutes.push({ projectId, sandboxId, workerId: worker.id, previewPort });
+        return { previewUrl: `https://${projectId}.example.com` };
+      },
+    });
+    const projectId = await project();
+
+    const info = await r.spawnProjectSandbox({ projectId, source: { type: "template" } });
+    const ws = await prisma.workerSandbox.findFirstOrThrow({ where: { projectId } });
+
+    expect(info.previewUrl).toBe(`https://${projectId}.example.com`);
+    expect(appliedRoutes).toEqual([
+      {
+        projectId,
+        sandboxId: ws.id,
+        workerId: ws.workerId,
+        previewPort: ws.previewPort,
+      },
+    ]);
+  });
+
+  it("cleans up sandbox state when project route hook fails", async () => {
+    const handles = createFakeAgentClient();
+    const deletedRoutes: Array<{ projectId: string; sandboxId: string }> = [];
+    const r = createWorkerPoolRuntime({
+      ...RUNTIME_ARGS(handles),
+      projectRouteFor: async () => {
+        throw new Error("caddy unavailable");
+      },
+      deleteProjectRouteFor: async (args) => {
+        deletedRoutes.push(args);
+      },
+    });
+    const projectId = await project();
+
+    await expect(r.spawnProjectSandbox({
+      projectId,
+      source: { type: "template" },
+    })).rejects.toThrow("caddy unavailable");
+
+    expect(await prisma.workerSandbox.count()).toBe(0);
+    expect(await prisma.sandboxToken.count()).toBe(0);
+    expect(handles.list()).toHaveLength(0);
+    expect(deletedRoutes).toHaveLength(1);
+    expect(deletedRoutes[0]?.projectId).toBe(projectId);
+  });
+
+  it("throws NO_WORKER_CAPACITY when provisioning is disabled and no worker is available", async () => {
+    const handles = createFakeAgentClient();
+    const provisioner = createFakeProvisioner();
+    const r = createWorkerPoolRuntime({
+      scheduler: {
+        pickWorker: async () => null,
+      },
+      provisioner,
+      agentClientFor: () => handles.client,
+      sandboxImage: "wbd/sandbox:dev",
+      autoProvisionWhenFull: false,
+    });
+    const projectId = await project();
+
+    await expect(r.spawnProjectSandbox({
+      projectId,
+      source: { type: "template" },
+    })).rejects.toEqual(
+      new RuntimeError(
+        "NO_WORKER_CAPACITY",
+        "No ready worker has a free project slot",
+      ),
+    );
+    expect(await prisma.worker.count()).toBe(0);
+    expect(handles.requests()).toEqual([]);
+  });
+
+  it("reserves worker slots atomically under concurrent spawns", async () => {
+    const handles = createFakeAgentClient();
+    const worker = {
+      id: "worker-one-slot",
+      tailscaleHostname: "worker-one-slot",
+      tailscaleIp: "100.64.1.25",
+      provider: "fake",
+      providerVmId: "vm-worker-one-slot",
+      region: "local",
+      capacity: 1,
+      status: "READY" as const,
+    };
+    await prisma.worker.create({
+      data: {
+        ...worker,
+        name: worker.id,
+      },
+    });
+    const r = createWorkerPoolRuntime({
+      scheduler: { pickWorker: async () => worker },
+      provisioner: createFakeProvisioner(),
+      agentClientFor: () => handles.client,
+      sandboxImage: "wbd/sandbox:dev",
+      autoProvisionWhenFull: false,
+    });
+    const [firstProjectId, secondProjectId] = await Promise.all([project(), project()]);
+
+    const results = await Promise.allSettled([
+      r.spawnProjectSandbox({ projectId: firstProjectId, source: { type: "template" } }),
+      r.spawnProjectSandbox({ projectId: secondProjectId, source: { type: "template" } }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected?.status).toBe("rejected");
+    if (rejected?.status !== "rejected") {
+      throw new Error("expected one spawn to reject");
+    }
+    expect(rejected.reason).toEqual(
+      new RuntimeError(
+        "NO_WORKER_CAPACITY",
+        "No ready worker has a free project slot",
+      ),
+    );
+    expect(await prisma.workerSandbox.count({ where: { workerId: worker.id } })).toBe(1);
+    expect(handles.requests()).toHaveLength(1);
   });
 
   it("reuses an existing READY worker on subsequent spawns", async () => {
@@ -219,6 +352,24 @@ describe("WorkerPoolRuntime", () => {
     expect(handles.list()).toHaveLength(0);
 
     await expect(r.spawnProjectSandbox({ projectId, source: { type: "template" } })).resolves.toBeDefined();
+  });
+
+  it("destroyProjectSandbox deletes project routes idempotently", async () => {
+    const handles = createFakeAgentClient();
+    const deletedRoutes: Array<{ projectId: string; sandboxId: string }> = [];
+    const r = createWorkerPoolRuntime({
+      ...RUNTIME_ARGS(handles),
+      deleteProjectRouteFor: async (args) => {
+        deletedRoutes.push(args);
+      },
+    });
+    const projectId = await project();
+    await r.spawnProjectSandbox({ projectId, source: { type: "template" } });
+    const ws = await prisma.workerSandbox.findFirstOrThrow({ where: { projectId } });
+
+    await r.destroyProjectSandbox(ws.id);
+
+    expect(deletedRoutes).toEqual([{ projectId, sandboxId: ws.id }]);
   });
 
   it("destroyProjectSandbox is idempotent for unknown ids", async () => {

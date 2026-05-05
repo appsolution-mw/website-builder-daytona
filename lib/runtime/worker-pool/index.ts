@@ -1,7 +1,12 @@
 import { createSimpleScheduler } from "../scheduler/simple";
 import { createFakeProvisioner } from "../provisioner/fake";
+import { createHetznerWorkerProvisionerFromEnv } from "../provisioner/hetzner";
+import { prisma } from "../../db/client";
+import { buildProjectPreviewRoute } from "../../routing/caddy-config";
+import { createCaddyClient, type CaddyClient } from "../../routing/caddy-client";
 import { createAgentClient, type CreateAgentClientArgs } from "./agent-client";
 import { createWorkerPoolRuntime } from "./runtime";
+import type { CreateWorkerPoolRuntimeArgs } from "./runtime";
 import type { Runtime, WorkerRecord } from "../types";
 import type { AgentClient } from "./types";
 import { existsSync, readFileSync } from "node:fs";
@@ -9,6 +14,9 @@ import { resolve } from "node:path";
 
 const OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
 const DEFAULT_WORKER_AGENT_TIMEOUT_MS = 120_000;
+const DEFAULT_HETZNER_REGION = "fsn1";
+const DEFAULT_HETZNER_SERVER_TYPE = "ccx33";
+const DEFAULT_HETZNER_WORKER_CAPACITY = 10;
 
 export interface CreateLocalWorkerPoolRuntimeArgs {
   sandboxImage?: string;
@@ -19,6 +27,7 @@ export interface ResolveWorkerAgentClientConfigArgs {
   worker: Pick<WorkerRecord, "tailscaleIp">;
   hmacSecret?: string;
   runtimeEnv?: Record<string, string>;
+  ignoreConfiguredAgentUrl?: boolean;
 }
 
 /**
@@ -47,8 +56,40 @@ export function createLocalWorkerPoolRuntime(args: CreateLocalWorkerPoolRuntimeA
     provisioner,
     agentClientFor,
     sandboxImage,
+    autoProvisionWhenFull: true,
     brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
     publicHostFor: configuredAgentUrl ? () => configuredAgentUrl.hostname : undefined,
+  });
+}
+
+export function createHetznerWorkerPoolRuntime(): Runtime {
+  const runtimeEnv = collectRuntimeEnv();
+  const sandboxImage = required("SANDBOX_IMAGE", runtimeEnv);
+  const hmacSecret = required("WORKER_AGENT_HMAC_SECRET", runtimeEnv);
+  const scheduler = createSimpleScheduler();
+  const provisioner = createHetznerWorkerProvisionerFromEnv(runtimeEnv);
+  const publicRouting = createPublicRouting(runtimeEnv);
+  const agentClientFor = (w: WorkerRecord): AgentClient =>
+    createAgentClient(resolveWorkerAgentClientConfig({
+      worker: w,
+      hmacSecret,
+      runtimeEnv,
+      ignoreConfiguredAgentUrl: true,
+    }));
+
+  return createWorkerPoolRuntime({
+    scheduler,
+    provisioner,
+    agentClientFor,
+    sandboxImage,
+    defaultRegion: runtimeEnv.HETZNER_DEFAULT_REGION ?? DEFAULT_HETZNER_REGION,
+    defaultSize: runtimeEnv.HETZNER_DEFAULT_SERVER_TYPE ?? DEFAULT_HETZNER_SERVER_TYPE,
+    defaultCapacity: optionalPositiveInt("WORKER_DEFAULT_CAPACITY", runtimeEnv) ??
+      DEFAULT_HETZNER_WORKER_CAPACITY,
+    autoProvisionWhenFull: false,
+    brokerEnv: () => collectBrokerEnv(collectRuntimeEnv()),
+    projectRouteFor: publicRouting?.projectRouteFor,
+    deleteProjectRouteFor: publicRouting?.deleteProjectRouteFor,
   });
 }
 
@@ -56,7 +97,9 @@ export function resolveWorkerAgentClientConfig(
   args: ResolveWorkerAgentClientConfigArgs,
 ): CreateAgentClientArgs {
   const runtimeEnv = args.runtimeEnv ?? collectRuntimeEnv();
-  const configuredAgentUrl = optionalUrl("WORKER_AGENT_URL", runtimeEnv);
+  const configuredAgentUrl = args.ignoreConfiguredAgentUrl
+    ? null
+    : optionalUrl("WORKER_AGENT_URL", runtimeEnv);
   const timeoutMs = optionalPositiveInt("WORKER_AGENT_TIMEOUT_MS", runtimeEnv) ??
     DEFAULT_WORKER_AGENT_TIMEOUT_MS;
   return {
@@ -180,6 +223,77 @@ function optionalPositiveInt(name: string, runtimeEnv: Record<string, string>): 
     throw new Error(`worker-pool runtime requires ${name} to be a positive integer`);
   }
   return parsed;
+}
+
+function createPublicRouting(
+  runtimeEnv: Record<string, string>,
+): {
+  projectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["projectRouteFor"]>;
+  deleteProjectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["deleteProjectRouteFor"]>;
+} | null {
+  const publicBaseDomain = optionalHostname("PUBLIC_BASE_DOMAIN", runtimeEnv);
+  const caddyAdminUrl = optionalUrl("CADDY_ADMIN_URL", runtimeEnv);
+  if ((publicBaseDomain && !caddyAdminUrl) || (!publicBaseDomain && caddyAdminUrl)) {
+    throw new Error(
+      "worker-pool runtime requires PUBLIC_BASE_DOMAIN and CADDY_ADMIN_URL to be set together",
+    );
+  }
+  if (!publicBaseDomain || !caddyAdminUrl) return null;
+
+  const caddyClient = createCaddyClient(caddyAdminUrl.origin);
+  return createCaddyProjectRouting(publicBaseDomain, caddyClient);
+}
+
+export function createCaddyProjectRouting(
+  publicBaseDomain: string,
+  caddyClient: CaddyClient,
+): {
+  projectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["projectRouteFor"]>;
+  deleteProjectRouteFor: NonNullable<CreateWorkerPoolRuntimeArgs["deleteProjectRouteFor"]>;
+} {
+  return {
+    projectRouteFor: async ({ projectId, worker, previewPort }) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { publicSlug: true },
+      });
+      if (!project?.publicSlug) {
+        return { previewUrl: `http://${worker.tailscaleIp}:${previewPort}` };
+      }
+
+      const hostname = `${project.publicSlug}.${publicBaseDomain}`;
+      await caddyClient.applyRoute(
+        project.publicSlug,
+        buildProjectPreviewRoute({
+          hostname,
+          targetHost: worker.tailscaleIp,
+          targetPort: previewPort,
+        }),
+      );
+      return { previewUrl: `https://${hostname}` };
+    },
+    deleteProjectRouteFor: async ({ projectId }) => {
+      const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { publicSlug: true },
+      });
+      if (!project?.publicSlug) return;
+      await caddyClient.deleteRoute(project.publicSlug);
+    },
+  };
+}
+
+function optionalHostname(name: string, runtimeEnv: Record<string, string>): string | null {
+  const value = runtimeEnv[name]?.trim();
+  if (!value) return null;
+  if (value.includes("://")) {
+    throw new Error(`worker-pool runtime requires ${name} to be a hostname, not a URL`);
+  }
+  const normalized = value.trim().replace(/^\*\./, "").replace(/\.+$/, "").toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(normalized)) {
+    throw new Error(`worker-pool runtime requires ${name} to be a valid hostname`);
+  }
+  return normalized;
 }
 
 export { createWorkerPoolRuntime } from "./runtime";

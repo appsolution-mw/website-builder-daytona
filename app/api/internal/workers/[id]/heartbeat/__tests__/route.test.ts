@@ -60,7 +60,7 @@ describe("POST /api/internal/workers/[id]/heartbeat", () => {
   it("returns 410 when worker DECOMMISSIONED", async () => {
     await prisma.worker.create({
       data: {
-        id: "wdead", tailscaleHostname: "h-dead", tailscaleIp: "127.0.0.1",
+        id: "wdead", name: "dead worker", tailscaleHostname: "h-dead", tailscaleIp: "127.0.0.1",
         provider: "fake", providerVmId: "v", region: "local",
         capacity: 4, status: "DECOMMISSIONED", decommissionedAt: new Date(),
       },
@@ -74,7 +74,7 @@ describe("POST /api/internal/workers/[id]/heartbeat", () => {
   it("returns 204 and updates lastHeartbeatAt + status on valid heartbeat", async () => {
     await prisma.worker.create({
       data: {
-        id: "w1", tailscaleHostname: "h-1", tailscaleIp: "127.0.0.1",
+        id: "w1", name: "ready worker", tailscaleHostname: "h-1", tailscaleIp: "127.0.0.1",
         provider: "fake", providerVmId: "v", region: "local",
         capacity: 4, status: "PROVISIONING",
       },
@@ -86,6 +86,25 @@ describe("POST /api/internal/workers/[id]/heartbeat", () => {
 
     const after = await prisma.worker.findUnique({ where: { id: "w1" } });
     expect(after?.status).toBe("READY");
+    expect(after?.lastHeartbeatAt).toBeInstanceOf(Date);
+    expect(after?.readyAt).toBeInstanceOf(Date);
+  });
+
+  it("keeps DRAINING workers out of scheduling on valid heartbeat", async () => {
+    await prisma.worker.create({
+      data: {
+        id: "wdrain", name: "draining worker", tailscaleHostname: "h-drain", tailscaleIp: "127.0.0.1",
+        provider: "fake", providerVmId: "v", region: "local",
+        capacity: 4, status: "DRAINING",
+      },
+    });
+    const body = JSON.stringify({ runningSandboxes: 0, dockerVersion: "x", uptime: 1 });
+    const req = await makeReq("wdrain", body);
+    const res = await POST(req, { params: Promise.resolve({ id: "wdrain" }) });
+    expect(res.status).toBe(204);
+
+    const after = await prisma.worker.findUnique({ where: { id: "wdrain" } });
+    expect(after?.status).toBe("DRAINING");
     expect(after?.lastHeartbeatAt).toBeInstanceOf(Date);
   });
 });

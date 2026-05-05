@@ -130,7 +130,7 @@ type Project = {
   id: string;
   name: string;
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
-  daytonaSandboxId: string | null;
+  sandboxId: string | null;
   sourceType: "TEMPLATE" | "GITHUB";
   githubOwner: string | null;
   githubRepo: string | null;
@@ -1776,7 +1776,7 @@ export default function ProjectWorkspace({
     };
   }, [
     project?.status,
-    project?.daytonaSandboxId,
+    project?.sandboxId,
     id,
     requestFileList,
     loadDevIndicatorSetting,

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RuntimeError } from "@/lib/runtime/errors";
 
 const destroyProjectSandboxMock = vi.hoisted(() => vi.fn());
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
@@ -71,7 +72,7 @@ describe("POST /api/projects/[id]/restart", () => {
       runtimeGeneration: 0,
       createdAt: new Date("2026-05-04T00:00:00.000Z"),
       lastActive: new Date("2026-05-04T00:00:00.000Z"),
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       brokerUrl: "ws://localhost:4000",
       brokerPreviewToken: "old-token",
       previewUrl: "http://localhost:3000",
@@ -98,7 +99,7 @@ describe("POST /api/projects/[id]/restart", () => {
     });
     projectUpdateMock.mockResolvedValue({
       ...project,
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
       brokerUrl: "ws://localhost:4001",
       brokerPreviewToken: "new-token",
       previewUrl: "http://localhost:3001",
@@ -122,12 +123,73 @@ describe("POST /api/projects/[id]/restart", () => {
       where: { id: "project-1" },
       data: {
         status: "RUNNING",
-        daytonaSandboxId: "sandbox-new",
+        sandboxId: "sandbox-new",
         brokerUrl: "ws://localhost:4001",
         brokerPreviewToken: "new-token",
         previewUrl: "http://localhost:3001",
         provisioningError: null,
       },
+    });
+  });
+
+  it("destroys the new sandbox when persisting restarted project state fails", async () => {
+    const project = {
+      id: "project-update-fails",
+      ownerId: "dev-user",
+      name: "Restart Update Fails",
+      status: "RUNNING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-04T00:00:00.000Z"),
+      lastActive: new Date("2026-05-04T00:00:00.000Z"),
+      sandboxId: "sandbox-old",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "old-token",
+      previewUrl: "http://localhost:3000",
+      provisioningError: null,
+      sourceType: "TEMPLATE",
+      githubOwner: null,
+      githubRepo: null,
+      githubBaseBranch: null,
+      githubInstallation: null,
+    };
+    createRuntimeMock.mockReturnValue({
+      destroyProjectSandbox: destroyProjectSandboxMock,
+      spawnProjectSandbox: spawnProjectSandboxMock,
+    });
+    projectFindFirstMock.mockResolvedValue(project);
+    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
+    spawnProjectSandboxMock.mockResolvedValue({
+      sandboxId: "sandbox-new",
+      brokerUrl: "ws://localhost:4001",
+      brokerPreviewToken: "new-token",
+      previewUrl: "http://localhost:3001",
+    });
+    projectUpdateMock
+      .mockRejectedValueOnce(new Error("database unavailable"))
+      .mockResolvedValueOnce({
+        ...project,
+        status: "DESTROYED",
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
+        provisioningError: "sandbox restart failed",
+      });
+
+    const res = await POST(new Request("http://localhost/api/projects/project-update-fails/restart", {
+      method: "POST",
+    }), {
+      params: Promise.resolve({ id: "project-update-fails" }),
+    });
+
+    expect(res.status).toBe(500);
+    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("sandbox-old");
+    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("sandbox-new");
+    await expect(res.json()).resolves.toMatchObject({
+      error: "restart failed",
+      message: "sandbox restart failed",
     });
   });
 
@@ -137,7 +199,7 @@ describe("POST /api/projects/[id]/restart", () => {
       ownerId: "dev-user",
       name: "GitHub Restart",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       sourceType: "GITHUB",
       githubOwner: "octo",
       githubRepo: "hello-world",
@@ -165,7 +227,7 @@ describe("POST /api/projects/[id]/restart", () => {
       id: project.id,
       name: project.name,
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
       brokerUrl: "ws://localhost:4001",
       brokerPreviewToken: "new-token",
       previewUrl: "http://localhost:3001",
@@ -207,7 +269,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-openhands",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-old",
+      sandboxId: "sandbox-old",
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,
@@ -225,7 +287,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectUpdateMock.mockResolvedValue({
       id: "project-openhands",
       status: "RUNNING",
-      daytonaSandboxId: "sandbox-new",
+      sandboxId: "sandbox-new",
     });
 
     const res = await POST(new Request("http://localhost/api/projects/project-openhands/restart", {
@@ -251,7 +313,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-fake",
       status: "RUNNING",
-      daytonaSandboxId: "fake-project-fake-4000",
+      sandboxId: "fake-project-fake-4000",
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,
@@ -268,7 +330,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectUpdateMock.mockResolvedValue({
       id: "project-fake",
       status: "RUNNING",
-      daytonaSandboxId: "fake-project-fake-4001",
+      sandboxId: "fake-project-fake-4001",
     });
 
     const res = await POST(new Request("http://localhost/api/projects/project-fake/restart", {
@@ -287,7 +349,7 @@ describe("POST /api/projects/[id]/restart", () => {
     projectFindFirstMock.mockResolvedValue({
       id: "project-provisioning",
       status: "PROVISIONING",
-      daytonaSandboxId: null,
+      sandboxId: null,
       sourceType: "TEMPLATE",
       githubOwner: null,
       githubRepo: null,
@@ -305,5 +367,54 @@ describe("POST /api/projects/[id]/restart", () => {
     await expect(res.json()).resolves.toEqual({ error: "project is provisioning" });
     expect(destroyProjectSandboxMock).not.toHaveBeenCalled();
     expect(spawnProjectSandboxMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when no worker capacity is available during restart", async () => {
+    const project = {
+      id: "project-no-capacity",
+      status: "DESTROYED",
+      sandboxId: null,
+      sourceType: "TEMPLATE",
+      githubOwner: null,
+      githubRepo: null,
+      githubBaseBranch: null,
+      githubInstallation: null,
+    };
+    const runtime = {
+      destroyProjectSandbox: destroyProjectSandboxMock,
+      spawnProjectSandbox: spawnProjectSandboxMock,
+    };
+    createRuntimeMock.mockReturnValue(runtime);
+    projectFindFirstMock.mockResolvedValue(project);
+    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
+    spawnProjectSandboxMock.mockRejectedValue(
+      new RuntimeError("NO_WORKER_CAPACITY", "No ready worker has a free project slot"),
+    );
+    projectUpdateMock.mockResolvedValue({
+      ...project,
+      provisioningError: "No ready worker has a free project slot",
+    });
+
+    const res = await POST(new Request("http://localhost/api/projects/project-no-capacity/restart", {
+      method: "POST",
+    }), {
+      params: Promise.resolve({ id: "project-no-capacity" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(projectUpdateMock).toHaveBeenCalledWith({
+      where: { id: "project-no-capacity" },
+      data: {
+        status: "DESTROYED",
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
+        provisioningError: "No ready worker has a free project slot",
+      },
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      error: "no worker capacity",
+      message: "No ready worker has a free project slot",
+    });
   });
 });
