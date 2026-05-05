@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RuntimeError } from "@/lib/runtime/errors";
 import { AgentError } from "@/lib/runtime/worker-pool/types";
 
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
@@ -348,10 +349,14 @@ describe("POST /api/projects", () => {
 
     expect(res.status).toBe(500);
     expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
-      data: {
+      data: expect.objectContaining({
         status: "DESTROYED",
+        sandboxId: null,
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
         provisioningError: "sandbox provisioning failed",
-      },
+      }),
     }));
     expect(json).toMatchObject({
       error: "provisioning failed",
@@ -359,6 +364,66 @@ describe("POST /api/projects", () => {
     });
     expect(JSON.stringify(json)).not.toContain(leakedSecret);
     expect(JSON.stringify(json)).not.toContain(leakedBase64);
+  });
+
+  it("returns 409 and marks the project destroyed when no worker capacity is available", async () => {
+    const project = {
+      id: "project-no-capacity",
+      name: "Project No Capacity",
+      status: "PROVISIONING",
+      agentRuntime: "CLAUDE_CODE",
+      desiredRuntime: "CLAUDE_CODE",
+      runtimeSwitchStatus: "IDLE",
+      runtimeGeneration: 0,
+      createdAt: new Date("2026-05-03T00:00:00.000Z"),
+      lastActive: new Date("2026-05-03T00:00:00.000Z"),
+      sandboxId: "stale-sandbox",
+      brokerUrl: "ws://localhost:4000",
+      brokerPreviewToken: "stale-token",
+      previewUrl: "http://localhost:3000",
+      sessions: [],
+    };
+    process.env.RUNTIME_MODE = "worker-pool-local";
+    projectCreateMock.mockResolvedValue(project);
+    spawnProjectSandboxMock.mockRejectedValue(
+      new RuntimeError("NO_WORKER_CAPACITY", "No ready worker has a free project slot"),
+    );
+    projectUpdateMock.mockResolvedValue({
+      ...project,
+      status: "DESTROYED",
+      sandboxId: null,
+      brokerUrl: null,
+      brokerPreviewToken: null,
+      previewUrl: null,
+      provisioningError: "No ready worker has a free project slot",
+    });
+
+    const res = await POST(new NextRequest("http://localhost/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name: "Project No Capacity" }),
+    }));
+    const json = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "project-no-capacity" },
+      data: {
+        status: "DESTROYED",
+        sandboxId: null,
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
+        provisioningError: "No ready worker has a free project slot",
+      },
+    }));
+    expect(json).toMatchObject({
+      error: "no worker capacity",
+      message: "No ready worker has a free project slot",
+      project: {
+        id: "project-no-capacity",
+        status: "DESTROYED",
+      },
+    });
   });
 
   it("stores a safe actionable message when the worker-agent cannot find the sandbox image", async () => {
@@ -395,10 +460,14 @@ describe("POST /api/projects", () => {
 
     expect(res.status).toBe(500);
     expect(projectUpdateMock).toHaveBeenCalledWith(expect.objectContaining({
-      data: {
+      data: expect.objectContaining({
         status: "DESTROYED",
+        sandboxId: null,
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
         provisioningError: "sandbox image not found",
-      },
+      }),
     }));
     expect(json).toMatchObject({
       error: "provisioning failed",

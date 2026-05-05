@@ -5,6 +5,7 @@ import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { createInstallationAccessToken } from "@/lib/github/app";
 import { projectSourceFromCreateBody } from "@/lib/projects/source";
 import { createRuntime } from "@/lib/runtime";
+import { isRuntimeError } from "@/lib/runtime/errors";
 import {
   AGENT_RUNTIME_OPTIONS,
   dbRuntimeToProtocol,
@@ -26,6 +27,8 @@ const WORKER_AGENT_AUTH_ERROR = "worker agent authentication failed";
 const WORKER_AGENT_UNAVAILABLE_ERROR = "worker agent unavailable";
 const SANDBOX_PORTS_EXHAUSTED_ERROR = "sandbox port range exhausted";
 const SANDBOX_SPAWN_TIMEOUT_ERROR = "sandbox provisioning timed out";
+const NO_WORKER_CAPACITY_ERROR = "no worker capacity";
+const NO_WORKER_CAPACITY_FALLBACK_MESSAGE = "No worker capacity is currently available";
 
 const projectSelect = {
   id: true,
@@ -160,6 +163,13 @@ function safeProvisioningError(error: unknown): string {
     }
   }
   return SANITIZED_PROVISIONING_ERROR;
+}
+
+function noWorkerCapacityMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  return NO_WORKER_CAPACITY_FALLBACK_MESSAGE;
 }
 
 export async function GET(request: NextRequest) {
@@ -356,21 +366,28 @@ export async function POST(request: NextRequest) {
       project: serializeProject(updated),
     }, { status: 201 });
   } catch (error) {
-    const message = safeProvisioningError(error);
+    const isNoWorkerCapacity = isRuntimeError(error, "NO_WORKER_CAPACITY");
+    const message = isNoWorkerCapacity
+      ? noWorkerCapacityMessage(error)
+      : safeProvisioningError(error);
     const updated = await prisma.project.update({
       where: { id: project.id },
       data: {
         status: "DESTROYED",
+        sandboxId: null,
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
         provisioningError: message,
       },
     });
     return NextResponse.json(
       {
-        error: "provisioning failed",
+        error: isNoWorkerCapacity ? NO_WORKER_CAPACITY_ERROR : "provisioning failed",
         project: updated,
         message,
       },
-      { status: 500 },
+      { status: isNoWorkerCapacity ? 409 : 500 },
     );
   }
 }

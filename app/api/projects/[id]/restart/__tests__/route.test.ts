@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RuntimeError } from "@/lib/runtime/errors";
 
 const destroyProjectSandboxMock = vi.hoisted(() => vi.fn());
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
@@ -305,5 +306,54 @@ describe("POST /api/projects/[id]/restart", () => {
     await expect(res.json()).resolves.toEqual({ error: "project is provisioning" });
     expect(destroyProjectSandboxMock).not.toHaveBeenCalled();
     expect(spawnProjectSandboxMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when no worker capacity is available during restart", async () => {
+    const project = {
+      id: "project-no-capacity",
+      status: "DESTROYED",
+      sandboxId: null,
+      sourceType: "TEMPLATE",
+      githubOwner: null,
+      githubRepo: null,
+      githubBaseBranch: null,
+      githubInstallation: null,
+    };
+    const runtime = {
+      destroyProjectSandbox: destroyProjectSandboxMock,
+      spawnProjectSandbox: spawnProjectSandboxMock,
+    };
+    createRuntimeMock.mockReturnValue(runtime);
+    projectFindFirstMock.mockResolvedValue(project);
+    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
+    spawnProjectSandboxMock.mockRejectedValue(
+      new RuntimeError("NO_WORKER_CAPACITY", "No ready worker has a free project slot"),
+    );
+    projectUpdateMock.mockResolvedValue({
+      ...project,
+      provisioningError: "No ready worker has a free project slot",
+    });
+
+    const res = await POST(new Request("http://localhost/api/projects/project-no-capacity/restart", {
+      method: "POST",
+    }), {
+      params: Promise.resolve({ id: "project-no-capacity" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(projectUpdateMock).toHaveBeenCalledWith({
+      where: { id: "project-no-capacity" },
+      data: {
+        status: "DESTROYED",
+        brokerUrl: null,
+        brokerPreviewToken: null,
+        previewUrl: null,
+        provisioningError: "No ready worker has a free project slot",
+      },
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      error: "no worker capacity",
+      message: "No ready worker has a free project slot",
+    });
   });
 });
