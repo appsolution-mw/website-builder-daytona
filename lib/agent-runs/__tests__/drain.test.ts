@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/client";
 import { drainProjectQueue, type RunExecutionAdapter } from "../drain";
 import { enqueueAgentRun, skipAgentRun } from "../queue";
@@ -180,6 +180,99 @@ describe("drainProjectQueue", () => {
       activeRunId: null,
       blockedRunId: failed.runId,
     });
+  });
+
+  it("blocks the queue when the execution adapter throws", async () => {
+    const { user, project, session } = await createFixture();
+    const failed = await enqueueFixtureRun({
+      projectId: project.id,
+      sessionId: session.id,
+      userId: user.id,
+      prompt: "Throw",
+      providerSessionId: "provider-1",
+    });
+    const later = await enqueueFixtureRun({
+      projectId: project.id,
+      sessionId: session.id,
+      userId: user.id,
+      prompt: "Later",
+      providerSessionId: "provider-2",
+    });
+
+    const result = await drainProjectQueue({
+      projectId: project.id,
+      execute: async () => {
+        throw new Error("Adapter crashed");
+      },
+    });
+
+    expect(result).toEqual({ started: 1, stoppedReason: "blocked" });
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: failed.runId } }),
+    ).resolves.toMatchObject({
+      status: "FAILED",
+      blockedReason: "Adapter crashed",
+    });
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: later.runId } }),
+    ).resolves.toMatchObject({ status: "QUEUED" });
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "BLOCKED",
+      activeRunId: null,
+      blockedRunId: failed.runId,
+    });
+  });
+
+  it("does not execute a run already claimed by another drain", async () => {
+    vi.resetModules();
+    const execute = vi.fn(async () => ({
+      ok: true as const,
+      agentMessage: "Duplicate",
+    }));
+    const markRunSucceeded = vi.fn(async () => undefined);
+    vi.doMock("@/lib/db/client", () => ({
+      prisma: {
+        projectQueueState: {
+          findUnique: vi.fn(async () => ({
+            state: "IDLE",
+            activeRunId: null,
+          })),
+        },
+      },
+    }));
+    vi.doMock("../queue", () => ({
+      getNextQueuedRun: vi.fn(async () => ({ id: "run-1" })),
+      markRunStarting: vi.fn(async () => ({
+        runId: "run-1",
+        attemptId: "attempt-1",
+        startedNow: false,
+      })),
+      markRunSucceeded,
+      markRunFailed: vi.fn(async () => undefined),
+    }));
+    try {
+      const { drainProjectQueue: drainWithClaimedRun } = await import(
+        "../drain"
+      );
+
+      const result = await drainWithClaimedRun({
+        projectId: "project-1",
+        execute,
+        maxRuns: 1,
+      });
+
+      expect(result).toEqual({ started: 0, stoppedReason: "active" });
+      expect(execute).not.toHaveBeenCalled();
+      expect(markRunSucceeded).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("@/lib/db/client");
+      vi.doUnmock("../queue");
+      vi.resetModules();
+    }
   });
 
   it("continues after skip clears the blocked queue", async () => {

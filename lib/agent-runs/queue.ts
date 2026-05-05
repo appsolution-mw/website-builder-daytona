@@ -79,7 +79,7 @@ export async function getNextQueuedRun(
 
 export async function markRunStarting(
   runId: string,
-): Promise<{ runId: string; attemptId: string }> {
+): Promise<{ runId: string; attemptId: string; startedNow: boolean }> {
   const result = await prisma.$transaction(async (tx) => {
     const run = await tx.agentRun.findUniqueOrThrow({
       where: { id: runId },
@@ -187,7 +187,11 @@ export async function markRunStarting(
     });
   }
 
-  return { runId, attemptId: result.attemptId };
+  return {
+    runId,
+    attemptId: result.attemptId,
+    startedNow: result.startedNow,
+  };
 }
 
 export async function markRunSucceeded(input: {

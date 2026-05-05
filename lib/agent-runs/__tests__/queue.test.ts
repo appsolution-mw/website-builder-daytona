@@ -213,7 +213,11 @@ describe("agent run queue transitions", () => {
 
     const secondStart = await markRunStarting(runId);
 
-    expect(secondStart).toEqual(firstStart);
+    expect(firstStart.startedNow).toBe(true);
+    expect(secondStart).toEqual({
+      ...firstStart,
+      startedNow: false,
+    });
     await expect(
       prisma.agentRunAttempt.count({ where: { runId } }),
     ).resolves.toBe(1);

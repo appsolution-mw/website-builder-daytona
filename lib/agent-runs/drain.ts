@@ -47,9 +47,13 @@ export async function drainProjectQueue(input: {
       return { started, stoppedReason: "empty" };
     }
 
-    const { runId, attemptId } = await markRunStarting(next.id);
+    const { runId, attemptId, startedNow } = await markRunStarting(next.id);
+    if (!startedNow) {
+      return { started, stoppedReason: "active" };
+    }
+
     started += 1;
-    const result = await input.execute({ runId, attemptId });
+    const result = await executeRun(input.execute, { runId, attemptId });
     if (result.ok) {
       await markRunSucceeded({
         runId,
@@ -69,4 +73,28 @@ export async function drainProjectQueue(input: {
   }
 
   return { started, stoppedReason: "limit" };
+}
+
+async function executeRun(
+  execute: RunExecutionAdapter,
+  input: { runId: string; attemptId: string },
+): ReturnType<RunExecutionAdapter> {
+  try {
+    return await execute(input);
+  } catch (error) {
+    return {
+      ok: false,
+      message: errorToMessage(error),
+    };
+  }
+}
+
+function errorToMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === "string" && error) {
+    return error;
+  }
+  return "Run execution failed";
 }
