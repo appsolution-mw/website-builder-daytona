@@ -8,6 +8,8 @@ import {
   markRunStarting,
   markRunSucceeded,
   nextProjectQueueSequence,
+  retryAgentRun,
+  skipAgentRun,
 } from "../queue";
 
 const TEST_PREFIX = "agent-queue-";
@@ -534,5 +536,94 @@ describe("agent run queue transitions", () => {
       vi.doUnmock("../events");
       vi.resetModules();
     }
+  });
+
+  it("retries a terminal blocked run without changing its queue position", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const { attemptId } = await markRunStarting(runId);
+    await markRunFailed({
+      runId,
+      attemptId,
+      message: "Worker failed",
+    });
+
+    await retryAgentRun({ projectId: project.id, runId });
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({
+      status: "QUEUED",
+      queueSequence: 1,
+      finishedAt: null,
+      blockedReason: null,
+      lastAttemptNumber: 1,
+    });
+    await expect(
+      prisma.agentRunAttempt.count({ where: { runId } }),
+    ).resolves.toBe(1);
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "IDLE",
+      activeRunId: null,
+      blockedRunId: null,
+      blockedAt: null,
+    });
+    await expect(
+      prisma.agentRunEvent.findFirstOrThrow({
+        where: { runId, type: "STATUS" },
+        orderBy: { sequence: "desc" },
+      }),
+    ).resolves.toMatchObject({
+      payload: { status: "QUEUED", retry: true },
+    });
+  });
+
+  it("rejects retry for a terminal run that belongs to another project", async () => {
+    const { runId } = await enqueueFixtureRun();
+    const other = await createFixture();
+
+    await expect(
+      retryAgentRun({ projectId: other.project.id, runId }),
+    ).rejects.toThrow("Run does not belong to project");
+  });
+
+  it("skips only the run blocking the project queue", async () => {
+    const { project, runId } = await enqueueFixtureRun();
+    const { attemptId } = await markRunStarting(runId);
+    await markRunFailed({
+      runId,
+      attemptId,
+      message: "Worker failed",
+    });
+
+    await skipAgentRun({ projectId: project.id, runId });
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).resolves.toMatchObject({
+      status: "FAILED",
+      blockedReason: "Worker failed",
+    });
+    await expect(
+      prisma.projectQueueState.findUniqueOrThrow({
+        where: { projectId: project.id },
+      }),
+    ).resolves.toMatchObject({
+      state: "IDLE",
+      activeRunId: null,
+      blockedRunId: null,
+      blockedAt: null,
+    });
+    await expect(
+      prisma.agentRunEvent.findFirstOrThrow({
+        where: { runId, type: "STATUS" },
+        orderBy: { sequence: "desc" },
+      }),
+    ).resolves.toMatchObject({
+      payload: { status: "SKIPPED" },
+    });
   });
 });

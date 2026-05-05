@@ -371,6 +371,128 @@ export async function markRunFailed(input: {
   });
 }
 
+export async function retryAgentRun(input: {
+  projectId: string;
+  runId: string;
+}): Promise<void> {
+  const result = await prisma.$transaction(async (tx) => {
+    const run = await tx.agentRun.findUniqueOrThrow({
+      where: { id: input.runId },
+      select: {
+        id: true,
+        projectId: true,
+        sessionId: true,
+        status: true,
+        queueSequence: true,
+      },
+    });
+
+    if (run.projectId !== input.projectId) {
+      throw new Error("Run does not belong to project");
+    }
+    if (run.status !== "FAILED" && run.status !== "CANCELLED") {
+      throw new Error(`Cannot retry run with status ${run.status}`);
+    }
+
+    const updatedRun = await tx.agentRun.updateMany({
+      where: {
+        id: run.id,
+        status: { in: ["FAILED", "CANCELLED"] },
+      },
+      data: {
+        status: "QUEUED",
+        startedAt: null,
+        finishedAt: null,
+        blockedReason: null,
+      },
+    });
+    assertSingleUpdate(updatedRun.count, "Run is no longer retryable");
+
+    await tx.projectQueueState.updateMany({
+      where: {
+        projectId: input.projectId,
+        state: "BLOCKED",
+        blockedRunId: run.id,
+      },
+      data: {
+        state: "IDLE",
+        activeRunId: null,
+        blockedRunId: null,
+        blockedAt: null,
+      },
+    });
+
+    return {
+      projectId: run.projectId,
+      sessionId: run.sessionId,
+      queueSequence: run.queueSequence,
+    };
+  });
+
+  await appendRunEvent({
+    projectId: result.projectId,
+    sessionId: result.sessionId,
+    runId: input.runId,
+    type: "STATUS",
+    payload: {
+      status: "QUEUED",
+      retry: true,
+      queueSequence: result.queueSequence,
+    },
+  });
+}
+
+export async function skipAgentRun(input: {
+  projectId: string;
+  runId: string;
+}): Promise<void> {
+  const result = await prisma.$transaction(async (tx) => {
+    const run = await tx.agentRun.findUniqueOrThrow({
+      where: { id: input.runId },
+      select: {
+        id: true,
+        projectId: true,
+        sessionId: true,
+      },
+    });
+
+    if (run.projectId !== input.projectId) {
+      throw new Error("Run does not belong to project");
+    }
+
+    const updatedQueueState = await tx.projectQueueState.updateMany({
+      where: {
+        projectId: input.projectId,
+        state: "BLOCKED",
+        blockedRunId: run.id,
+      },
+      data: {
+        state: "IDLE",
+        activeRunId: null,
+        blockedRunId: null,
+        blockedAt: null,
+      },
+    });
+    assertSingleUpdate(
+      updatedQueueState.count,
+      "Project queue is not blocked by run",
+    );
+
+    return {
+      projectId: run.projectId,
+      sessionId: run.sessionId,
+    };
+  });
+
+  await appendRunEvent({
+    projectId: result.projectId,
+    sessionId: result.sessionId,
+    runId: input.runId,
+    type: "STATUS",
+    payload: { status: "SKIPPED" },
+  });
+}
+
 async function reserveProjectQueueForRun(
   tx: QueueTransaction,
   input: { projectId: string; runId: string },
