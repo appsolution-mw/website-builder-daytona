@@ -3,8 +3,11 @@ import { Readable } from "node:stream";
 import type { DockerClient, SandboxSpec } from "./docker.js";
 import { verify } from "./hmac.js";
 import type {
+  BrokerCommandResponse,
+  CancelProjectRunRequest,
   CreateSandboxRequest,
   CreateSandboxResponse,
+  DrainProjectQueueRequest,
   ErrorResponse,
   HealthResponse,
   SandboxStatusResponse,
@@ -21,6 +24,7 @@ export interface BuildServerArgs {
 export async function buildServer(args: BuildServerArgs): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const startedAt = Date.now();
+  const brokerTokens = new Map<string, string>();
 
   // Override the default JSON parser to allow empty bodies (DELETE/GET requests
   // may send Content-Type: application/json with no body; Fastify v5 rejects
@@ -99,6 +103,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     };
     try {
       const created = await args.docker.createSandbox(spec);
+      brokerTokens.set(created.sandboxId, body.brokerToken);
       const res: CreateSandboxResponse = {
         sandboxId: created.sandboxId,
         containerId: created.containerId,
@@ -122,6 +127,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
 
   app.delete<{ Params: { id: string } }>("/sandboxes/:id", async (req, reply) => {
     await args.docker.destroySandbox(req.params.id);
+    brokerTokens.delete(req.params.id);
     return reply.code(204).send();
   });
 
@@ -133,5 +139,126 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     return await args.docker.listSandboxes();
   });
 
+  app.post<{ Params: { id: string } }>(
+    "/sandboxes/:id/queue/drain",
+    async (req, reply) => {
+      const body = req.body as DrainProjectQueueRequest | undefined;
+      if (!body || typeof body.projectId !== "string" || body.projectId.length === 0) {
+        return reply.code(400).send({ error: "bad-request" } satisfies ErrorResponse);
+      }
+      const result = await forwardBrokerCommand({
+        sandboxId: req.params.id,
+        brokerTokens,
+        docker: args.docker,
+        path: `/internal/projects/${encodeURIComponent(body.projectId)}/queue/drain`,
+      });
+      return sendBrokerCommandResult(reply, result);
+    },
+  );
+
+  app.post<{ Params: { id: string; runId: string } }>(
+    "/sandboxes/:id/runs/:runId/cancel",
+    async (req, reply) => {
+      const body = req.body as CancelProjectRunRequest | undefined;
+      if (
+        !body ||
+        typeof body.projectId !== "string" ||
+        body.projectId.length === 0 ||
+        typeof body.runId !== "string" ||
+        body.runId.length === 0
+      ) {
+        return reply.code(400).send({ error: "bad-request" } satisfies ErrorResponse);
+      }
+      if (body.runId !== req.params.runId) {
+        return reply.code(400).send({ error: "run-id-mismatch" } satisfies ErrorResponse);
+      }
+      const result = await forwardBrokerCommand({
+        sandboxId: req.params.id,
+        brokerTokens,
+        docker: args.docker,
+        path: `/internal/projects/${encodeURIComponent(body.projectId)}/runs/${encodeURIComponent(body.runId)}/cancel`,
+      });
+      return sendBrokerCommandResult(reply, result);
+    },
+  );
+
   return app;
+}
+
+type BrokerCommandResult =
+  | { ok: true; body: BrokerCommandResponse }
+  | { ok: false; statusCode: number; error: string; reason?: string };
+
+async function forwardBrokerCommand(args: {
+  sandboxId: string;
+  brokerTokens: Map<string, string>;
+  docker: DockerClient;
+  path: string;
+}): Promise<BrokerCommandResult> {
+  const token = args.brokerTokens.get(args.sandboxId);
+  if (!token) {
+    return { ok: false, statusCode: 409, error: "broker-token-missing" };
+  }
+
+  const status = await args.docker.getStatus(args.sandboxId);
+  if (typeof status.brokerPort !== "number") {
+    return { ok: false, statusCode: 409, error: "broker-port-missing" };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`http://127.0.0.1:${status.brokerPort}${args.path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      statusCode: 502,
+      error: "broker-command-failed",
+      reason: err instanceof Error ? err.message : "network-error",
+    };
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      statusCode: 502,
+      error: "broker-command-failed",
+      reason: `${response.status}`,
+    };
+  }
+
+  const parsed = await parseBrokerCommandResponse(response);
+  return { ok: true, body: parsed };
+}
+
+async function parseBrokerCommandResponse(response: Response): Promise<BrokerCommandResponse> {
+  const text = await response.text();
+  if (!text) {
+    return { ok: true };
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<BrokerCommandResponse>;
+    return parsed.ok === true ? { ok: true } : { ok: true };
+  } catch {
+    return { ok: true };
+  }
+}
+
+function sendBrokerCommandResult(
+  reply: FastifyReply,
+  result: BrokerCommandResult,
+): FastifyReply {
+  if (result.ok) {
+    return reply.code(200).send(result.body);
+  }
+  return reply
+    .code(result.statusCode)
+    .send({
+      error: result.error,
+      ...(result.reason ? { reason: result.reason } : {}),
+    } satisfies ErrorResponse);
 }

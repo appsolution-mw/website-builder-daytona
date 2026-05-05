@@ -1,4 +1,5 @@
 import { WebSocketServer, type WebSocket } from "ws";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import type {
@@ -41,6 +42,8 @@ export interface StartBrokerOptions {
   __testSpawn?: SpawnFn;
   /** Test-only: override node-pty spawn used by the interactive terminal. */
   __testPtySpawn?: PtySpawnFn;
+  onDrainProjectQueue?: (projectId: string) => Promise<void> | void;
+  onCancelProjectRun?: (projectId: string, runId: string) => Promise<void> | void;
 }
 
 const WRITE_TOOL_NAMES = new Set(["Write", "Edit", "NotebookEdit", "Create"]);
@@ -227,14 +230,18 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   const enableFsTracker = opts.enableFsTracker ?? true;
   console.log(`[broker] default agent runtime=${agentRuntimeFromEnv()}`);
 
-  const wss = new WebSocketServer({ port: opts.port });
+  const server = createServer((req, res) => {
+    void handleInternalHttpRequest(req, res, opts);
+  });
+  const wss = new WebSocketServer({ server });
 
   await new Promise<void>((resolve, reject) => {
-    wss.once("listening", resolve);
-    wss.once("error", reject);
+    server.once("listening", resolve);
+    server.once("error", reject);
+    server.listen(opts.port);
   });
 
-  const address = wss.address();
+  const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("ws server did not bind to a numeric port");
   }
@@ -728,7 +735,79 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
         }
         wss.close((err) => (err ? reject(err) : resolve()));
       });
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
       if (tracker) await tracker.close();
     },
   };
+}
+
+async function handleInternalHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: StartBrokerOptions,
+): Promise<void> {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  if (!url.pathname.startsWith("/internal/")) {
+    writeJson(res, 426, { error: "upgrade-required" });
+    return;
+  }
+  if (req.method !== "POST") {
+    writeJson(res, 405, { error: "method-not-allowed" });
+    return;
+  }
+
+  const authResult = verifyBrokerBearer(req.headers.authorization);
+  if (!authResult.ok) {
+    writeJson(res, authResult.statusCode, { error: authResult.error });
+    return;
+  }
+
+  const drainMatch = /^\/internal\/projects\/([^/]+)\/queue\/drain$/.exec(url.pathname);
+  if (drainMatch) {
+    const projectId = decodeURIComponent(drainMatch[1]);
+    await (opts.onDrainProjectQueue ?? noop)(projectId);
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  const cancelMatch = /^\/internal\/projects\/([^/]+)\/runs\/([^/]+)\/cancel$/.exec(url.pathname);
+  if (cancelMatch) {
+    const projectId = decodeURIComponent(cancelMatch[1]);
+    const runId = decodeURIComponent(cancelMatch[2]);
+    await (opts.onCancelProjectRun ?? noopCancel)(projectId, runId);
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  writeJson(res, 404, { error: "not-found" });
+}
+
+function verifyBrokerBearer(authHeader: string | undefined): (
+  | { ok: true }
+  | { ok: false; statusCode: number; error: string }
+) {
+  const token = process.env.BROKER_TOKEN;
+  if (!token) {
+    return { ok: false, statusCode: 409, error: "broker-token-not-configured" };
+  }
+  if (!authHeader?.startsWith("Bearer ")) {
+    return { ok: false, statusCode: 401, error: "missing-broker-token" };
+  }
+  if (authHeader.slice("Bearer ".length) !== token) {
+    return { ok: false, statusCode: 403, error: "invalid-broker-token" };
+  }
+  return { ok: true };
+}
+
+function writeJson(res: ServerResponse, statusCode: number, body: unknown): void {
+  res.writeHead(statusCode, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function noop(): void {
+}
+
+function noopCancel(): void {
 }

@@ -1,4 +1,5 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import * as http from "node:http";
 import { sign } from "../src/hmac.js";
 import { buildServer } from "../src/server.js";
 import type {
@@ -9,6 +10,13 @@ import type {
 } from "../src/docker.js";
 
 const SECRET = "test-secret-32-chars-minimum-please";
+let brokerServer: http.Server | undefined;
+let brokerRequests: Array<{
+  method: string;
+  url: string;
+  authorization: string | undefined;
+  body: string;
+}> = [];
 
 function fakeDocker(): DockerClient {
   const map = new Map<string, SandboxStatusInfo>();
@@ -44,13 +52,23 @@ function signed(method: string, path: string, body: string) {
 
 describe("worker-agent server", () => {
   let app: Awaited<ReturnType<typeof buildServer>>;
+
   beforeEach(async () => {
+    brokerRequests = [];
+    brokerServer = undefined;
     app = await buildServer({
       docker: fakeDocker(),
       hmacSecret: SECRET,
       brokerContainerPort: 4000,
       previewContainerPort: 3000,
     });
+  });
+
+  afterEach(async () => {
+    if (brokerServer) {
+      await new Promise<void>((resolve) => brokerServer?.close(() => resolve()));
+      brokerServer = undefined;
+    }
   });
 
   it("GET /health is unauthenticated and returns ok", async () => {
@@ -163,4 +181,214 @@ describe("worker-agent server", () => {
     expect(res.statusCode).toBe(422);
     expect(res.json().error).toBe("image-not-found");
   });
+
+  it("POST /sandboxes/:id/queue/drain without HMAC returns 401", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: JSON.stringify({ projectId: "p1" }),
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("POST /sandboxes/:id/queue/drain forwards to broker with bearer token", async () => {
+    const { port } = await startBrokerCommandServer(200, { ok: true });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", body),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(brokerRequests).toEqual([
+      {
+        method: "POST",
+        url: "/internal/projects/p1/queue/drain",
+        authorization: "Bearer broker-token",
+        body: "",
+      },
+    ]);
+  });
+
+  it("POST /sandboxes/:id/runs/:runId/cancel validates body run id consistency", async () => {
+    const { port } = await startBrokerCommandServer(200, { ok: true });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1", runId: "other-run" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/runs/run-1/cancel",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/runs/run-1/cancel", body),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("run-id-mismatch");
+    expect(brokerRequests).toEqual([]);
+  });
+
+  it("POST /sandboxes/:id/queue/drain validates projectId body", async () => {
+    const body = JSON.stringify({});
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", body),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("bad-request");
+  });
+
+  it("POST /sandboxes/:id/queue/drain requires a broker port", async () => {
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running" }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", body),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("broker-port-missing");
+  });
+
+  it("POST /sandboxes/:id/runs/:runId/cancel reports broker failure", async () => {
+    const { port } = await startBrokerCommandServer(503, { error: "busy" });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    await createSandbox(app2, "s1", "p1", "broker-token");
+    const body = JSON.stringify({ projectId: "p1", runId: "run-1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/runs/run-1/cancel",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/runs/run-1/cancel", body),
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({
+      error: "broker-command-failed",
+      reason: "503",
+    });
+  });
+
+  it("POST /sandboxes/:id/queue/drain returns 409 when the broker token is missing", async () => {
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: 33001 }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    const body = JSON.stringify({ projectId: "p1" });
+
+    const res = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", body),
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("broker-token-missing");
+  });
 });
+
+async function createSandbox(
+  app: Awaited<ReturnType<typeof buildServer>>,
+  sandboxId: string,
+  projectId: string,
+  brokerToken: string,
+): Promise<void> {
+  const body = JSON.stringify({
+    sandboxId,
+    projectId,
+    image: "x",
+    env: {},
+    brokerToken,
+  });
+  const res = await app.inject({
+    method: "POST",
+    url: "/sandboxes",
+    payload: body,
+    headers: signed("POST", "/sandboxes", body),
+  });
+  expect(res.statusCode).toBe(201);
+}
+
+function dockerWithStatus(status: SandboxStatusInfo): DockerClient {
+  return {
+    ...fakeDocker(),
+    async createSandbox(spec) {
+      return {
+        sandboxId: spec.sandboxId,
+        containerId: "cid-command",
+        brokerPort: status.brokerPort ?? 33001,
+        previewPort: status.previewPort ?? 33002,
+        status: "spawning",
+      };
+    },
+    async getStatus(id) {
+      return id === status.sandboxId ? status : { sandboxId: id, status: "gone" };
+    },
+  };
+}
+
+async function startBrokerCommandServer(
+  statusCode: number,
+  responseBody: unknown,
+): Promise<{ port: number }> {
+  brokerServer = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      brokerRequests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: req.headers.authorization,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      res.writeHead(statusCode, { "content-type": "application/json" });
+      res.end(JSON.stringify(responseBody));
+    });
+  });
+  await new Promise<void>((resolve) => brokerServer?.listen(0, "127.0.0.1", resolve));
+  const address = brokerServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("broker test server did not bind to a port");
+  }
+  return { port: address.port };
+}

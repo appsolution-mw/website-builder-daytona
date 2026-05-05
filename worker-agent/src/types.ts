@@ -31,6 +31,10 @@ export interface CancelProjectRunRequest {
   runId: string;
 }
 
+export interface BrokerCommandResponse {
+  ok: true;
+}
+
 export interface HealthResponse {
   ok: true;
   dockerVersion: string;

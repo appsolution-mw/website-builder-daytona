@@ -106,8 +106,10 @@ function createFakePtySpawn() {
 
 describe("broker ws server", () => {
   let handle: BrokerHandle | undefined;
+  const originalEnv = { ...process.env };
 
   afterEach(async () => {
+    process.env = { ...originalEnv };
     if (handle) {
       await handle.close();
       handle = undefined;
@@ -778,5 +780,65 @@ describe("broker ws server", () => {
     expect(events.some((e) => (e as { type?: string }).type === "agent.error")).toBe(true);
     expect(events.some((e) => (e as { type?: string; phase?: string }).type === "agent.status" && (e as { phase?: string }).phase === "reviewing")).toBe(false);
     client.close();
+  });
+
+  it("rejects internal queue drain without a valid bearer token", async () => {
+    process.env.BROKER_TOKEN = "broker-secret";
+    handle = await startBroker({ port: 0, enableFsTracker: false });
+
+    const missing = await fetch(`http://127.0.0.1:${handle.port}/internal/projects/p1/queue/drain`, {
+      method: "POST",
+    });
+    const wrong = await fetch(`http://127.0.0.1:${handle.port}/internal/projects/p1/queue/drain`, {
+      method: "POST",
+      headers: { authorization: "Bearer wrong" },
+    });
+
+    expect(missing.status).toBe(401);
+    expect(await missing.json()).toMatchObject({ error: "missing-broker-token" });
+    expect(wrong.status).toBe(403);
+    expect(await wrong.json()).toMatchObject({ error: "invalid-broker-token" });
+  });
+
+  it("calls the queue drain hook for valid internal requests", async () => {
+    process.env.BROKER_TOKEN = "broker-secret";
+    const drained: string[] = [];
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      onDrainProjectQueue: async (projectId) => {
+        drained.push(projectId);
+      },
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/internal/projects/p1/queue/drain`, {
+      method: "POST",
+      headers: { authorization: "Bearer broker-secret" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(drained).toEqual(["p1"]);
+  });
+
+  it("calls the run cancel hook for valid internal requests", async () => {
+    process.env.BROKER_TOKEN = "broker-secret";
+    const canceled: Array<{ projectId: string; runId: string }> = [];
+    handle = await startBroker({
+      port: 0,
+      enableFsTracker: false,
+      onCancelProjectRun: async (projectId, runId) => {
+        canceled.push({ projectId, runId });
+      },
+    });
+
+    const res = await fetch(`http://127.0.0.1:${handle.port}/internal/projects/p1/runs/run-1/cancel`, {
+      method: "POST",
+      headers: { authorization: "Bearer broker-secret" },
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(canceled).toEqual([{ projectId: "p1", runId: "run-1" }]);
   });
 });
