@@ -100,9 +100,7 @@ describe("HetznerProvisioner", () => {
     expect(createServerArgs.userData).toContain(`WORKER_ID=${worker.id}`);
     expect(createServerArgs.userData).toContain("registry.example.com/wbd/worker-agent:test");
     expect(createServerArgs.userData).toContain("HMAC_SECRET=agent-secret");
-    expect(createServerArgs.userData).toContain(
-      `HOST_URL=https://app.example.com/api/internal/workers/${worker.id}/heartbeat`,
-    );
+    expect(createServerArgs.userData).toContain("HOST_URL=https://app.example.com");
     expect(createServerArgs.userData).toContain(
       "SANDBOX_IMAGE=registry.example.com/wbd/sandbox:test",
     );

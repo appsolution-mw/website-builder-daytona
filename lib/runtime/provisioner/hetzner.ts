@@ -14,8 +14,8 @@ const PENDING_PROVIDER_VM_ID = "pending";
 const DEFAULT_HETZNER_IMAGE = "ubuntu-24.04";
 const DEFAULT_TAILSCALE_TAG = "tag:wbd-worker";
 const DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS = 3600;
-const DEFAULT_TAILSCALE_LOOKUP_ATTEMPTS = 30;
-const DEFAULT_TAILSCALE_LOOKUP_INTERVAL_MS = 2_000;
+const DEFAULT_TAILSCALE_LOOKUP_ATTEMPTS = 90;
+const DEFAULT_TAILSCALE_LOOKUP_INTERVAL_MS = 5_000;
 
 export interface CreateHetznerProvisionerArgs {
   hetzner: HetznerClient;
@@ -112,18 +112,17 @@ export function createHetznerProvisioner(args: CreateHetznerProvisionerArgs): Wo
           },
         });
         authKey = await args.tailscale.createAuthKey({
-          description: `Website Builder Daytona worker ${row.id} (${row.name})`,
+          description: `Website Builder Daytona worker ${row.id} ${row.name}`,
           tags: tailscaleTags,
           reusable: false,
           expirySeconds: tailscaleAuthKeyExpirySeconds,
         });
-        const heartbeatUrl = buildHeartbeatUrl(args.appBaseUrl, row.id);
         const userData = renderWorkerCloudInit({
           workerId: row.id,
           workerAgentImage: args.workerAgentImage,
           workerAgentHmacSecret: args.workerAgentHmacSecret,
           tailscaleAuthKey: authKey.key,
-          heartbeatUrl,
+          appBaseUrl: stripTrailingSlash(args.appBaseUrl),
           sandboxImage: args.sandboxImage,
           imageRegistryAuth: args.imageRegistryAuth,
         });
@@ -233,6 +232,14 @@ export function createHetznerWorkerProvisionerFromEnv(
       runtimeEnv.TAILSCALE_AUTH_KEY_EXPIRY_SECONDS,
       DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS,
     ),
+    tailscaleLookupAttempts: parsePositiveInteger(
+      runtimeEnv.TAILSCALE_LOOKUP_ATTEMPTS,
+      DEFAULT_TAILSCALE_LOOKUP_ATTEMPTS,
+    ),
+    tailscaleLookupIntervalMs: parsePositiveInteger(
+      runtimeEnv.TAILSCALE_LOOKUP_INTERVAL_MS,
+      DEFAULT_TAILSCALE_LOOKUP_INTERVAL_MS,
+    ),
   });
 }
 
@@ -261,8 +268,8 @@ function createWorkerName(now: () => Date): string {
   return `wbd-worker-${timestamp}-${randomBytes(3).toString("hex")}`;
 }
 
-function buildHeartbeatUrl(hostUrl: string, workerId: string): string {
-  return `${hostUrl.replace(/\/+$/, "")}/api/internal/workers/${workerId}/heartbeat`;
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
 }
 
 async function waitForTailscaleIp(args: {

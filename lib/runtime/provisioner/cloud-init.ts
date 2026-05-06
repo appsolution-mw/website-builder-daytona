@@ -3,7 +3,7 @@ export interface RenderWorkerCloudInitArgs {
   workerAgentImage: string;
   workerAgentHmacSecret: string;
   tailscaleAuthKey: string;
-  heartbeatUrl: string;
+  appBaseUrl: string;
   sandboxImage: string;
   imageRegistryAuth?: {
     registry: string;
@@ -38,7 +38,7 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   assertCloudInitValue("workerAgentImage", args.workerAgentImage);
   assertCloudInitValue("workerAgentHmacSecret", args.workerAgentHmacSecret);
   assertCloudInitValue("tailscaleAuthKey", args.tailscaleAuthKey);
-  assertCloudInitValue("heartbeatUrl", args.heartbeatUrl);
+  assertCloudInitValue("appBaseUrl", args.appBaseUrl);
   assertCloudInitValue("sandboxImage", args.sandboxImage);
   if (args.imageRegistryAuth) {
     assertCloudInitValue("imageRegistryAuth.registry", args.imageRegistryAuth.registry);
@@ -50,7 +50,7 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   const workerAgentImage = shell(args.workerAgentImage);
   const workerAgentHmacSecret = shell(args.workerAgentHmacSecret);
   const tailscaleAuthKey = shell(args.tailscaleAuthKey);
-  const heartbeatUrl = shell(args.heartbeatUrl);
+  const appBaseUrl = shell(args.appBaseUrl);
   const sandboxImage = shell(args.sandboxImage);
   const dockerRunCommand = [
     "docker run -d --name worker-agent --restart unless-stopped",
@@ -58,7 +58,7 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
     "-v /var/run/docker.sock:/var/run/docker.sock",
     `-e WORKER_ID=${workerId}`,
     `-e HMAC_SECRET=${workerAgentHmacSecret}`,
-    `-e HOST_URL=${heartbeatUrl}`,
+    `-e HOST_URL=${appBaseUrl}`,
     `-e SANDBOX_IMAGE=${sandboxImage}`,
     workerAgentImage,
   ].join(" ");

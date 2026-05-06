@@ -7,7 +7,7 @@ describe("renderWorkerCloudInit", () => {
     workerAgentImage: "ghcr.io/acme/worker-agent:sha",
     workerAgentHmacSecret: "hmac-secret",
     tailscaleAuthKey: "tskey-auth",
-    heartbeatUrl: "https://example.test/api/workers/heartbeat",
+    appBaseUrl: "https://example.test",
     sandboxImage: "ghcr.io/acme/sandbox:sha",
   };
 
@@ -19,7 +19,7 @@ describe("renderWorkerCloudInit", () => {
     expect(rendered).toContain("docker pull ghcr.io/acme/sandbox:sha");
     expect(rendered).toContain("WORKER_ID=worker_123");
     expect(rendered).toContain("HMAC_SECRET=hmac-secret");
-    expect(rendered).toContain("HOST_URL=https://example.test/api/workers/heartbeat");
+    expect(rendered).toContain("HOST_URL=https://example.test");
     expect(rendered).toContain("--restart unless-stopped");
 
     const redacted = redactCloudInit(rendered);
@@ -42,7 +42,7 @@ describe("renderWorkerCloudInit", () => {
     expect(dockerRunItem).toContain("-v /var/run/docker.sock:/var/run/docker.sock");
     expect(dockerRunItem).toContain("-e WORKER_ID=worker_123");
     expect(dockerRunItem).toContain("-e HMAC_SECRET=hmac-secret");
-    expect(dockerRunItem).toContain("-e HOST_URL=https://example.test/api/workers/heartbeat");
+    expect(dockerRunItem).toContain("-e HOST_URL=https://example.test");
     expect(dockerRunItem).toContain("-e SANDBOX_IMAGE=ghcr.io/acme/sandbox:sha");
   });
 
@@ -91,7 +91,7 @@ describe("renderWorkerCloudInit", () => {
     expect(redacted).not.toContain("hmac-secret");
     expect(redacted).not.toContain("leaked-tail");
     expect(redacted).toContain("HMAC_SECRET=[REDACTED]");
-    expect(redacted).toContain("-e HOST_URL=https://example.test/api/workers/heartbeat");
+    expect(redacted).toContain("-e HOST_URL=https://example.test");
   });
 
   it("renders a docker login step before the pulls when imageRegistryAuth is provided and redacts the token", () => {
@@ -133,7 +133,7 @@ describe("renderWorkerCloudInit", () => {
       ...baseArgs,
       workerId: "worker'123",
       workerAgentHmacSecret: "hmac'secret",
-      heartbeatUrl: "https://example.test/worker'123",
+      appBaseUrl: "https://example.test/worker'123",
     });
 
     expect(rendered).toContain("WORKER_ID=''worker''\\''''123''");
