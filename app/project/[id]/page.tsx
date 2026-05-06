@@ -67,6 +67,10 @@ import type {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  blockedRunActionState,
+  type ProjectRunQueueState,
+} from "@/lib/agent-runs/queue-ui";
 import { runtimeLabel } from "@/lib/agents/runtime";
 import { libraryPresetItemIdForRuntimeSync } from "@/lib/agents/openhands-library-snapshot";
 import {
@@ -181,14 +185,6 @@ type SerializableRunEvent = {
   payload: unknown;
   createdAt: string;
 };
-type ProjectRunQueueState = {
-  state: "IDLE" | "RUNNING" | "BLOCKED";
-  activeRunId: string | null;
-  blockedRunId: string | null;
-  blockedAt: string | null;
-  updatedAt: string | null;
-};
-
 const POLL_INTERVAL_MS = 2_000;
 const EVENT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_CHAT_WIDTH_PCT = 28;
@@ -203,6 +199,13 @@ const ACCEPTED_IMAGE_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "i
 const PROJECT_AGENTS_PATH = "AGENTS.md";
 const PROJECT_ENV_PATH = ".env";
 const PREVIEW_CONSOLE_MESSAGE_TYPE = "wbd-preview-console";
+const IDLE_QUEUE_STATE: ProjectRunQueueState = {
+  state: "IDLE",
+  activeRunId: null,
+  blockedRunId: null,
+  blockedAt: null,
+  updatedAt: null,
+};
 const DEFAULT_PROJECT_AGENTS_CONTENT = `# AGENTS.md
 
 ## Project Context
@@ -579,6 +582,8 @@ export default function ProjectWorkspace({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
+  const [queueState, setQueueState] = useState<ProjectRunQueueState>(IDLE_QUEUE_STATE);
+  const [queueActionPending, setQueueActionPending] = useState<"retry" | "skip" | null>(null);
   const [reviewingActive, setReviewingActive] = useState(false);
   const [sandboxRestarting, setSandboxRestarting] = useState(false);
   const [sandboxRestartError, setSandboxRestartError] = useState<string | null>(null);
@@ -670,6 +675,7 @@ export default function ProjectWorkspace({
     selectedRuntime === "openhands"
       ? runtimeStateForSession(activeSession, "openhands")?.librarySnapshot?.presetItemId ?? null
       : null;
+  const blockedRun = blockedRunActionState(queueState);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1131,6 +1137,7 @@ export default function ProjectWorkspace({
     const runsData = (await runsRes.json()) as {
       queueState: ProjectRunQueueState;
     };
+    setQueueState(runsData.queueState);
     const replayRunIds = new Set(
       [runsData.queueState.activeRunId, runsData.queueState.blockedRunId]
         .filter((runId): runId is string => Boolean(runId)),
@@ -1939,6 +1946,41 @@ export default function ProjectWorkspace({
     void loadOpenRouterModels(true);
   }
 
+  async function unblockQueue(action: "retry" | "skip"): Promise<void> {
+    if (!blockedRun.canUnblock || !blockedRun.blockedRunId || queueActionPending) return;
+
+    setQueueActionPending(action);
+    try {
+      const res = await fetch(`/api/projects/${id}/runs/${blockedRun.blockedRunId}/${action}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        updateMessages((msgs) => [
+          ...msgs,
+          {
+            kind: "error",
+            turnId: blockedRun.blockedRunId,
+            text: data.error ?? `Could not ${action} blocked run (HTTP ${res.status})`,
+          },
+        ]);
+      }
+    } catch (error) {
+      updateMessages((msgs) => [
+        ...msgs,
+        {
+          kind: "error",
+          turnId: blockedRun.blockedRunId,
+          text: error instanceof Error ? error.message : `Could not ${action} blocked run`,
+        },
+      ]);
+    } finally {
+      setQueueActionPending(null);
+      void refreshRunEvents();
+      window.setTimeout(() => void refreshRunEvents(), 500);
+    }
+  }
+
   function previewCaptureBounds(): CaptureRect | null {
     const frame = previewFrameRef.current;
     if (!frame) return null;
@@ -2341,7 +2383,7 @@ export default function ProjectWorkspace({
             <Settings2 />
           </Button>
           <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
-            {turnInFlight ? "agent busy" : "ready"}
+            {queueState.state === "BLOCKED" ? "blocked" : turnInFlight ? "agent busy" : "ready"}
           </Badge>
         </div>
       </header>
@@ -2469,6 +2511,41 @@ export default function ProjectWorkspace({
               />
             ) : null}
           </div>
+          {blockedRun.canUnblock && (
+            <div className="border-b border-border bg-destructive/10 px-3 py-2">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-200" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-red-100">Queue blocked</div>
+                  <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                    A failed run is blocking new chat messages. Retry it or skip it to continue.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 pl-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  disabled={queueActionPending !== null}
+                  onClick={() => void unblockQueue("retry")}
+                >
+                  {queueActionPending === "retry" && <Loader2 className="animate-spin" />}
+                  Retry
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={queueActionPending !== null}
+                  onClick={() => void unblockQueue("skip")}
+                >
+                  {queueActionPending === "skip" && <Loader2 className="animate-spin" />}
+                  Skip
+                </Button>
+              </div>
+            </div>
+          )}
           <ul
             ref={chatScrollRef}
             onScroll={onChatScroll}
