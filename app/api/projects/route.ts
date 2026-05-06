@@ -391,6 +391,7 @@ export async function POST(request: NextRequest) {
       project: serializeProject(updated),
     }, { status: 201 });
   } catch (error) {
+    console.error("[projects] sandbox provisioning failed", error);
     const isNoWorkerCapacity = isRuntimeError(error, "NO_WORKER_CAPACITY");
     const message = isNoWorkerCapacity
       ? noWorkerCapacityMessage(error)
