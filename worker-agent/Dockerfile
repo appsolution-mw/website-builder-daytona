@@ -1,5 +1,8 @@
 FROM node:24-bookworm-slim AS deps
 WORKDIR /opt/worker-agent
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@9 --activate
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY worker-agent/package.json worker-agent/
