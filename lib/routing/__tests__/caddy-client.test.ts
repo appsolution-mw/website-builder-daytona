@@ -24,7 +24,7 @@ describe("createCaddyClient", () => {
       input: "http://127.0.0.1:2019/id/project%2Fid",
       init: {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { origin: "http://127.0.0.1:2019", "content-type": "application/json" },
       },
     });
     expect(jsonBody(calls[0])).toEqual({ ...route, "@id": "project/id" });
@@ -54,14 +54,14 @@ describe("createCaddyClient", () => {
         input: "http://127.0.0.1:2019/id/project%2Fid",
         init: {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: { origin: "http://127.0.0.1:2019", "content-type": "application/json" },
         },
       },
       {
         input: "http://127.0.0.1:2019/config/apps/http/servers/srv0/routes",
         init: {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { origin: "http://127.0.0.1:2019", "content-type": "application/json" },
         },
       },
     ]);
@@ -84,7 +84,7 @@ describe("createCaddyClient", () => {
     expect(calls).toEqual([
       {
         input: "http://127.0.0.1:2019/id/project%2Fid",
-        init: { method: "DELETE" },
+        init: { method: "DELETE", headers: { origin: "http://127.0.0.1:2019" } },
       },
     ]);
   });

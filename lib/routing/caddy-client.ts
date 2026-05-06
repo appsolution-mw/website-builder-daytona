@@ -19,11 +19,13 @@ export function createCaddyClient(adminUrl: string, fetchImpl: typeof fetch = fe
     return `${normalizedAdminUrl}/id/${encodeURIComponent(routeId)}`;
   }
 
+  const baseHeaders = { origin: normalizedAdminUrl } as const;
+
   async function applyRoute(routeId: string, route: CaddyRoute): Promise<void> {
     const routeWithId: CaddyRoute = { ...route, "@id": routeId };
     const patchResponse = await requestCaddy(fetchImpl, "apply", routeId, buildRouteIdUrl(routeId), {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: { ...baseHeaders, "content-type": "application/json" },
       body: JSON.stringify(routeWithId),
     });
 
@@ -37,7 +39,7 @@ export function createCaddyClient(adminUrl: string, fetchImpl: typeof fetch = fe
 
     const postResponse = await requestCaddy(fetchImpl, "apply", routeId, buildRouteCollectionUrl(), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { ...baseHeaders, "content-type": "application/json" },
       body: JSON.stringify(routeWithId),
     });
 
@@ -49,6 +51,7 @@ export function createCaddyClient(adminUrl: string, fetchImpl: typeof fetch = fe
   async function deleteRoute(routeId: string): Promise<void> {
     const response = await requestCaddy(fetchImpl, "delete", routeId, buildRouteIdUrl(routeId), {
       method: "DELETE",
+      headers: { ...baseHeaders },
     });
 
     if (response.status === 404) {
