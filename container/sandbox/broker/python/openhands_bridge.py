@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import time
+import uuid
 import warnings
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -432,9 +433,18 @@ def build_conversation_kwargs(
         "visualizer": visualizer,
         "max_iteration_per_run": positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
         "max_iterations": positive_int(os.getenv("OPENHANDS_MAX_ITERATIONS")),
-        "conversation_id": args.conversation_id,
+        "conversation_id": parse_conversation_id(args.conversation_id),
         "persistence_dir": args.persistence_dir,
     }
+
+
+def parse_conversation_id(value: str | None) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise RuntimeError("OpenHands conversation id must be a UUID.") from exc
 
 
 def positive_int(value: str | None) -> int | None:

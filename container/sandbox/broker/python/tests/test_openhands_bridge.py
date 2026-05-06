@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,9 +86,24 @@ class AgentContextTests(unittest.TestCase):
 
 
 class ConversationPersistenceTests(unittest.TestCase):
-    def test_builds_conversation_kwargs_with_persistence_metadata(self) -> None:
+    def test_builds_conversation_kwargs_with_uuid_conversation_id(self) -> None:
+        conversation_id = uuid.uuid4()
         args = SimpleNamespace(
-            conversation_id="provider-session-id",
+            conversation_id=str(conversation_id),
+            persistence_dir="/workspace/project/.agent-artifacts/openhands/conversations",
+        )
+        agent = object()
+        visualizer = object()
+        workspace = Path("/workspace/project")
+
+        kwargs = openhands_bridge.build_conversation_kwargs(args, agent, workspace, visualizer)
+
+        self.assertEqual(kwargs["conversation_id"], conversation_id)
+
+    def test_builds_conversation_kwargs_with_persistence_metadata(self) -> None:
+        conversation_id = uuid.uuid4()
+        args = SimpleNamespace(
+            conversation_id=str(conversation_id),
             persistence_dir="/workspace/project/.agent-artifacts/openhands/conversations",
         )
         agent = object()
@@ -104,7 +120,7 @@ class ConversationPersistenceTests(unittest.TestCase):
                 "visualizer": visualizer,
                 "max_iteration_per_run": None,
                 "max_iterations": None,
-                "conversation_id": "provider-session-id",
+                "conversation_id": conversation_id,
                 "persistence_dir": "/workspace/project/.agent-artifacts/openhands/conversations",
             },
         )
