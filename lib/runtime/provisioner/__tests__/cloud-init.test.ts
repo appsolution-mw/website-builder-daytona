@@ -39,11 +39,13 @@ describe("renderWorkerCloudInit", () => {
     expect(rendered).not.toContain("\\\n      -v");
     expect(rendered).not.toContain("\\\n      -e");
     expect(dockerRunItem).toContain("-p 4500:4500");
+    expect(dockerRunItem).toContain("--add-host=host.docker.internal:host-gateway");
     expect(dockerRunItem).toContain("-v /var/run/docker.sock:/var/run/docker.sock");
     expect(dockerRunItem).toContain("-e WORKER_ID=worker_123");
     expect(dockerRunItem).toContain("-e HMAC_SECRET=hmac-secret");
     expect(dockerRunItem).toContain("-e HOST_URL=https://example.test");
     expect(dockerRunItem).toContain("-e SANDBOX_IMAGE=ghcr.io/acme/sandbox:sha");
+    expect(dockerRunItem).toContain("-e BROKER_HOST=host.docker.internal");
   });
 
   it("rejects control characters that could break out of YAML runcmd lines", () => {

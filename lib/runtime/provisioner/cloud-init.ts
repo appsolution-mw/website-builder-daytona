@@ -55,11 +55,13 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   const dockerRunCommand = [
     "docker run -d --name worker-agent --restart unless-stopped",
     "-p 4500:4500",
+    "--add-host=host.docker.internal:host-gateway",
     "-v /var/run/docker.sock:/var/run/docker.sock",
     `-e WORKER_ID=${workerId}`,
     `-e HMAC_SECRET=${workerAgentHmacSecret}`,
     `-e HOST_URL=${appBaseUrl}`,
     `-e SANDBOX_IMAGE=${sandboxImage}`,
+    "-e BROKER_HOST=host.docker.internal",
     workerAgentImage,
   ].join(" ");
 

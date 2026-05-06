@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT ?? 4500);
 const HMAC_SECRET = required("HMAC_SECRET");
 const HOST_URL = required("HOST_URL");
 const WORKER_ID = required("WORKER_ID");
+const BROKER_HOST = process.env.BROKER_HOST?.trim() || "127.0.0.1";
 const PORT_RANGE_MIN = Number(process.env.SANDBOX_PORT_MIN ?? 30000);
 const PORT_RANGE_MAX = Number(process.env.SANDBOX_PORT_MAX ?? 39999);
 
@@ -59,6 +60,7 @@ async function main() {
     hmacSecret: HMAC_SECRET,
     brokerContainerPort: 4000,
     previewContainerPort: 3000,
+    brokerHost: BROKER_HOST,
     dockerVersion,
   });
   await app.listen({ host: "0.0.0.0", port: PORT });

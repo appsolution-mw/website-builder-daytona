@@ -22,6 +22,7 @@ export interface BuildServerArgs {
   hmacSecret: string;
   brokerContainerPort: number;
   previewContainerPort: number;
+  brokerHost?: string;
   dockerVersion?: string;
 }
 
@@ -29,6 +30,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
   const app = Fastify({ logger: false });
   const startedAt = Date.now();
   const brokerTokens = new Map<string, string>();
+  const brokerHost = args.brokerHost ?? "127.0.0.1";
 
   // Override the default JSON parser to allow empty bodies (DELETE/GET requests
   // may send Content-Type: application/json with no body; Fastify v5 rejects
@@ -154,6 +156,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
         sandboxId: req.params.id,
         brokerTokens,
         docker: args.docker,
+        brokerHost,
         path: `/internal/projects/${encodeURIComponent(body.projectId)}/queue/drain`,
       });
       return sendBrokerCommandResult(reply, result);
@@ -171,6 +174,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
         sandboxId: req.params.id,
         brokerTokens,
         docker: args.docker,
+        brokerHost,
         path: `/internal/projects/${encodeURIComponent(body.projectId)}/git/status`,
       });
       return sendBrokerCommandResult(reply, result);
@@ -188,6 +192,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
         sandboxId: req.params.id,
         brokerTokens,
         docker: args.docker,
+        brokerHost,
         path: `/internal/projects/${encodeURIComponent(body.projectId)}/git/push`,
         body: {
           remoteUrl: body.remoteUrl,
@@ -212,6 +217,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
         sandboxId: req.params.id,
         brokerTokens,
         docker: args.docker,
+        brokerHost,
         path: `/internal/projects/${encodeURIComponent(body.projectId)}/runs/${encodeURIComponent(body.runId)}/execute`,
         body,
       });
@@ -249,6 +255,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
         sandboxId: req.params.id,
         brokerTokens,
         docker: args.docker,
+        brokerHost,
         path: `/internal/projects/${encodeURIComponent(body.projectId)}/runs/${encodeURIComponent(body.runId)}/cancel`,
       });
       return sendBrokerCommandResult(reply, result);
@@ -270,6 +277,7 @@ async function forwardBrokerCommand(args: {
   sandboxId: string;
   brokerTokens: Map<string, string>;
   docker: DockerClient;
+  brokerHost: string;
   path: string;
   body?: unknown;
 }): Promise<BrokerCommandResult> {
@@ -289,7 +297,7 @@ async function forwardBrokerCommand(args: {
   let response: Response;
   const rawBody = args.body === undefined ? undefined : JSON.stringify(args.body);
   try {
-    response = await fetch(`http://127.0.0.1:${status.brokerPort}${args.path}`, {
+    response = await fetch(`http://${args.brokerHost}:${status.brokerPort}${args.path}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
@@ -323,6 +331,7 @@ async function forwardBrokerCommandStream(args: {
   sandboxId: string;
   brokerTokens: Map<string, string>;
   docker: DockerClient;
+  brokerHost: string;
   path: string;
   body: unknown;
 }): Promise<BrokerCommandStreamResult> {
@@ -341,7 +350,7 @@ async function forwardBrokerCommandStream(args: {
 
   let response: Response;
   try {
-    response = await fetch(`http://127.0.0.1:${status.brokerPort}${args.path}`, {
+    response = await fetch(`http://${args.brokerHost}:${status.brokerPort}${args.path}`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,

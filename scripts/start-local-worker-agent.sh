@@ -21,6 +21,7 @@ docker run -d --name wbd-worker-agent \
   -p 4500:4500 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e HOST_URL=http://host.docker.internal:3000 \
+  -e BROKER_HOST=host.docker.internal \
   -e HMAC_SECRET="${WORKER_AGENT_HMAC_SECRET}" \
   -e SANDBOX_IMAGE="${SANDBOX_IMAGE:-wbd/sandbox:dev}" \
   -e WORKER_ID="${WORKER_ID}" \
