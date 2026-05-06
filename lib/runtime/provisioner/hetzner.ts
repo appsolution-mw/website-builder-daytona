@@ -24,6 +24,11 @@ export interface CreateHetznerProvisionerArgs {
   workerAgentHmacSecret: string;
   appBaseUrl: string;
   sandboxImage: string;
+  imageRegistryAuth?: {
+    registry: string;
+    username: string;
+    token: string;
+  };
   hetznerImage?: string;
   tailscaleTags?: string[];
   tailscaleAuthKeyExpirySeconds?: number;
@@ -120,6 +125,7 @@ export function createHetznerProvisioner(args: CreateHetznerProvisionerArgs): Wo
           tailscaleAuthKey: authKey.key,
           heartbeatUrl,
           sandboxImage: args.sandboxImage,
+          imageRegistryAuth: args.imageRegistryAuth,
         });
         server = await args.hetzner.createServer({
           name: row.name,
@@ -220,6 +226,7 @@ export function createHetznerWorkerProvisionerFromEnv(
     workerAgentHmacSecret: requiredEnv("WORKER_AGENT_HMAC_SECRET", runtimeEnv),
     appBaseUrl: requiredEnv("APP_BASE_URL", runtimeEnv),
     sandboxImage: requiredEnv("SANDBOX_IMAGE", runtimeEnv),
+    imageRegistryAuth: imageRegistryAuthFromEnv(runtimeEnv),
     hetznerImage: runtimeEnv.HETZNER_IMAGE ?? DEFAULT_HETZNER_IMAGE,
     tailscaleTags: [runtimeEnv.TAILSCALE_WORKER_TAG ?? DEFAULT_TAILSCALE_TAG],
     tailscaleAuthKeyExpirySeconds: parsePositiveInteger(
@@ -237,6 +244,16 @@ export function requiredEnv(name: string, runtimeEnv: Record<string, string | un
   }
 
   return value;
+}
+
+function imageRegistryAuthFromEnv(
+  runtimeEnv: Record<string, string | undefined>,
+): CreateHetznerProvisionerArgs["imageRegistryAuth"] {
+  const username = runtimeEnv.IMAGE_REGISTRY_USERNAME;
+  const token = runtimeEnv.IMAGE_REGISTRY_TOKEN;
+  if (!username || !token) return undefined;
+  const registry = runtimeEnv.IMAGE_REGISTRY_HOST ?? "ghcr.io";
+  return { registry, username, token };
 }
 
 function createWorkerName(now: () => Date): string {

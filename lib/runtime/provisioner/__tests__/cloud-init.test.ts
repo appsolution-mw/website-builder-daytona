@@ -94,6 +94,40 @@ describe("renderWorkerCloudInit", () => {
     expect(redacted).toContain("-e HOST_URL=https://example.test/api/workers/heartbeat");
   });
 
+  it("renders a docker login step before the pulls when imageRegistryAuth is provided and redacts the token", () => {
+    const rendered = renderWorkerCloudInit({
+      ...baseArgs,
+      imageRegistryAuth: {
+        registry: "ghcr.io",
+        username: "appsolution-mw",
+        token: "ghp_secrettoken",
+      },
+    });
+
+    const lines = rendered.split("\n");
+    const loginIdx = lines.findIndex((line) => line.includes("docker login ghcr.io"));
+    const workerPullIdx = lines.findIndex((line) =>
+      line.includes("docker pull ghcr.io/acme/worker-agent:sha"),
+    );
+    const sandboxPullIdx = lines.findIndex((line) =>
+      line.includes("docker pull ghcr.io/acme/sandbox:sha"),
+    );
+
+    expect(loginIdx).toBeGreaterThan(-1);
+    expect(loginIdx).toBeLessThan(workerPullIdx);
+    expect(workerPullIdx).toBeLessThan(sandboxPullIdx);
+    expect(rendered).toContain("docker login ghcr.io -u appsolution-mw -p ghp_secrettoken");
+
+    const redacted = redactCloudInit(rendered);
+    expect(redacted).not.toContain("ghp_secrettoken");
+    expect(redacted).toContain("docker login ghcr.io -u appsolution-mw -p [REDACTED]");
+  });
+
+  it("omits the docker login step when imageRegistryAuth is missing", () => {
+    const rendered = renderWorkerCloudInit(baseArgs);
+    expect(rendered).not.toContain("docker login");
+  });
+
   it("shell-quotes single quotes in input values", () => {
     const rendered = renderWorkerCloudInit({
       ...baseArgs,

@@ -49,7 +49,7 @@ export function createHetznerClient(
       });
 
       if (!response.ok) {
-        throw new Error(`Hetzner createServer failed with HTTP ${response.status}`);
+        throw new Error(`Hetzner createServer failed with HTTP ${response.status}: ${await readBodySafe(response)}`);
       }
 
       const parsed = await readJson<HetznerServerResponse>(response);
@@ -70,11 +70,20 @@ export function createHetznerClient(
 
       if (response.ok || response.status === 404) return;
 
-      throw new Error(`Hetzner deleteServer failed with HTTP ${response.status}`);
+      throw new Error(`Hetzner deleteServer failed with HTTP ${response.status}: ${await readBodySafe(response)}`);
     },
   };
 }
 
 async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
+}
+
+async function readBodySafe(response: Response): Promise<string> {
+  try {
+    const text = await response.text();
+    return text.length > 0 ? text.slice(0, 500) : "(empty body)";
+  } catch {
+    return "(unreadable body)";
+  }
 }

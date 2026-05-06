@@ -5,6 +5,11 @@ export interface RenderWorkerCloudInitArgs {
   tailscaleAuthKey: string;
   heartbeatUrl: string;
   sandboxImage: string;
+  imageRegistryAuth?: {
+    registry: string;
+    username: string;
+    token: string;
+  };
 }
 
 const SAFE_SHELL_WORD = /^[A-Za-z0-9_./:@%+=,-]+$/;
@@ -35,6 +40,11 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   assertCloudInitValue("tailscaleAuthKey", args.tailscaleAuthKey);
   assertCloudInitValue("heartbeatUrl", args.heartbeatUrl);
   assertCloudInitValue("sandboxImage", args.sandboxImage);
+  if (args.imageRegistryAuth) {
+    assertCloudInitValue("imageRegistryAuth.registry", args.imageRegistryAuth.registry);
+    assertCloudInitValue("imageRegistryAuth.username", args.imageRegistryAuth.username);
+    assertCloudInitValue("imageRegistryAuth.token", args.imageRegistryAuth.token);
+  }
 
   const workerId = shell(args.workerId);
   const workerAgentImage = shell(args.workerAgentImage);
@@ -53,6 +63,12 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
     workerAgentImage,
   ].join(" ");
 
+  const dockerLoginLine = args.imageRegistryAuth
+    ? `  - ${yaml(
+        `docker login ${shell(args.imageRegistryAuth.registry)} -u ${shell(args.imageRegistryAuth.username)} -p ${shell(args.imageRegistryAuth.token)}`,
+      )}\n`
+    : "";
+
   return `#cloud-config
 package_update: true
 packages:
@@ -65,7 +81,7 @@ runcmd:
   - ${yaml("curl -fsSL https://tailscale.com/install.sh | sh")}
   - ${yaml("systemctl enable --now tailscaled")}
   - ${yaml(`tailscale up --auth-key ${tailscaleAuthKey}`)}
-  - ${yaml(`docker pull ${workerAgentImage}`)}
+${dockerLoginLine}  - ${yaml(`docker pull ${workerAgentImage}`)}
   - ${yaml(`docker pull ${sandboxImage}`)}
   - ${yaml("docker rm -f worker-agent || true")}
   - ${yaml(dockerRunCommand)}
@@ -104,10 +120,12 @@ function parseYamlCommandLine(
 }
 
 function redactCommandSecrets(command: string): string {
-  return redactShellTokenAfter(
-    redactShellTokenAfter(command, "tailscale up --auth-key "),
-    "HMAC_SECRET=",
-  );
+  let redacted = redactShellTokenAfter(command, "tailscale up --auth-key ");
+  redacted = redactShellTokenAfter(redacted, "HMAC_SECRET=");
+  if (redacted.startsWith("docker login ")) {
+    redacted = redactShellTokenAfter(redacted, " -p ");
+  }
+  return redacted;
 }
 
 function redactShellTokenAfter(value: string, marker: string): string {

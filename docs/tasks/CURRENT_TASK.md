@@ -1,3 +1,3 @@
 # Current Task
 
-No active task.
+[T-20260506-001 - Hetzner edge bootstrap script](active/T-20260506-001.md)
