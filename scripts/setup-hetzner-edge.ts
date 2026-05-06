@@ -80,6 +80,7 @@ function renderCloudInit(args: {
     "      }",
     "",
     "      nothing.invalid {",
+    "        tls internal",
     "        respond 200",
     "      }",
     "  - path: /etc/systemd/system/caddy.service",
