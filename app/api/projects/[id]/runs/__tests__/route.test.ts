@@ -57,6 +57,7 @@ import { POST as cancelPOST } from "../[runId]/cancel/route";
 
 const USER = { id: "user-1" };
 const PROJECT = { id: "project-1", ownerId: "owner-1", workspaceId: "workspace-1" };
+const PROVIDER_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
 function context(projectId = PROJECT.id): { params: Promise<{ id: string }> } {
   return { params: Promise.resolve({ id: projectId }) };
@@ -97,7 +98,7 @@ describe("/api/projects/[id]/runs", () => {
       sessionId: "session-1",
       prompt: " Build this ",
       runtime: "openai-codex",
-      providerSessionId: "provider-session-1",
+      providerSessionId: PROVIDER_SESSION_ID,
       modelId: "gpt-test",
     }), context());
 
@@ -122,7 +123,7 @@ describe("/api/projects/[id]/runs", () => {
       userId: USER.id,
       prompt: "Build this",
       runtime: "openai-codex",
-      providerSessionId: "provider-session-1",
+      providerSessionId: PROVIDER_SESSION_ID,
       modelId: "gpt-test",
     });
     expect(sessionRuntimeStateUpsertMock).toHaveBeenCalledWith({
@@ -136,11 +137,11 @@ describe("/api/projects/[id]/runs", () => {
         projectId: PROJECT.id,
         sessionId: "session-1",
         runtime: "OPENAI_CODEX",
-        providerSessionId: "provider-session-1",
+        providerSessionId: PROVIDER_SESSION_ID,
         modelId: "gpt-test",
       },
       update: {
-        providerSessionId: "provider-session-1",
+        providerSessionId: PROVIDER_SESSION_ID,
         modelId: "gpt-test",
         lastUsedAt: expect.any(Date),
       },
@@ -165,6 +166,23 @@ describe("/api/projects/[id]/runs", () => {
     expect(requestProjectQueueDrainMock).not.toHaveBeenCalled();
   });
 
+  it("rejects non-UUID provider session ids before mutating state", async () => {
+    requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
+    requireAccessibleProjectMock.mockResolvedValue(PROJECT);
+
+    const res = await POST(postRequest({
+      sessionId: "session-1",
+      prompt: "Build this",
+      runtime: "openhands",
+      providerSessionId: "provider-session-1",
+    }), context());
+
+    expect(res.status).toBe(400);
+    expect(sessionFindFirstMock).not.toHaveBeenCalled();
+    expect(enqueueAgentRunMock).not.toHaveBeenCalled();
+    expect(requestProjectQueueDrainMock).not.toHaveBeenCalled();
+  });
+
   it("returns 404 when the session is not part of the accessible project", async () => {
     requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
     requireAccessibleProjectMock.mockResolvedValue(PROJECT);
@@ -174,7 +192,7 @@ describe("/api/projects/[id]/runs", () => {
       sessionId: "session-1",
       prompt: "Build this",
       runtime: "openai-codex",
-      providerSessionId: "provider-session-1",
+      providerSessionId: PROVIDER_SESSION_ID,
     }), context());
 
     expect(res.status).toBe(404);
