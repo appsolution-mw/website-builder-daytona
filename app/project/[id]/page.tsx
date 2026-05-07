@@ -93,6 +93,7 @@ import {
   type CapturePoint,
   type CaptureRect,
 } from "@/lib/preview-capture";
+import { randomId } from "@/lib/random-id";
 
 type RuntimeState = {
   runtime: AgentRuntime;
@@ -146,6 +147,7 @@ type Project = {
   availableRuntimes: Array<{ value: AgentRuntime; label: string; provider: string }>;
   previewUrl: string | null;
   provisioningError: string | null;
+  brokerReady: boolean;
   chatSession: ChatSession;
   chatSessions: ChatSession[];
 };
@@ -352,7 +354,7 @@ function readImageFile(file: File): Promise<DraftImageAttachment> {
         return;
       }
       resolve({
-        id: crypto.randomUUID(),
+        id: randomId(),
         name: file.name || "image.png",
         mimeType: file.type,
         size: file.size,
@@ -379,7 +381,7 @@ function imageAttachmentFromDataUrl(dataUrl: string, name: string): DraftImageAt
     throw new Error(`Unsupported screenshot type: ${mimeType}`);
   }
   return {
-    id: crypto.randomUUID(),
+    id: randomId(),
     name,
     mimeType,
     size: base64ByteLength(dataBase64),
@@ -699,7 +701,7 @@ export default function ProjectWorkspace({
       ...prev,
       {
         ...entry,
-        id: crypto.randomUUID(),
+        id: randomId(),
       },
     ].slice(-MAX_CONSOLE_ENTRIES));
   }
@@ -758,7 +760,7 @@ export default function ProjectWorkspace({
   const ensureProjectAgentsFile = useCallback(async (currentPaths: string[]) => {
     if (currentPaths.includes(PROJECT_AGENTS_PATH)) return;
 
-    const readRequestId = crypto.randomUUID();
+    const readRequestId = randomId();
     const read = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
       { type: "file.read", requestId: readRequestId, path: PROJECT_AGENTS_PATH },
       readRequestId,
@@ -771,7 +773,7 @@ export default function ProjectWorkspace({
     }
     if (read.error && read.error !== "not_found") return;
 
-    const writeRequestId = crypto.randomUUID();
+    const writeRequestId = randomId();
     const write = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
       {
         type: "file.write",
@@ -789,7 +791,7 @@ export default function ProjectWorkspace({
   }, [sendRequest]);
 
   const requestFileList = useCallback(async (): Promise<string[]> => {
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     setFileListLoading(true);
     setFileListError(null);
     try {
@@ -824,7 +826,7 @@ export default function ProjectWorkspace({
   }, [id]);
 
   const writeProjectFile = useCallback(async (path: string, content: string) => {
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     const write = await sendRequest<Extract<ProxyToBrowser, { type: "file.write.result" }>>(
       { type: "file.write", requestId, path, content },
       requestId,
@@ -833,7 +835,7 @@ export default function ProjectWorkspace({
   }, [sendRequest]);
 
   const deleteProjectFile = useCallback(async (path: string) => {
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     const result = await sendRequest<Extract<ProxyToBrowser, { type: "file.delete.result" }>>(
       { type: "file.delete", requestId, path, cleanupEmptyParents: true },
       requestId,
@@ -1002,7 +1004,7 @@ export default function ProjectWorkspace({
     const stalePaths = staleNextDevtoolsCleanupPaths(pathsRef.current);
     const appPaths = resolveNextAppDevtoolsPaths(pathsRef.current);
     if (!appPaths) return;
-    const layoutRequestId = crypto.randomUUID();
+    const layoutRequestId = randomId();
     const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
       { type: "file.read", requestId: layoutRequestId, path: appPaths.layoutPath },
       layoutRequestId,
@@ -1043,7 +1045,7 @@ export default function ProjectWorkspace({
     const bridgePaths = resolveNextAppConsoleBridgePaths(pathsRef.current);
     if (!bridgePaths) return;
 
-    const layoutRequestId = crypto.randomUUID();
+    const layoutRequestId = randomId();
     const layout = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
       { type: "file.read", requestId: layoutRequestId, path: bridgePaths.layoutPath },
       layoutRequestId,
@@ -1072,7 +1074,7 @@ export default function ProjectWorkspace({
 
   const loadDevIndicatorSetting = useCallback(async () => {
     const configPath = resolveNextConfigPath(pathsRef.current);
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
         { type: "file.read", requestId, path: configPath },
@@ -1325,7 +1327,7 @@ export default function ProjectWorkspace({
   }
 
   async function refreshOpenFile(path: string) {
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
         { type: "file.read", requestId, path },
@@ -1606,6 +1608,36 @@ export default function ProjectWorkspace({
     };
   }, [id]);
 
+  // Poll for `brokerReady` flipping true after spawn/restart. Cheap targeted
+  // refresh that only patches the broker field — leaves the session and chat
+  // state untouched so polling doesn't blow away the active conversation.
+  const projectStatus = project?.status;
+  const projectBrokerReady = project?.brokerReady;
+  useEffect(() => {
+    if (projectStatus !== "RUNNING") return;
+    if (projectBrokerReady) return;
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const res = await fetch(`/api/projects/${id}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { project: Project };
+        if (cancelled) return;
+        setProject((current) => {
+          if (!current) return current;
+          return { ...current, brokerReady: data.project.brokerReady };
+        });
+        if (data.project.brokerReady) window.clearInterval(timer);
+      } catch {
+        // network blip — try again on next tick
+      }
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [id, projectStatus, projectBrokerReady]);
+
   async function reloadProjectSnapshot(): Promise<Project> {
     const res = await fetch(`/api/projects/${id}`, { cache: "no-store" });
     const data = (await res.json().catch(() => ({}))) as { project?: Project; error?: string };
@@ -1716,6 +1748,10 @@ export default function ProjectWorkspace({
 
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
+    // Don't attempt to connect until the host has confirmed the broker is up.
+    // Otherwise the ws-proxy keeps logging ECONNREFUSED while the sandbox is
+    // still booting, and the workspace UI flashes briefly before failing.
+    if (!project.brokerReady) return;
     const base =
       process.env.NEXT_PUBLIC_WS_PROXY_URL ??
       (() => {
@@ -1792,6 +1828,7 @@ export default function ProjectWorkspace({
   }, [
     project?.status,
     project?.sandboxId,
+    project?.brokerReady,
     id,
     requestFileList,
     loadDevIndicatorSetting,
@@ -1859,7 +1896,7 @@ export default function ProjectWorkspace({
     setSaveIndicator("idle");
     setSaveError(null);
     setTab("code");
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     try {
       const reply = await sendRequest<Extract<ProxyToBrowser, { type: "file.content" }>>(
         { type: "file.read", requestId, path },
@@ -1885,7 +1922,7 @@ export default function ProjectWorkspace({
     const content = fileContentRef.current;
     if (!path || content === null) return;
     if (turnInFlight !== null) return;
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     setSaveIndicator("idle");
     setSaveError(null);
     try {
@@ -1910,7 +1947,7 @@ export default function ProjectWorkspace({
   async function toggleDevIndicator() {
     if (turnInFlight !== null || devIndicatorSaving) return;
     const configPath = resolveNextConfigPath(pathsRef.current);
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
     setDevIndicatorSaving(true);
     setDevIndicatorError(null);
     try {
@@ -1945,7 +1982,7 @@ export default function ProjectWorkspace({
     if (!session || !supportsOpenRouterModelPicker(runtime)) return;
 
     const runtimeState = runtimeStateForSession(session, runtime);
-    const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
+    const providerSessionId = runtimeState?.providerSessionId ?? randomId();
     void syncRuntimeState(runtime, providerSessionId, modelId);
   }
 
@@ -2166,7 +2203,7 @@ export default function ProjectWorkspace({
     const session = activeSessionRef.current;
     const runtime = selectedRuntimeRef.current;
     const runtimeState = runtimeStateForSession(session, runtime);
-    const providerSessionId = runtimeState?.providerSessionId ?? crypto.randomUUID();
+    const providerSessionId = runtimeState?.providerSessionId ?? randomId();
     const modelId = runtimeState?.modelId ?? null;
     if (!text || !session) return;
     if (attachments.length > 0) {
@@ -2267,11 +2304,20 @@ export default function ProjectWorkspace({
     );
   }
 
-  if (brokerReadyProjectId !== id) {
+  // Show the loading overlay until BOTH server-side broker readiness and the
+  // browser WS handshake have settled. The host-set `brokerReady` flag is the
+  // authoritative signal that the in-container broker is listening; `wsStatus`
+  // is the live transport check. Either being false → keep the overlay so the
+  // workspace UI never mounts in a broken state.
+  if (!project.brokerReady || wsStatus !== "open" || brokerReadyProjectId !== id) {
     return (
       <WorkspaceLoadingState
-        title="Opening workspace..."
-        description="Project services are almost ready. The workspace will open automatically."
+        title="Projekt wird vorbereitet..."
+        description={
+          !project.brokerReady
+            ? "Der Sandbox-Container startet gerade. Sobald der Broker bereit ist, öffnet sich der Workspace automatisch."
+            : "Verbindung zum Broker wird aufgebaut..."
+        }
       />
     );
   }

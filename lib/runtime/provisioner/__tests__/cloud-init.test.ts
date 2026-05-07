@@ -9,6 +9,7 @@ describe("renderWorkerCloudInit", () => {
     tailscaleAuthKey: "tskey-auth",
     appBaseUrl: "https://example.test",
     sandboxImage: "ghcr.io/acme/sandbox:sha",
+    watchtowerHttpApiToken: "watchtower-token",
   };
 
   it("renders worker setup with required images, secrets, and environment", () => {
@@ -17,17 +18,22 @@ describe("renderWorkerCloudInit", () => {
     expect(rendered).toContain("tailscale up --auth-key tskey-auth");
     expect(rendered).toContain("docker pull ghcr.io/acme/worker-agent:sha");
     expect(rendered).toContain("docker pull ghcr.io/acme/sandbox:sha");
+    expect(rendered).toContain("docker pull containrrr/watchtower:latest");
     expect(rendered).toContain("WORKER_ID=worker_123");
     expect(rendered).toContain("HMAC_SECRET=hmac-secret");
     expect(rendered).toContain("HOST_URL=https://example.test");
     expect(rendered).toContain("--restart unless-stopped");
+    expect(rendered).toContain("WATCHTOWER_HTTP_API_TOKEN=watchtower-token");
+    expect(rendered).toContain("--label com.centurylinklabs.watchtower.enable=true");
 
     const redacted = redactCloudInit(rendered);
 
     expect(redacted).not.toContain("tskey-auth");
     expect(redacted).not.toContain("hmac-secret");
+    expect(redacted).not.toContain("watchtower-token");
     expect(redacted).toContain("tailscale up --auth-key [REDACTED]");
     expect(redacted).toContain("HMAC_SECRET=[REDACTED]");
+    expect(redacted).toContain("WATCHTOWER_HTTP_API_TOKEN=[REDACTED]");
   });
 
   it("renders docker run as one cloud-init runcmd item", () => {

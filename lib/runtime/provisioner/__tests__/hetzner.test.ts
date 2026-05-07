@@ -51,6 +51,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com/",
       sandboxImage: "registry.example.com/wbd/sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
       tailscaleTags: ["tag:wbd-worker"],
       tailscaleAuthKeyExpirySeconds: 900,
     });
@@ -135,6 +136,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
     });
 
     await expect(
@@ -173,6 +175,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
       tailscaleLookupAttempts: 2,
       tailscaleLookupIntervalMs: 1,
       sleep,
@@ -202,6 +205,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
       tailscaleLookupAttempts: 1,
     });
 
@@ -237,6 +241,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
     });
     const worker = await provisioner.provision({
       region: "fsn1",
@@ -263,6 +268,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
     });
     const otherWorker = await prisma.worker.create({
       data: {
@@ -293,6 +299,7 @@ describe("HetznerProvisioner", () => {
       workerAgentHmacSecret: "agent-secret",
       appBaseUrl: "https://app.example.com",
       sandboxImage: "sandbox:test",
+      watchtowerHttpApiToken: "watchtower-token",
     });
     const active = await provisioner.provision({
       region: "fsn1",

@@ -113,6 +113,7 @@ export function createFakeClient(): DaytonaClient {
         brokerUrl: `ws://localhost:${broker.port}`,
         brokerPreviewToken: "",
         previewUrl: `http://localhost:${preview.port}`,
+        brokerReady: true,
       };
     },
 

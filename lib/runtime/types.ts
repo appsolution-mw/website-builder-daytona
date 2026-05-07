@@ -43,6 +43,12 @@ export interface SandboxInfo {
   brokerPreviewToken: string;
   /** HTTPS URL the browser loads in an iframe. */
   previewUrl: string;
+  /**
+   * True when the broker is already accepting connections at return time.
+   * Worker-pool runtimes return false (the worker-agent flips the project's
+   * `brokerReady` flag asynchronously); fake/in-process runtimes return true.
+   */
+  brokerReady?: boolean;
 }
 
 /**

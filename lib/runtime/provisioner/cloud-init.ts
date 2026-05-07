@@ -5,6 +5,12 @@ export interface RenderWorkerCloudInitArgs {
   tailscaleAuthKey: string;
   appBaseUrl: string;
   sandboxImage: string;
+  /**
+   * Bearer token CI uses to trigger Watchtower's HTTP API on the worker.
+   * Watchtower itself runs on every worker and watches the `worker-agent`
+   * container for image updates so we don't have to manually re-pull.
+   */
+  watchtowerHttpApiToken: string;
   imageRegistryAuth?: {
     registry: string;
     username: string;
@@ -40,6 +46,7 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   assertCloudInitValue("tailscaleAuthKey", args.tailscaleAuthKey);
   assertCloudInitValue("appBaseUrl", args.appBaseUrl);
   assertCloudInitValue("sandboxImage", args.sandboxImage);
+  assertCloudInitValue("watchtowerHttpApiToken", args.watchtowerHttpApiToken);
   if (args.imageRegistryAuth) {
     assertCloudInitValue("imageRegistryAuth.registry", args.imageRegistryAuth.registry);
     assertCloudInitValue("imageRegistryAuth.username", args.imageRegistryAuth.username);
@@ -52,8 +59,12 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   const tailscaleAuthKey = shell(args.tailscaleAuthKey);
   const appBaseUrl = shell(args.appBaseUrl);
   const sandboxImage = shell(args.sandboxImage);
+  const watchtowerToken = shell(args.watchtowerHttpApiToken);
   const dockerRunCommand = [
     "docker run -d --name worker-agent --restart unless-stopped",
+    // Opt this container into Watchtower's update scope. Without this label
+    // Watchtower's `--label-enable` mode would ignore worker-agent.
+    "--label com.centurylinklabs.watchtower.enable=true",
     "-p 4500:4500",
     "--add-host=host.docker.internal:host-gateway",
     "-v /var/run/docker.sock:/var/run/docker.sock",
@@ -63,6 +74,24 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
     `-e SANDBOX_IMAGE=${sandboxImage}`,
     "-e BROKER_HOST=host.docker.internal",
     workerAgentImage,
+  ].join(" ");
+
+  // Watchtower runs alongside worker-agent on the same VM. It watches every
+  // container labelled `com.centurylinklabs.watchtower.enable=true` and pulls
+  // a fresh image when triggered via its HTTP API. CI fires the trigger after
+  // a successful image push, so the worker picks up new builds automatically.
+  // Bound to the Tailnet IP (port 8080) — we let Bearer-token auth gate access
+  // and rely on Tailscale ACLs for transport-layer protection.
+  const watchtowerRunCommand = [
+    "docker run -d --name watchtower --restart unless-stopped",
+    "-v /var/run/docker.sock:/var/run/docker.sock",
+    "-e WATCHTOWER_LABEL_ENABLE=true",
+    "-e WATCHTOWER_CLEANUP=true",
+    "-e WATCHTOWER_INCLUDE_RESTARTING=true",
+    "-e WATCHTOWER_HTTP_API_UPDATE=true",
+    `-e WATCHTOWER_HTTP_API_TOKEN=${watchtowerToken}`,
+    "-p 8080:8080",
+    "containrrr/watchtower:latest",
   ].join(" ");
 
   const dockerLoginLine = args.imageRegistryAuth
@@ -85,8 +114,11 @@ runcmd:
   - ${yaml(`tailscale up --auth-key ${tailscaleAuthKey}`)}
 ${dockerLoginLine}  - ${yaml(`docker pull ${workerAgentImage}`)}
   - ${yaml(`docker pull ${sandboxImage}`)}
+  - ${yaml(`docker pull containrrr/watchtower:latest`)}
   - ${yaml("docker rm -f worker-agent || true")}
   - ${yaml(dockerRunCommand)}
+  - ${yaml("docker rm -f watchtower || true")}
+  - ${yaml(watchtowerRunCommand)}
 `;
 }
 
@@ -124,6 +156,7 @@ function parseYamlCommandLine(
 function redactCommandSecrets(command: string): string {
   let redacted = redactShellTokenAfter(command, "tailscale up --auth-key ");
   redacted = redactShellTokenAfter(redacted, "HMAC_SECRET=");
+  redacted = redactShellTokenAfter(redacted, "WATCHTOWER_HTTP_API_TOKEN=");
   if (redacted.startsWith("docker login ")) {
     redacted = redactShellTokenAfter(redacted, " -p ");
   }

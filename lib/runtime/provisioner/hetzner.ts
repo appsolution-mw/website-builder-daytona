@@ -24,6 +24,7 @@ export interface CreateHetznerProvisionerArgs {
   workerAgentHmacSecret: string;
   appBaseUrl: string;
   sandboxImage: string;
+  watchtowerHttpApiToken: string;
   imageRegistryAuth?: {
     registry: string;
     username: string;
@@ -124,6 +125,7 @@ export function createHetznerProvisioner(args: CreateHetznerProvisionerArgs): Wo
           tailscaleAuthKey: authKey.key,
           appBaseUrl: stripTrailingSlash(args.appBaseUrl),
           sandboxImage: args.sandboxImage,
+          watchtowerHttpApiToken: args.watchtowerHttpApiToken,
           imageRegistryAuth: args.imageRegistryAuth,
         });
         server = await args.hetzner.createServer({
@@ -225,6 +227,7 @@ export function createHetznerWorkerProvisionerFromEnv(
     workerAgentHmacSecret: requiredEnv("WORKER_AGENT_HMAC_SECRET", runtimeEnv),
     appBaseUrl: requiredEnv("APP_BASE_URL", runtimeEnv),
     sandboxImage: requiredEnv("SANDBOX_IMAGE", runtimeEnv),
+    watchtowerHttpApiToken: requiredEnv("WATCHTOWER_HTTP_API_TOKEN", runtimeEnv),
     imageRegistryAuth: imageRegistryAuthFromEnv(runtimeEnv),
     hetznerImage: runtimeEnv.HETZNER_IMAGE ?? DEFAULT_HETZNER_IMAGE,
     tailscaleTags: [runtimeEnv.TAILSCALE_WORKER_TAG ?? DEFAULT_TAILSCALE_TAG],

@@ -64,6 +64,8 @@ model Project {
   sandboxId            String?
   brokerUrl            String?
   brokerPreviewToken   String?
+  brokerReady          Boolean             @default(false)
+  brokerReadyAt        DateTime?
   previewUrl           String?
   publicSlug           String?             @unique
   provisioningError    String?

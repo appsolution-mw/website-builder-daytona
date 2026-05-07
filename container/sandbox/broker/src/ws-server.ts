@@ -434,6 +434,12 @@ async function handleInternalHttpRequest(
   },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  // Unauthenticated readiness probe used by worker-agent to detect when the
+  // broker has finished booting. No state is exposed.
+  if (url.pathname === "/health" && req.method === "GET") {
+    writeJson(res, 200, { ok: true });
+    return;
+  }
   if (!url.pathname.startsWith("/internal/")) {
     writeJson(res, 426, { error: "upgrade-required" });
     return;

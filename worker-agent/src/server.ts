@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { DockerClient, SandboxSpec } from "./docker.js";
 import { verify } from "./hmac.js";
+import { watchBrokerReadiness } from "./broker-ready.js";
 import type {
   BrokerCommandResponse,
   CancelProjectRunRequest,
@@ -24,6 +25,11 @@ export interface BuildServerArgs {
   previewContainerPort: number;
   brokerHost?: string;
   dockerVersion?: string;
+  /**
+   * Host URL the worker-agent calls back into to report sandbox readiness.
+   * Same host the heartbeat targets. Optional in tests.
+   */
+  hostUrl?: string;
 }
 
 export async function buildServer(args: BuildServerArgs): Promise<FastifyInstance> {
@@ -110,6 +116,15 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     try {
       const created = await args.docker.createSandbox(spec);
       brokerTokens.set(created.sandboxId, body.brokerToken);
+      if (args.hostUrl) {
+        watchBrokerReadiness({
+          sandboxId: created.sandboxId,
+          brokerHost,
+          brokerPort: created.brokerPort,
+          hostUrl: args.hostUrl,
+          hmacSecret: args.hmacSecret,
+        });
+      }
       const res: CreateSandboxResponse = {
         sandboxId: created.sandboxId,
         containerId: created.containerId,

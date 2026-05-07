@@ -39,6 +39,7 @@ type Project = {
   status: "PROVISIONING" | "RUNNING" | "PAUSED" | "ARCHIVED" | "DESTROYED";
   lastActive: string;
   brokerUrl: string | null;
+  brokerReady: boolean;
   previewUrl: string | null;
   sourceType: "TEMPLATE" | "GITHUB";
   githubOwner: string | null;
@@ -313,12 +314,14 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRepositoryId]);
 
-  // Poll while any project is PROVISIONING
+  // Poll while any project is PROVISIONING or RUNNING-but-not-broker-ready
   useEffect(() => {
-    const hasProvisioning = projects?.some((p) => p.status === "PROVISIONING");
-    if (hasProvisioning && pollRef.current === null) {
+    const needsPolling = projects?.some(
+      (p) => p.status === "PROVISIONING" || (p.status === "RUNNING" && !p.brokerReady),
+    );
+    if (needsPolling && pollRef.current === null) {
       pollRef.current = window.setInterval(() => refresh(), POLL_INTERVAL_MS);
-    } else if (!hasProvisioning && pollRef.current !== null) {
+    } else if (!needsPolling && pollRef.current !== null) {
       window.clearInterval(pollRef.current);
       pollRef.current = null;
     }
@@ -793,7 +796,7 @@ export default function Dashboard() {
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        {p.status === "RUNNING" ? (
+                        {p.status === "RUNNING" && p.brokerReady ? (
                           <Button asChild variant="link" className="max-w-full text-base font-semibold text-foreground">
                             <Link href={`/project/${p.id}`} className="truncate">
                               {p.name}
@@ -805,6 +808,12 @@ export default function Dashboard() {
                           </span>
                         )}
                         {statusBadge(p.status)}
+                        {p.status === "RUNNING" && !p.brokerReady && (
+                          <Badge variant="outline" className="gap-1.5">
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                            wird vorbereitet
+                          </Badge>
+                        )}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span className="inline-flex items-center gap-1.5">
@@ -824,9 +833,16 @@ export default function Dashboard() {
 
                   <div className="flex items-center gap-2 sm:justify-end">
                     {p.status === "RUNNING" && (
-                      <Button asChild variant="secondary" size="sm">
-                        <Link href={`/project/${p.id}`}>Open</Link>
-                      </Button>
+                      p.brokerReady ? (
+                        <Button asChild variant="secondary" size="sm">
+                          <Link href={`/project/${p.id}`}>Open</Link>
+                        </Button>
+                      ) : (
+                        <Button variant="secondary" size="sm" disabled>
+                          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                          Open
+                        </Button>
+                      )
                     )}
                     {p.status !== "DESTROYED" && (
                       <Button

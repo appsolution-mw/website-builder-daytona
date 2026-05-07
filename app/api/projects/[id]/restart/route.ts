@@ -96,6 +96,13 @@ export async function POST(
   const runtime = runtimeForSandbox(project.sandboxId);
   const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
 
+  // Mark broker as not-ready immediately so the UI overlays the workspace
+  // while the sandbox is being destroyed and respawned.
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { brokerReady: false, brokerReadyAt: null },
+  });
+
   try {
     if (project.sandboxId) {
       await runtime.destroyProjectSandbox(project.sandboxId);
@@ -117,6 +124,8 @@ export async function POST(
           brokerPreviewToken: info.brokerPreviewToken,
           previewUrl: info.previewUrl,
           provisioningError: null,
+          brokerReady: info.brokerReady ?? false,
+          brokerReadyAt: info.brokerReady ? new Date() : null,
         },
       });
     } catch (error: unknown) {
@@ -136,6 +145,8 @@ export async function POST(
         brokerUrl: null,
         brokerPreviewToken: null,
         previewUrl: null,
+        brokerReady: false,
+        brokerReadyAt: null,
         provisioningError: message,
       },
     });

@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import type { BrowserToProxy, ProxyToBrowser } from "@wbd/protocol";
+import { randomId } from "@/lib/random-id";
 
 type TerminalEvent = Extract<
   ProxyToBrowser,
@@ -81,7 +82,7 @@ export function XtermTerminal({
       },
     });
     const fitAddon = new FitAddon();
-    const requestId = crypto.randomUUID();
+    const requestId = randomId();
 
     terminalRef.current = terminal;
     fitRef.current = fitAddon;

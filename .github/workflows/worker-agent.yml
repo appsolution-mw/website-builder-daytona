@@ -19,6 +19,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -38,3 +39,51 @@ jobs:
             ghcr.io/appsolution-mw/worker-agent:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # After a successful push to GHCR, trigger Watchtower's HTTP API on every
+      # active Hetzner worker so the new image rolls out without manual SSH.
+      # Discovery: Tailscale API → all devices tagged `tag:wbd-worker`.
+      - name: Connect to Tailnet
+        if: github.event_name != 'pull_request'
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:wbd-ci
+
+      - name: Trigger Watchtower update on all workers
+        if: github.event_name != 'pull_request'
+        env:
+          TAILSCALE_API_KEY: ${{ secrets.TAILSCALE_API_KEY }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+          WATCHTOWER_HTTP_API_TOKEN: ${{ secrets.WATCHTOWER_HTTP_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Pull the device list and filter by tag. Each match becomes a hostname
+          # we hit via Tailscale-routed HTTP. Watchtower's `/v1/update` is
+          # synchronous: it pulls + restarts labelled containers.
+          devices_json=$(curl -fsS \
+            -H "Authorization: Bearer ${TAILSCALE_API_KEY}" \
+            "https://api.tailscale.com/api/v2/tailnet/${TAILSCALE_TAILNET}/devices?fields=all")
+          hosts=$(echo "$devices_json" | jq -r '
+            .devices[]
+            | select(.tags // [] | index("tag:wbd-worker"))
+            | .hostname
+          ')
+          if [ -z "$hosts" ]; then
+            echo "No tag:wbd-worker devices found — nothing to update."
+            exit 0
+          fi
+          echo "Triggering Watchtower on:"
+          echo "$hosts" | sed 's/^/  - /'
+          while read -r host; do
+            [ -z "$host" ] && continue
+            # 30s timeout per worker so a single dead VM can't stall the run.
+            if curl -fsS --max-time 30 \
+                -H "Authorization: Bearer ${WATCHTOWER_HTTP_API_TOKEN}" \
+                -X POST "http://${host}:8080/v1/update"; then
+              echo "  ✓ ${host}"
+            else
+              echo "  ✗ ${host} (continuing — re-run workflow if persistent)"
+            fi
+          done <<< "$hosts"

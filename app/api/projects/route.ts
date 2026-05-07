@@ -43,6 +43,8 @@ const projectSelect = {
   createdAt: true,
   lastActive: true,
   brokerUrl: true,
+  brokerReady: true,
+  brokerReadyAt: true,
   previewUrl: true,
   sourceType: true,
   githubOwner: true,
@@ -70,6 +72,8 @@ function serializeProject(project: {
   createdAt: Date;
   lastActive: Date;
   brokerUrl: string | null;
+  brokerReady: boolean;
+  brokerReadyAt: Date | null;
   previewUrl: string | null;
   sourceType: string;
   githubOwner: string | null;
@@ -380,6 +384,11 @@ export async function POST(request: NextRequest) {
           brokerUrl: info.brokerUrl,
           brokerPreviewToken: info.brokerPreviewToken,
           previewUrl: info.previewUrl,
+          // Worker-agent flips this to true once the in-container broker
+          // answers /health. In-process runtimes (fake) return brokerReady=true
+          // immediately. UI gates Open + workspace on this flag.
+          brokerReady: info.brokerReady ?? false,
+          brokerReadyAt: info.brokerReady ? new Date() : null,
         },
         select: projectSelect,
       });
