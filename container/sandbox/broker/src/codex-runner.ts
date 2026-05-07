@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import {
   Codex,
   type ModelReasoningEffort,
@@ -8,6 +9,26 @@ import {
 } from "@openai/codex-sdk";
 import type { AgentUsageDetails, BrokerToHost } from "@wbd/protocol";
 import type { AgentReviewOptions, AgentTurnOptions } from "./agent-provider";
+
+async function filterReadablePaths(paths: string[]): Promise<string[]> {
+  const checked = await Promise.all(
+    paths.map(async (path) => {
+      try {
+        const info = await stat(path);
+        return info.isFile() && info.size > 0 ? path : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return checked.filter((value): value is string => value !== null);
+}
+
+function attachmentPromptPreface(count: number): string {
+  return count === 1
+    ? "The user attached 1 image via the runtime image-input channel. Examine it carefully before responding.\n\n"
+    : `The user attached ${count} images via the runtime image-input channel. Examine each one carefully before responding.\n\n`;
+}
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4";
 const DEFAULT_CODEX_SANDBOX_MODE: SandboxMode = "danger-full-access";
@@ -209,12 +230,34 @@ async function runThread(args: {
 }): Promise<void> {
   const startedAt = Date.now();
   let sawTerminal = false;
-  const input = args.attachmentPaths && args.attachmentPaths.length > 0
-    ? [
-        { type: "text" as const, text: args.prompt },
-        ...args.attachmentPaths.map((path) => ({ type: "local_image" as const, path })),
-      ]
-    : args.prompt;
+
+  const readablePaths =
+    args.attachmentPaths && args.attachmentPaths.length > 0
+      ? await filterReadablePaths(args.attachmentPaths)
+      : [];
+  const droppedPaths =
+    args.attachmentPaths && args.attachmentPaths.length > readablePaths.length
+      ? args.attachmentPaths.filter((path) => !readablePaths.includes(path))
+      : [];
+
+  const promptText =
+    readablePaths.length > 0
+      ? `${attachmentPromptPreface(readablePaths.length)}${args.prompt}`
+      : args.prompt;
+  const input =
+    readablePaths.length > 0
+      ? [
+          { type: "text" as const, text: promptText },
+          ...readablePaths.map((path) => ({ type: "local_image" as const, path })),
+        ]
+      : promptText;
+
+  console.log(
+    `[broker codex] turnId=${args.turnId} attachments=${readablePaths.length}` +
+      (droppedPaths.length > 0 ? ` dropped=${droppedPaths.length}` : "") +
+      (readablePaths.length > 0 ? ` paths=${JSON.stringify(readablePaths)}` : ""),
+  );
+
   const { events } = await args.thread.runStreamed(input, { signal: args.signal });
 
   for await (const event of events) {
