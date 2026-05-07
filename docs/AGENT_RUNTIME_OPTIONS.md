@@ -84,6 +84,18 @@ TAILSCALE_API_KEY=<tailscale-api-key>
 TAILSCALE_TAILNET=<tailnet-name>
 ```
 
+Optional worker-agent request timeout:
+
+```env
+WORKER_AGENT_TIMEOUT_MS=120000
+```
+
+`WORKER_AGENT_TIMEOUT_MS` covers short host-to-worker commands such as health,
+git status, and sandbox lifecycle calls. Streaming agent executions are
+intentionally open-ended: long OpenHands tasks can run for hours and should
+finish through terminal run events or explicit cancellation, not through a fixed
+elapsed-time abort.
+
 Optional public preview routing:
 
 ```env

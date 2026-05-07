@@ -268,6 +268,18 @@ describe("resolveWorkerAgentClientConfig", () => {
     expect(config.baseUrl).toBe("http://127.0.0.1:4500");
   });
 
+  it("resolves the request timeout for short worker-agent calls", () => {
+    const config = resolveWorkerAgentClientConfig({
+      worker: { tailscaleIp: "100.64.1.25" },
+      hmacSecret: "secret",
+      runtimeEnv: {
+        WORKER_AGENT_TIMEOUT_MS: "45000",
+      },
+    });
+
+    expect(config.timeoutMs).toBe(45_000);
+  });
+
   it("can ignore WORKER_AGENT_URL for managed Hetzner workers", () => {
     const config = resolveWorkerAgentClientConfig({
       worker: { tailscaleIp: "100.64.1.25" },

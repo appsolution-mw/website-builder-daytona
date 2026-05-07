@@ -225,6 +225,45 @@ describe("agent-client", () => {
     ]);
   });
 
+  it("executeProjectRun does not attach a fixed timeout signal to long-running streams", async () => {
+    let capturedSignal: AbortSignal | null | undefined;
+    const c = createAgentClient({
+      baseUrl: "http://worker-agent.test",
+      hmacSecret: SECRET,
+      timeoutMs: 20,
+      fetch: async (_url, init) => {
+        capturedSignal = init?.signal;
+        return new Response(
+          `${JSON.stringify({ type: "agent.done", turnId: "run-1", exitCode: 0 })}\n`,
+          { status: 200, headers: { "content-type": "application/x-ndjson" } },
+        );
+      },
+    });
+    const events: unknown[] = [];
+
+    await c.executeProjectRun(
+      "sandbox-1",
+      {
+        projectId: "project-1",
+        sessionId: "session-1",
+        providerSessionId: "provider-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        prompt: "Build it",
+        runtime: "openhands",
+        resumeSession: false,
+      },
+      (event) => {
+        events.push(event);
+      },
+    );
+
+    expect(events).toEqual([
+      { type: "agent.done", turnId: "run-1", exitCode: 0 },
+    ]);
+    expect(capturedSignal).toBeUndefined();
+  });
+
   it("getStatus parses status response", async () => {
     respond = (_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });

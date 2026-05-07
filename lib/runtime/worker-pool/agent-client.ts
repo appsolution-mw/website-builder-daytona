@@ -21,9 +21,11 @@ export interface CreateAgentClientArgs {
   fetch?: typeof globalThis.fetch;
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
 export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
   const fetchFn = args.fetch ?? globalThis.fetch;
-  const timeout = args.timeoutMs ?? 10_000;
+  const timeout = args.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const raw = body === undefined ? "" : JSON.stringify(body);
@@ -77,38 +79,30 @@ export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
     const sig = createHmac("sha256", args.hmacSecret)
       .update(`${ts}.${method}.${path}.${raw}`).digest("hex");
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeout);
+    const res = await fetchFn(`${args.baseUrl}${path}`, {
+      method,
+      headers: {
+        "content-type": "application/json",
+        "x-timestamp": ts,
+        "x-signature": sig,
+      },
+      body: raw,
+    });
 
-    try {
-      const res = await fetchFn(`${args.baseUrl}${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          "x-timestamp": ts,
-          "x-signature": sig,
-        },
-        body: raw,
-        signal: ctrl.signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        const parsed = text ? safeJson(text) : undefined;
-        const errorCode =
-          typeof parsed === "object" &&
-          parsed !== null &&
-          "error" in parsed &&
-          typeof parsed.error === "string"
-            ? parsed.error
-            : `http-${res.status}`;
-        throw new AgentError(res.status, errorCode, `${method} ${path} → ${res.status} ${errorCode}`);
-      }
-
-      await readNdjsonEvents(res, onEvent);
-    } finally {
-      clearTimeout(timer);
+    if (!res.ok) {
+      const text = await res.text();
+      const parsed = text ? safeJson(text) : undefined;
+      const errorCode =
+        typeof parsed === "object" &&
+        parsed !== null &&
+        "error" in parsed &&
+        typeof parsed.error === "string"
+          ? parsed.error
+          : `http-${res.status}`;
+      throw new AgentError(res.status, errorCode, `${method} ${path} → ${res.status} ${errorCode}`);
     }
+
+    await readNdjsonEvents(res, onEvent);
   }
 
   return {
