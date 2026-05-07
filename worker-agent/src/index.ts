@@ -21,6 +21,25 @@ function required(name: string): string {
   return v;
 }
 
+/**
+ * Build a dockerode authconfig from `IMAGE_REGISTRY_*` env vars. The host
+ * `docker login` writes credentials to /root/.docker/config.json, but the
+ * worker-agent runs in its own container and dockerode does not auto-read
+ * that file — it only forwards an X-Registry-Auth header when explicitly
+ * given an authconfig argument. Without this, every pull of a private image
+ * (sandbox) fails with `unauthorized`.
+ */
+function pullAuthconfig(): { username: string; password: string; serveraddress: string } | undefined {
+  const username = process.env.IMAGE_REGISTRY_USERNAME;
+  const password = process.env.IMAGE_REGISTRY_TOKEN;
+  if (!username || !password) return undefined;
+  return {
+    username,
+    password,
+    serveraddress: process.env.IMAGE_REGISTRY_HOST ?? "ghcr.io",
+  };
+}
+
 async function main() {
   const docker = new Docker();
   const dockerVersion = (await docker.version()).Version;
@@ -45,9 +64,14 @@ async function main() {
     const shouldPull = !isLocalOnly || !presentLocally;
     if (shouldPull) {
       console.log(`[worker-agent] pulling ${image}…`);
+      const authconfig = pullAuthconfig();
+      if (!authconfig) {
+        console.warn("[worker-agent] no IMAGE_REGISTRY_USERNAME/TOKEN — pull will be unauthenticated");
+      }
       try {
         await new Promise<void>((resolve, reject) => {
-          docker.pull(image, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          const opts = authconfig ? { authconfig } : {};
+          docker.pull(image, opts, (err: Error | null, stream: NodeJS.ReadableStream) => {
             if (err) return reject(err);
             docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()));
           });

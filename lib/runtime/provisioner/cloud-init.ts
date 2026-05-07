@@ -60,6 +60,16 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   const appBaseUrl = shell(args.appBaseUrl);
   const sandboxImage = shell(args.sandboxImage);
   const watchtowerToken = shell(args.watchtowerHttpApiToken);
+  // Forward registry credentials into the worker-agent container so its
+  // dockerode client can authenticate when pulling private GHCR images.
+  // The host's `docker login` config doesn't propagate into the container.
+  const registryEnvFlags = args.imageRegistryAuth
+    ? [
+        `-e IMAGE_REGISTRY_HOST=${shell(args.imageRegistryAuth.registry)}`,
+        `-e IMAGE_REGISTRY_USERNAME=${shell(args.imageRegistryAuth.username)}`,
+        `-e IMAGE_REGISTRY_TOKEN=${shell(args.imageRegistryAuth.token)}`,
+      ]
+    : [];
   const dockerRunCommand = [
     "docker run -d --name worker-agent --restart unless-stopped",
     // Opt this container into Watchtower's update scope. Without this label
@@ -73,6 +83,7 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
     `-e HOST_URL=${appBaseUrl}`,
     `-e SANDBOX_IMAGE=${sandboxImage}`,
     "-e BROKER_HOST=host.docker.internal",
+    ...registryEnvFlags,
     workerAgentImage,
   ].join(" ");
 
@@ -82,16 +93,26 @@ export function renderWorkerCloudInit(args: RenderWorkerCloudInitArgs): string {
   // a successful image push, so the worker picks up new builds automatically.
   // Bound to the Tailnet IP (port 8080) — we let Bearer-token auth gate access
   // and rely on Tailscale ACLs for transport-layer protection.
+  //
+  // Image: nicholas-fedor's actively-maintained fork — the original
+  // `containrrr/watchtower` has been unmaintained since 2023 and uses a Docker
+  // API version (1.25) too old for Docker 25+ (Ubuntu 24.04 ships 26.x).
   const watchtowerRunCommand = [
     "docker run -d --name watchtower --restart unless-stopped",
     "-v /var/run/docker.sock:/var/run/docker.sock",
+    // Mount the host's docker auth so Watchtower can pull from private GHCR.
+    // `docker login` earlier in cloud-init wrote credentials to
+    // /root/.docker/config.json. DOCKER_CONFIG=/ tells Watchtower to look at
+    // /config.json (the mount target).
+    "-v /root/.docker/config.json:/config.json:ro",
+    "-e DOCKER_CONFIG=/",
     "-e WATCHTOWER_LABEL_ENABLE=true",
     "-e WATCHTOWER_CLEANUP=true",
     "-e WATCHTOWER_INCLUDE_RESTARTING=true",
     "-e WATCHTOWER_HTTP_API_UPDATE=true",
     `-e WATCHTOWER_HTTP_API_TOKEN=${watchtowerToken}`,
     "-p 8080:8080",
-    "containrrr/watchtower:latest",
+    "ghcr.io/nicholas-fedor/watchtower:latest",
   ].join(" ");
 
   const dockerLoginLine = args.imageRegistryAuth
@@ -114,7 +135,7 @@ runcmd:
   - ${yaml(`tailscale up --auth-key ${tailscaleAuthKey}`)}
 ${dockerLoginLine}  - ${yaml(`docker pull ${workerAgentImage}`)}
   - ${yaml(`docker pull ${sandboxImage}`)}
-  - ${yaml(`docker pull containrrr/watchtower:latest`)}
+  - ${yaml(`docker pull ghcr.io/nicholas-fedor/watchtower:latest`)}
   - ${yaml("docker rm -f worker-agent || true")}
   - ${yaml(dockerRunCommand)}
   - ${yaml("docker rm -f watchtower || true")}
@@ -157,6 +178,7 @@ function redactCommandSecrets(command: string): string {
   let redacted = redactShellTokenAfter(command, "tailscale up --auth-key ");
   redacted = redactShellTokenAfter(redacted, "HMAC_SECRET=");
   redacted = redactShellTokenAfter(redacted, "WATCHTOWER_HTTP_API_TOKEN=");
+  redacted = redactShellTokenAfter(redacted, "IMAGE_REGISTRY_TOKEN=");
   if (redacted.startsWith("docker login ")) {
     redacted = redactShellTokenAfter(redacted, " -p ");
   }

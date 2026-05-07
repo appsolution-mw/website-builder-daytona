@@ -348,8 +348,12 @@ export async function POST(request: NextRequest) {
   // create one. The row is inserted by the broker's `agent.session` event
   // handler after claude reports the new session_id at the end of turn 1.
 
-  const sandboxRuntime = createRuntime();
+  // `createRuntime()` reads runtime env (e.g. WATCHTOWER_HTTP_API_TOKEN). If
+  // any required var is missing the constructor throws synchronously — keep
+  // it inside the try so the catch flips the project to DESTROYED with a
+  // useful provisioningError instead of stranding it in PROVISIONING.
   try {
+    const sandboxRuntime = createRuntime();
     const spawnSource = source.type === "github" && githubRepository
       ? {
           type: "github" as const,

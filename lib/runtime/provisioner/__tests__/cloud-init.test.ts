@@ -18,7 +18,7 @@ describe("renderWorkerCloudInit", () => {
     expect(rendered).toContain("tailscale up --auth-key tskey-auth");
     expect(rendered).toContain("docker pull ghcr.io/acme/worker-agent:sha");
     expect(rendered).toContain("docker pull ghcr.io/acme/sandbox:sha");
-    expect(rendered).toContain("docker pull containrrr/watchtower:latest");
+    expect(rendered).toContain("docker pull ghcr.io/nicholas-fedor/watchtower:latest");
     expect(rendered).toContain("WORKER_ID=worker_123");
     expect(rendered).toContain("HMAC_SECRET=hmac-secret");
     expect(rendered).toContain("HOST_URL=https://example.test");
