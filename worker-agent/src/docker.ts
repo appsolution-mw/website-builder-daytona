@@ -106,7 +106,12 @@ export function createDockerClient({ docker, portRange }: CreateDockerClientArgs
               [`${spec.brokerContainerPort}/tcp`]: [{ HostPort: String(broker) }],
               [`${spec.previewContainerPort}/tcp`]: [{ HostPort: String(preview) }],
             },
-            RestartPolicy: { Name: "no" },
+            // `unless-stopped` so a worker VM cold-reboot brings sandbox
+            // containers back up automatically (matches the worker-agent and
+            // watchtower restart policies). The host explicitly stops them
+            // via destroyProjectSandbox; that respects "stopped by user" and
+            // the policy then leaves them down.
+            RestartPolicy: { Name: "unless-stopped" },
             AutoRemove: false,
           },
         });

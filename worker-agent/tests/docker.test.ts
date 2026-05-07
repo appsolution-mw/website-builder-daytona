@@ -125,4 +125,25 @@ describe("docker wrapper", () => {
 
     expect(hostPorts).not.toContain("33001");
   });
+
+  it("creates sandbox containers with RestartPolicy unless-stopped", async () => {
+    let capturedOpts: { HostConfig?: { RestartPolicy?: { Name?: string } } } | null = null;
+    const fakeDocker = {
+      async listContainers() {
+        return [];
+      },
+      async createContainer(opts: { HostConfig?: { RestartPolicy?: { Name?: string } } }) {
+        capturedOpts = opts;
+        return { id: "a".repeat(64), async start() {} };
+      },
+    };
+    const fakeClient = createDockerClient({
+      docker: fakeDocker as unknown as Docker,
+      portRange: { min: 33000, max: 33010 },
+    });
+
+    await fakeClient.createSandbox(spec("restart-policy"));
+
+    expect(capturedOpts?.HostConfig?.RestartPolicy?.Name).toBe("unless-stopped");
+  });
 });
