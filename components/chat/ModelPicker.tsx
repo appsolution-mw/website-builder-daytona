@@ -15,6 +15,7 @@ export type ModelOption = {
   promptPrice: string | null;
   completionPrice: string | null;
   supportedParameters: string[];
+  inputModalities: string[];
 };
 
 type ModelPickerProps = {

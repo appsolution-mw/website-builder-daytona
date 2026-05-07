@@ -40,7 +40,7 @@ describe("agent runtime mappings", () => {
 
     expect(runtimeLabel("openhands")).toBe("OpenHands");
     expect(runtimeProviderLabel("openhands")).toBe("OpenHands SDK");
-    expect(defaultModelForRuntime("openhands")).toBe("openrouter:qwen/qwen3-coder:free");
+    expect(defaultModelForRuntime("openhands")).toBe("openrouter:google/gemini-2.5-flash");
   });
 
   it("uses OPENHANDS_MODEL when set", () => {

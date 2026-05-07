@@ -205,10 +205,17 @@ async function runThread(args: {
   onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   agentId?: string;
+  attachmentPaths?: string[];
 }): Promise<void> {
   const startedAt = Date.now();
   let sawTerminal = false;
-  const { events } = await args.thread.runStreamed(args.prompt, { signal: args.signal });
+  const input = args.attachmentPaths && args.attachmentPaths.length > 0
+    ? [
+        { type: "text" as const, text: args.prompt },
+        ...args.attachmentPaths.map((path) => ({ type: "local_image" as const, path })),
+      ]
+    : args.prompt;
+  const { events } = await args.thread.runStreamed(input, { signal: args.signal });
 
   for await (const event of events) {
     for (const mapped of eventsForThreadEvent(event, args.turnId, startedAt, args.agentId)) {
@@ -261,6 +268,9 @@ export async function runCodexTurn(opts: AgentTurnOptions): Promise<void> {
     turnId: opts.turnId,
     onEvent: opts.onEvent,
     signal: opts.signal,
+    ...(opts.attachmentPaths && opts.attachmentPaths.length > 0
+      ? { attachmentPaths: opts.attachmentPaths }
+      : {}),
   });
 }
 

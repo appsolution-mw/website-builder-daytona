@@ -53,6 +53,6 @@ export function defaultModelForRuntime(runtime: AppAgentRuntime): string | undef
     case "vercel-ai":
       return process.env.VERCEL_AI_MODEL?.trim() || "openai:gpt-5.2";
     case "openhands":
-      return process.env.OPENHANDS_MODEL?.trim() || "openrouter:qwen/qwen3-coder:free";
+      return process.env.OPENHANDS_MODEL?.trim() || "openrouter:google/gemini-2.5-flash";
   }
 }

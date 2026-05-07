@@ -204,8 +204,8 @@ Konfiguration:
 ```env
 AGENT_RUNTIME=openhands
 OPENROUTER_API_KEY=sk-or-v1-...
-OPENHANDS_MODEL=openrouter:qwen/qwen3-coder:free
-OPENHANDS_REVIEWER_MODEL=openrouter:qwen/qwen3-coder:free
+OPENHANDS_MODEL=openrouter:google/gemini-2.5-flash
+OPENHANDS_REVIEWER_MODEL=openrouter:google/gemini-2.5-flash
 OPENHANDS_BASE_URL=https://openrouter.ai/api/v1
 OPENHANDS_MAX_ITERATIONS=30
 OPENHANDS_ENABLE_PUBLIC_SKILLS=0
@@ -221,8 +221,12 @@ Hinweise:
   Broker `OPENHANDS_MODEL`; fuer Reviewer-Turns entsprechend
   `OPENHANDS_REVIEWER_MODEL`.
 - OpenRouter-Modelle werden als vollstaendige OpenHands/LiteLLM-IDs angegeben,
-  z.B. `openrouter:qwen/qwen3-coder:free`. `OPENHANDS_BASE_URL` zeigt fuer
+  z.B. `openrouter:google/gemini-2.5-flash`. `OPENHANDS_BASE_URL` zeigt fuer
   OpenRouter auf `https://openrouter.ai/api/v1`.
+- Der Modell-Picker zeigt nur Modelle, die laut OpenRouter sowohl
+  `text`- als auch `image`-Eingabe unterstuetzen
+  (`architecture.input_modalities`). Bild-Anhaenge im Chat funktionieren
+  daher nur mit vision-faehigen Modellen.
 - `OPENHANDS_MAX_ITERATIONS` begrenzt die Anzahl Agent-Schritte pro Turn.
   `OPENHANDS_ENABLE_PUBLIC_SKILLS=0` ist der konservative Default fuer
   reproduzierbare Sandbox-Laeufe; bei `1` darf OpenHands zusaetzliche

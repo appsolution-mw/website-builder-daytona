@@ -17,6 +17,12 @@ export interface AgentTurnOptions {
   projectRoot?: string;
   modelId?: string;
   attachments?: PromptImageAttachment[];
+  /**
+   * Absolute paths to image files already written to the sandbox disk. Used by
+   * the openai-codex runner to forward images as multimodal `local_image`
+   * inputs. Broker-internal: not part of the host↔broker protocol.
+   */
+  attachmentPaths?: string[];
   onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   run?: AgentRunMetadata;

@@ -5,6 +5,7 @@ export type OpenRouterModelOption = {
   promptPrice: string | null;
   completionPrice: string | null;
   supportedParameters: string[];
+  inputModalities: string[];
 };
 
 type RawOpenRouterModel = {
@@ -49,9 +50,15 @@ export function normalizeOpenRouterModels(payload: RawOpenRouterResponse): OpenR
         return [];
       }
 
+      const inputModalities = stringArray(model.architecture?.input_modalities);
       const outputModalities = stringArray(model.architecture?.output_modalities);
       const supportedParameters = stringArray(model.supported_parameters);
-      if (!outputModalities.includes("text") || !supportedParameters.includes("tools")) {
+      if (
+        !outputModalities.includes("text") ||
+        !supportedParameters.includes("tools") ||
+        !inputModalities.includes("text") ||
+        !inputModalities.includes("image")
+      ) {
         return [];
       }
 
@@ -63,6 +70,7 @@ export function normalizeOpenRouterModels(payload: RawOpenRouterResponse): OpenR
           promptPrice: nullableString(model.pricing?.prompt),
           completionPrice: nullableString(model.pricing?.completion),
           supportedParameters,
+          inputModalities,
         },
       ];
     })

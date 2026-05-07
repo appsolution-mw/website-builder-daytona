@@ -9,7 +9,7 @@ import type { SpawnFn, SpawnedChild } from "./claude-runner";
 const OPENHANDS_BRIDGE_PATH = "/opt/builder/container/sandbox/broker/python/openhands_bridge.py";
 const PROJECT_ROOT = "/workspace/project";
 const OPENHANDS_ATTACHMENTS_DIR = ".agent-artifacts/openhands-attachments";
-const DEFAULT_OPENHANDS_MODEL = "openrouter/qwen/qwen3-coder:free";
+const DEFAULT_OPENHANDS_MODEL = "openrouter/google/gemini-2.5-flash";
 const DEFAULT_AGENTS_MD = `# AGENTS.md
 
 ## Project Context

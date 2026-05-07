@@ -98,7 +98,10 @@ describe("GET /api/projects/[id]/models", () => {
             id: "qwen/qwen3-coder:free",
             name: "Qwen Coder",
             context_length: 1048576,
-            architecture: { output_modalities: ["text"] },
+            architecture: {
+              input_modalities: ["text", "image"],
+              output_modalities: ["text"],
+            },
             pricing: { prompt: "0", completion: "0" },
             supported_parameters: ["tools"],
           },
@@ -123,6 +126,7 @@ describe("GET /api/projects/[id]/models", () => {
           promptPrice: "0",
           completionPrice: "0",
           supportedParameters: ["tools"],
+          inputModalities: ["text", "image"],
         },
       ],
     });
@@ -153,6 +157,7 @@ describe("GET /api/projects/[id]/models", () => {
           promptPrice: null,
           completionPrice: null,
           supportedParameters: ["tools"],
+          inputModalities: ["text", "image"],
         },
       ],
     });
@@ -174,7 +179,10 @@ describe("GET /api/projects/[id]/models", () => {
             id: "qwen/qwen3-coder:free",
             name: "Qwen Coder",
             context_length: 1048576,
-            architecture: { output_modalities: ["text"] },
+            architecture: {
+              input_modalities: ["text", "image"],
+              output_modalities: ["text"],
+            },
             pricing: { prompt: "0", completion: "0" },
             supported_parameters: ["tools"],
           },
@@ -197,6 +205,7 @@ describe("GET /api/projects/[id]/models", () => {
           promptPrice: "0",
           completionPrice: "0",
           supportedParameters: ["tools"],
+          inputModalities: ["text", "image"],
         },
       ],
     });
@@ -227,6 +236,7 @@ describe("GET /api/projects/[id]/models", () => {
           promptPrice: null,
           completionPrice: null,
           supportedParameters: ["tools"],
+          inputModalities: ["text", "image"],
         },
       ],
     });

@@ -31,18 +31,30 @@ export async function executeAgentRun(input: {
 
   let prompt = input.prompt;
   let attachmentsForRunner: PromptImageAttachment[] | undefined;
+  let attachmentPathsForRunner: string[] | undefined;
 
   if (hasAttachments) {
-    if (input.runtime === "claude-code" || input.runtime === "openai-codex") {
-      // Claude Code auto-detects `@path` references; Codex SDK takes a string
-      // prompt and can be told to read the file via tools. Write images to
-      // disk and append a marker block; do not forward base64 to the runner.
+    if (input.runtime === "claude-code") {
+      // Claude Code auto-detects `@path` references in the prompt. Write images
+      // to disk and append a marker block referencing them; do not forward
+      // base64 to the runner.
       const prepared = await prepareDiskAttachments({
         projectRoot: input.projectRoot,
         runId: input.runId,
         attachments: input.attachments!,
       });
       prompt = `${input.prompt}${prepared.promptSuffix}`;
+    } else if (input.runtime === "openai-codex") {
+      // Codex SDK accepts a multimodal Input array with {type:"local_image",
+      // path} entries. Write images to disk and pass the absolute paths to the
+      // runner; do NOT append the `@<path>` suffix — that would be redundant
+      // text noise alongside the actual multimodal payload.
+      const prepared = await prepareDiskAttachments({
+        projectRoot: input.projectRoot,
+        runId: input.runId,
+        attachments: input.attachments!,
+      });
+      attachmentPathsForRunner = prepared.paths;
     } else if (input.runtime === "openhands") {
       // OpenHands runner writes its own manifest from AgentTurnOptions.attachments.
       // Pass through unchanged; do NOT pre-write to disk here.
@@ -60,6 +72,7 @@ export async function executeAgentRun(input: {
     projectRoot: input.projectRoot,
     modelId: input.modelId,
     ...(attachmentsForRunner ? { attachments: attachmentsForRunner } : {}),
+    ...(attachmentPathsForRunner ? { attachmentPaths: attachmentPathsForRunner } : {}),
     onEvent: async (event) => {
       await input.persistEvent(event);
       input.broadcastEvent(event);

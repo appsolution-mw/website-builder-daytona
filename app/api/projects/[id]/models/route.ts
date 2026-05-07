@@ -25,6 +25,7 @@ function configuredOpenHandsModels(): OpenRouterModelOption[] {
       promptPrice: null,
       completionPrice: null,
       supportedParameters: ["tools"],
+      inputModalities: ["text", "image"],
     },
   ];
 }
