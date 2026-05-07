@@ -4,6 +4,7 @@ import type {
   AgentRuntime,
   HostToBroker,
   BrokerToHost,
+  PromptImageAttachment,
 } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
 import type { SpawnFn } from "./claude-runner";
@@ -56,6 +57,7 @@ interface ExecuteRunCommand {
   runtime: AgentRuntime;
   resumeSession: boolean;
   modelId?: string;
+  attachments?: PromptImageAttachment[];
 }
 
 interface ActiveRunState {
@@ -566,6 +568,7 @@ async function executeInternalRun(input: {
       runtime: input.command.runtime,
       resumeSession: input.command.resumeSession,
       modelId: input.command.modelId,
+      attachments: input.command.attachments,
       projectRoot: input.projectRoot,
       signal: ctl.signal,
       persistEvent,
@@ -606,8 +609,26 @@ function isExecuteRunCommand(value: unknown): value is ExecuteRunCommand {
     typeof body.prompt === "string" &&
     isAgentRuntime(body.runtime) &&
     typeof body.resumeSession === "boolean" &&
-    (body.modelId === undefined || typeof body.modelId === "string")
+    (body.modelId === undefined || typeof body.modelId === "string") &&
+    isPromptImageAttachmentArrayOrUndefined(body.attachments)
   );
+}
+
+function isPromptImageAttachmentArrayOrUndefined(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    if (
+      typeof e.name !== "string" ||
+      typeof e.mimeType !== "string" ||
+      typeof e.dataBase64 !== "string"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isGitPushBody(value: unknown): value is {

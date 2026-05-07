@@ -429,11 +429,11 @@ model Session {
 }
 
 model Message {
-  id              String        @id @default(cuid())
+  id              String              @id @default(cuid())
   projectId       String
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project         Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sessionId       String?
-  session         Session?      @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session         Session?            @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   turnId          String?
   agentId         String?
   runtime         AgentRuntime?
@@ -441,11 +441,26 @@ model Message {
   modelId         String?
   role            MessageRole
   content         String
-  createdAt       DateTime      @default(now())
-  agentRunUserFor AgentRun[]    @relation("AgentRunUserMessage")
+  createdAt       DateTime            @default(now())
+  agentRunUserFor AgentRun[]          @relation("AgentRunUserMessage")
+  attachments     MessageAttachment[]
 
   @@index([projectId, createdAt])
   @@index([sessionId, createdAt])
+}
+
+model MessageAttachment {
+  id          String   @id @default(cuid())
+  messageId   String
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  position    Int
+  name        String
+  mimeType    String
+  sizeBytes   Int
+  dataBase64  String
+  createdAt   DateTime @default(now())
+
+  @@index([messageId, position])
 }
 
 model TokenUsage {

@@ -163,4 +163,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.12.0" as const;
+export const PROTOCOL_VERSION = "1.13.0" as const;

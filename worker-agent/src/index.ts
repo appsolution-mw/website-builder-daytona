@@ -71,8 +71,9 @@ async function main() {
       try {
         await new Promise<void>((resolve, reject) => {
           const opts = authconfig ? { authconfig } : {};
-          docker.pull(image, opts, (err: Error | null, stream: NodeJS.ReadableStream) => {
+          docker.pull(image, opts, (err: Error | null, stream?: NodeJS.ReadableStream) => {
             if (err) return reject(err);
+            if (!stream) return reject(new Error("docker.pull returned no progress stream"));
             docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()));
           });
         });

@@ -3,6 +3,8 @@
  * keep these in sync; both sides serialize identically.
  */
 
+import type { PromptImageAttachment } from "@wbd/protocol";
+
 export interface CreateSandboxRequest {
   sandboxId: string;
   projectId: string;
@@ -78,11 +80,13 @@ export interface ExecuteProjectRunRequest {
   runtime: WorkerAgentRuntime;
   resumeSession: boolean;
   modelId?: string;
+  attachments?: PromptImageAttachment[];
 }
 
 export interface AgentClient {
   createSandbox(req: CreateSandboxRequest): Promise<CreateSandboxResponse>;
   destroySandbox(sandboxId: string): Promise<void>;
+  attachSandboxToken(sandboxId: string, brokerToken: string): Promise<void>;
   getStatus(sandboxId: string): Promise<SandboxStatusResponse>;
   listSandboxes(): Promise<SandboxStatusResponse[]>;
   drainProjectQueue(sandboxId: string, projectId: string): Promise<void>;

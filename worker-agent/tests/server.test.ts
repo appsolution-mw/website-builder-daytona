@@ -481,6 +481,55 @@ describe("worker-agent server", () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("broker-token-missing");
   });
+
+  it("POST /sandboxes/:id/attach-token rejects an empty token", async () => {
+    const body = JSON.stringify({ brokerToken: "" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/sandboxes/s1/attach-token",
+      payload: body,
+      headers: signed("POST", "/sandboxes/s1/attach-token", body),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /sandboxes/:id/attach-token re-establishes a missing token so subsequent commands succeed", async () => {
+    const { port } = await startBrokerCommandServer(200, { ok: true });
+    const app2 = await buildServer({
+      docker: dockerWithStatus({ sandboxId: "s1", status: "running", brokerPort: port }),
+      hmacSecret: SECRET,
+      brokerContainerPort: 4000,
+      previewContainerPort: 3000,
+    });
+    const drainBody = JSON.stringify({ projectId: "p1" });
+
+    const before = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: drainBody,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", drainBody),
+    });
+    expect(before.statusCode).toBe(409);
+    expect(before.json().error).toBe("broker-token-missing");
+
+    const attachBody = JSON.stringify({ brokerToken: "recovered-token" });
+    const attach = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/attach-token",
+      payload: attachBody,
+      headers: signed("POST", "/sandboxes/s1/attach-token", attachBody),
+    });
+    expect(attach.statusCode).toBe(204);
+
+    const after = await app2.inject({
+      method: "POST",
+      url: "/sandboxes/s1/queue/drain",
+      payload: drainBody,
+      headers: signed("POST", "/sandboxes/s1/queue/drain", drainBody),
+    });
+    expect(after.statusCode).toBe(200);
+    expect(brokerRequests.at(-1)?.authorization).toBe("Bearer recovered-token");
+  });
 });
 
 async function createSandbox(

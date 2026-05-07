@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db/client";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
 import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
 import { AgentError } from "@/lib/runtime/worker-pool/types";
+import { withTokenRecovery } from "@/lib/runtime/worker-pool/with-token-recovery";
 
 export type ProjectGitStatus = {
   hasChanges: boolean;
@@ -22,7 +23,9 @@ export type ProjectGitPushResult =
 
 export async function getProjectGitStatus(projectId: string): Promise<ProjectGitStatus> {
   const target = await agentTargetForProject(projectId);
-  const status = await target.client.getProjectGitStatus(target.sandboxId, projectId);
+  const status = await withTokenRecovery(target.client, target.sandboxId, () =>
+    target.client.getProjectGitStatus(target.sandboxId, projectId),
+  );
   return {
     hasChanges: status.hasChanges,
     entries: status.porcelain,
@@ -43,16 +46,18 @@ export async function pushProjectChanges(input: {
     repo: input.repo,
   });
   try {
-    const result = await target.client.pushProjectGitChanges(target.sandboxId, {
-      projectId: input.projectId,
-      remoteUrl,
-      remoteAuth: {
-        username: "x-access-token",
-        password: input.remoteToken,
-      },
-      branch: input.branch,
-      commitMessage: input.commitMessage,
-    });
+    const result = await withTokenRecovery(target.client, target.sandboxId, () =>
+      target.client.pushProjectGitChanges(target.sandboxId, {
+        projectId: input.projectId,
+        remoteUrl,
+        remoteAuth: {
+          username: "x-access-token",
+          password: input.remoteToken,
+        },
+        branch: input.branch,
+        commitMessage: input.commitMessage,
+      }),
+    );
     if (result.ok) return result;
     return {
       ok: false,

@@ -109,6 +109,12 @@ export function createAgentClient(args: CreateAgentClientArgs): AgentClient {
     createSandbox: (req: CreateSandboxRequest) =>
       call<CreateSandboxResponse>("POST", "/sandboxes", req),
     destroySandbox: (id) => call<void>("DELETE", `/sandboxes/${encodeURIComponent(id)}`),
+    attachSandboxToken: (id, brokerToken) =>
+      call<void>(
+        "POST",
+        `/sandboxes/${encodeURIComponent(id)}/attach-token`,
+        { brokerToken },
+      ),
     getStatus: (id) =>
       call<SandboxStatusResponse>("GET", `/sandboxes/${encodeURIComponent(id)}`),
     listSandboxes: () =>

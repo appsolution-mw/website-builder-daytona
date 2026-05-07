@@ -53,6 +53,7 @@ export function createFakeAgentClient(): FakeAgentClientHandles {
       return r;
     },
     async destroySandbox(id) { map.delete(id); },
+    async attachSandboxToken() { /* no-op: fake client has no token state */ },
     async getStatus(id) {
       return map.get(id) ?? { sandboxId: id, status: "gone" };
     },

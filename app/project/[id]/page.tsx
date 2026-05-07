@@ -119,6 +119,14 @@ type ChatSession = {
   _count: { messages: number };
 };
 
+type DbMessageAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  dataUrl: string;
+};
+
 type DbMessage = {
   id: string;
   role: "USER" | "AGENT" | "SYSTEM";
@@ -129,6 +137,7 @@ type DbMessage = {
   provider: string | null;
   modelId: string | null;
   createdAt: string;
+  attachments?: DbMessageAttachment[];
 };
 
 type Project = {
@@ -443,7 +452,20 @@ async function captureViewportSelectionAsPngDataUrl(selection: CaptureRect): Pro
 function messagesFromDb(rows: DbMessage[]): ChatMessageView[] {
   return rows.map((m) => {
     const turnId = m.turnId ?? m.id;
-    if (m.role === "USER") return { kind: "user", turnId, text: m.content };
+    if (m.role === "USER") {
+      const attachments: ChatImageAttachmentView[] | undefined = m.attachments?.length
+        ? m.attachments.map((a) => ({
+            id: a.id,
+            name: a.name,
+            mimeType: a.mimeType,
+            size: a.sizeBytes,
+            dataUrl: a.dataUrl,
+          }))
+        : undefined;
+      return attachments
+        ? { kind: "user", turnId, text: m.content, attachments }
+        : { kind: "user", turnId, text: m.content };
+    }
     if (m.role === "AGENT") {
       return {
         kind: "agent",
@@ -2206,10 +2228,6 @@ export default function ProjectWorkspace({
     const providerSessionId = runtimeState?.providerSessionId ?? randomId();
     const modelId = runtimeState?.modelId ?? null;
     if (!text || !session) return;
-    if (attachments.length > 0) {
-      setAttachmentError("Image attachments are not supported for queued durable runs yet");
-      return;
-    }
     const res = await fetch(`/api/projects/${id}/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -2220,6 +2238,15 @@ export default function ProjectWorkspace({
         providerSessionId,
         ...(modelId ? { modelId } : {}),
         ...(runtime === "openhands" && selectedLibraryPresetId ? { libraryPresetItemId: selectedLibraryPresetId } : {}),
+        ...(attachments.length > 0
+          ? {
+              attachments: attachments.map((a) => ({
+                name: a.name,
+                mimeType: a.mimeType,
+                dataBase64: a.dataBase64,
+              })),
+            }
+          : {}),
       }),
     });
     const data = (await res.json().catch(() => ({}))) as { runId?: string; error?: string };
@@ -2237,7 +2264,22 @@ export default function ProjectWorkspace({
     const runId = data.runId;
 
     turnRuntimeRef.current.set(runId, { runtime, modelId });
-    updateMessages((msgs) => [...msgs, { kind: "user", turnId: runId, text }]);
+    const optimisticAttachments: ChatImageAttachmentView[] | undefined =
+      attachments.length > 0
+        ? attachments.map((a) => ({
+            id: a.id,
+            name: a.name,
+            mimeType: a.mimeType,
+            size: a.size,
+            dataUrl: a.dataUrl,
+          }))
+        : undefined;
+    updateMessages((msgs) => [
+      ...msgs,
+      optimisticAttachments
+        ? { kind: "user", turnId: runId, text, attachments: optimisticAttachments }
+        : { kind: "user", turnId: runId, text },
+    ]);
     if (!turnInFlightRef.current) {
       setTurnInFlight(runId);
     }

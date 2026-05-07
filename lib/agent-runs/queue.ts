@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { AgentRuntime } from "@wbd/protocol";
 import { protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { prisma } from "@/lib/db/client";
+import type { ParsedAttachment } from "./attachments";
 import { appendRunEvent } from "./events";
 
 const MAX_QUEUE_SEQUENCE_RETRIES = 5;
@@ -32,6 +33,7 @@ export async function enqueueAgentRun(input: {
   providerSessionId: string;
   modelId?: string | null;
   librarySnapshotId?: string | null;
+  attachments?: ParsedAttachment[];
 }): Promise<QueuedRunResult> {
   for (let attempt = 1; attempt <= MAX_QUEUE_SEQUENCE_RETRIES; attempt += 1) {
     try {
@@ -620,8 +622,10 @@ async function createQueuedRun(input: {
   providerSessionId: string;
   modelId?: string | null;
   librarySnapshotId?: string | null;
+  attachments?: ParsedAttachment[];
 }): Promise<QueuedRunResult> {
   const runtime = protocolRuntimeToDb(input.runtime);
+  const attachments = input.attachments ?? [];
   return prisma.$transaction(async (tx) => {
     const queueSequence = await nextProjectQueueSequenceInTx(
       tx,
@@ -638,6 +642,18 @@ async function createQueuedRun(input: {
       },
       select: { id: true },
     });
+    if (attachments.length > 0) {
+      await tx.messageAttachment.createMany({
+        data: attachments.map((attachment, index) => ({
+          messageId: message.id,
+          position: index,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          dataBase64: attachment.dataBase64,
+        })),
+      });
+    }
     const run = await tx.agentRun.create({
       data: {
         projectId: input.projectId,

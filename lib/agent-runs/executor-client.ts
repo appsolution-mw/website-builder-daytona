@@ -3,6 +3,7 @@ import { dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { prependOpenHandsLibrarySnapshotToPrompt } from "@/lib/agents/openhands-library-snapshot";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
 import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
+import { withTokenRecovery } from "@/lib/runtime/worker-pool/with-token-recovery";
 import type { BrokerToHost } from "@wbd/protocol";
 import type { AgentClient } from "@/lib/runtime/worker-pool/types";
 import { appendRunEvent } from "./events";
@@ -85,7 +86,9 @@ export async function requestProjectRunCancel(
   if (!target) {
     return;
   }
-  await target.client.cancelProjectRun(target.sandboxId, projectId, runId);
+  await withTokenRecovery(target.client, target.sandboxId, () =>
+    target.client.cancelProjectRun(target.sandboxId, projectId, runId),
+  );
 }
 
 function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
@@ -102,7 +105,19 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         queueSequence: true,
         lastAttemptNumber: true,
         librarySnapshot: { select: { snapshotJson: true } },
-        userMessage: { select: { content: true } },
+        userMessage: {
+          select: {
+            content: true,
+            attachments: {
+              orderBy: { position: "asc" },
+              select: {
+                name: true,
+                mimeType: true,
+                dataBase64: true,
+              },
+            },
+          },
+        },
       },
     });
     if (run.projectId !== projectId) {
@@ -113,7 +128,8 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
     if (!target) {
       return { ok: false, message: "Project sandbox is not running" };
     }
-    if (!run.userMessage) {
+    const userMessage = run.userMessage;
+    if (!userMessage) {
       return { ok: false, message: "Run user message is missing" };
     }
 
@@ -121,7 +137,9 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
     let cancelled = false;
     let terminalError: string | null = null;
     const chunks: string[] = [];
-    await target.client.executeProjectRun(
+    const resumeSession = await shouldResumeRun(run);
+    await withTokenRecovery(target.client, target.sandboxId, () =>
+      target.client.executeProjectRun(
       target.sandboxId,
       {
         projectId,
@@ -130,13 +148,16 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         runId,
         attemptId,
         prompt: promptForRun({
-          prompt: run.userMessage.content,
+          prompt: userMessage.content,
           runtime: dbRuntimeToProtocol(run.runtime),
           snapshot: run.librarySnapshot?.snapshotJson,
         }),
         runtime: dbRuntimeToProtocol(run.runtime),
-        resumeSession: await shouldResumeRun(run),
+        resumeSession,
         ...(run.modelId ? { modelId: run.modelId } : {}),
+        ...(userMessage.attachments.length > 0
+          ? { attachments: userMessage.attachments }
+          : {}),
       },
       async (event) => {
         if (!isBrokerEvent(event)) {
@@ -165,6 +186,7 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
           attemptId,
         });
       },
+      ),
     );
 
     if (terminalError) {

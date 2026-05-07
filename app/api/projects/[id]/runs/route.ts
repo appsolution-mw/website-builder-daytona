@@ -6,6 +6,10 @@ import type {
 import type { AgentRuntime } from "@wbd/protocol";
 import { NextResponse, type NextRequest } from "next/server";
 import { dbRuntimeToProtocol, isAgentRuntime, protocolRuntimeToDb } from "@/lib/agents/runtime";
+import {
+  parseAttachmentsPayload,
+  type ParsedAttachment,
+} from "@/lib/agent-runs/attachments";
 import { enqueueAgentRun } from "@/lib/agent-runs/queue";
 import { requestProjectQueueDrain } from "@/lib/agent-runs/executor-client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
@@ -49,6 +53,7 @@ type EnqueuePayload = {
   modelId?: string | null;
   libraryPresetItemId?: string | null;
   libraryPresetRevisionId?: string | null;
+  attachments: ParsedAttachment[];
 };
 
 const LIST_RUN_STATUSES = ["QUEUED", "RUNNING"] as const;
@@ -126,9 +131,22 @@ export async function POST(
   }
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const payload = parseEnqueuePayload(body);
+  const attachmentsResult = parseAttachmentsPayload(body.attachments);
+  if (!attachmentsResult.ok) {
+    return NextResponse.json(
+      { error: attachmentsResult.error.message },
+      { status: 400 },
+    );
+  }
+  const payload = parseEnqueuePayload(body, attachmentsResult.attachments);
   if (!payload) {
     return NextResponse.json({ error: "invalid run payload" }, { status: 400 });
+  }
+  if (payload.runtime === "vercel-ai" && payload.attachments.length > 0) {
+    return NextResponse.json(
+      { error: "image attachments are not supported for the vercel-ai runtime" },
+      { status: 400 },
+    );
   }
 
   const session = await prisma.session.findFirst({
@@ -198,6 +216,7 @@ export async function POST(
     runtime: payload.runtime,
     providerSessionId: payload.providerSessionId,
     modelId: effectiveModelId,
+    ...(payload.attachments.length > 0 ? { attachments: payload.attachments } : {}),
     ...(librarySnapshotId ? { librarySnapshotId } : {}),
   });
   requestProjectQueueDrain(project.id).catch((error: unknown) => {
@@ -221,15 +240,23 @@ async function requireProject(
   }
 }
 
-function parseEnqueuePayload(body: Record<string, unknown>): EnqueuePayload | null {
+function parseEnqueuePayload(
+  body: Record<string, unknown>,
+  attachments: ParsedAttachment[],
+): EnqueuePayload | null {
   const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const promptRaw = typeof body.prompt === "string" ? body.prompt.trim() : "";
   const runtime = typeof body.runtime === "string" && isAgentRuntime(body.runtime)
     ? body.runtime
     : null;
   const providerSessionId = typeof body.providerSessionId === "string"
     ? body.providerSessionId.trim()
     : "";
+  const prompt = promptRaw.length > 0
+    ? promptRaw
+    : attachments.length > 0
+      ? "Use the attached image as context."
+      : "";
   if (!sessionId || !prompt || !runtime || !UUID_RE.test(providerSessionId)) {
     return null;
   }
@@ -251,7 +278,16 @@ function parseEnqueuePayload(body: Record<string, unknown>): EnqueuePayload | nu
     ? body.libraryPresetRevisionId.trim()
     : null;
 
-  return { sessionId, prompt, runtime, providerSessionId, modelId, libraryPresetItemId, libraryPresetRevisionId };
+  return {
+    sessionId,
+    prompt,
+    runtime,
+    providerSessionId,
+    modelId,
+    libraryPresetItemId,
+    libraryPresetRevisionId,
+    attachments,
+  };
 }
 
 function hasStringProperty(value: unknown, key: string): value is Record<string, unknown> {

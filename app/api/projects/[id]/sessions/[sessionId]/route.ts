@@ -77,6 +77,16 @@ export async function GET(
           provider: true,
           modelId: true,
           createdAt: true,
+          attachments: {
+            orderBy: { position: "asc" },
+            select: {
+              id: true,
+              name: true,
+              mimeType: true,
+              sizeBytes: true,
+              dataBase64: true,
+            },
+          },
         },
       },
     },
@@ -91,6 +101,13 @@ export async function GET(
       messages: session.messages.map((message) => ({
         ...message,
         runtime: message.runtime ? dbRuntimeToProtocol(message.runtime) : null,
+        attachments: message.attachments.map((attachment) => ({
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          dataUrl: `data:${attachment.mimeType};base64,${attachment.dataBase64}`,
+        })),
       })),
     }),
   });

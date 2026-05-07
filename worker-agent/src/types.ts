@@ -1,3 +1,5 @@
+import type { PromptImageAttachment } from "@wbd/protocol";
+
 export interface CreateSandboxRequest {
   sandboxId: string;
   projectId: string;
@@ -73,6 +75,7 @@ export interface ExecuteProjectRunRequest {
   runtime: WorkerAgentRuntime;
   resumeSession: boolean;
   modelId?: string;
+  attachments?: PromptImageAttachment[];
 }
 
 export interface BrokerCommandResponse {

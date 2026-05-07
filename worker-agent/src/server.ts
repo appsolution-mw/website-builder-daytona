@@ -152,6 +152,20 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
     return reply.code(204).send();
   });
 
+  app.post<{ Params: { id: string } }>(
+    "/sandboxes/:id/attach-token",
+    async (req, reply) => {
+      const body = req.body as { brokerToken?: unknown } | undefined;
+      const brokerToken =
+        body && typeof body.brokerToken === "string" ? body.brokerToken.trim() : "";
+      if (!brokerToken) {
+        return reply.code(400).send({ error: "bad-request" } satisfies ErrorResponse);
+      }
+      brokerTokens.set(req.params.id, brokerToken);
+      return reply.code(204).send();
+    },
+  );
+
   app.get<{ Params: { id: string }; Reply: SandboxStatusResponse }>("/sandboxes/:id", async (req) => {
     return await args.docker.getStatus(req.params.id);
   });
@@ -438,8 +452,26 @@ function isExecuteProjectRunRequest(value: unknown): value is ExecuteProjectRunR
     typeof body.prompt === "string" &&
     isWorkerAgentRuntime(body.runtime) &&
     typeof body.resumeSession === "boolean" &&
-    (body.modelId === undefined || typeof body.modelId === "string")
+    (body.modelId === undefined || typeof body.modelId === "string") &&
+    isPromptImageAttachmentArrayOrUndefined(body.attachments)
   );
+}
+
+function isPromptImageAttachmentArrayOrUndefined(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    if (
+      typeof e.name !== "string" ||
+      typeof e.mimeType !== "string" ||
+      typeof e.dataBase64 !== "string"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isPushProjectGitChangesRequest(value: unknown): value is PushProjectGitChangesRequest {
