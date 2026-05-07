@@ -351,27 +351,58 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function readImageFile(file: File): Promise<DraftImageAttachment> {
+const WEBP_QUALITY = 0.8;
+
+async function convertImageFileToWebP(file: File): Promise<File> {
+  if (file.type === "image/webp" || file.type === "image/gif") return file;
+  if (typeof createImageBitmap !== "function") return file;
+
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return file;
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/webp", WEBP_QUALITY),
+    );
+    if (!blob || blob.type !== "image/webp") return file;
+    const baseName = (file.name || "image").replace(/\.(png|jpe?g|bmp|tiff?)$/i, "") || "image";
+    return new File([blob], `${baseName}.webp`, { type: "image/webp" });
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+async function readImageFile(file: File): Promise<DraftImageAttachment> {
+  const converted = await convertImageFileToWebP(file);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Could not read ${file.name || "image"}`));
+    reader.onerror = () => reject(new Error(`Could not read ${converted.name || "image"}`));
     reader.onload = () => {
       const dataUrl = typeof reader.result === "string" ? reader.result : "";
       const comma = dataUrl.indexOf(",");
       if (!dataUrl || comma < 0) {
-        reject(new Error(`Could not read ${file.name || "image"}`));
+        reject(new Error(`Could not read ${converted.name || "image"}`));
         return;
       }
       resolve({
         id: randomId(),
-        name: file.name || "image.png",
-        mimeType: file.type,
-        size: file.size,
+        name: converted.name || "image.webp",
+        mimeType: converted.type,
+        size: converted.size,
         dataUrl,
         dataBase64: dataUrl.slice(comma + 1),
       });
     };
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(converted);
   });
 }
 
@@ -399,7 +430,7 @@ function imageAttachmentFromDataUrl(dataUrl: string, name: string): DraftImageAt
   };
 }
 
-async function captureViewportSelectionAsPngDataUrl(selection: CaptureRect): Promise<string> {
+async function captureViewportSelectionAsWebPDataUrl(selection: CaptureRect): Promise<string> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
     throw new Error("Screen capture is not available in this browser");
   }
@@ -443,7 +474,7 @@ async function captureViewportSelectionAsPngDataUrl(selection: CaptureRect): Pro
       crop.width,
       crop.height,
     );
-    return canvas.toDataURL("image/png");
+    return canvas.toDataURL("image/webp", WEBP_QUALITY);
   } finally {
     for (const track of stream.getTracks()) track.stop();
   }
@@ -2088,9 +2119,9 @@ export default function ProjectWorkspace({
     setPreviewCaptureActive(false);
     setAttachmentError(null);
     try {
-      const dataUrl = await captureViewportSelectionAsPngDataUrl(selection);
+      const dataUrl = await captureViewportSelectionAsWebPDataUrl(selection);
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const attachment = imageAttachmentFromDataUrl(dataUrl, `preview-capture-${timestamp}.png`);
+      const attachment = imageAttachmentFromDataUrl(dataUrl, `preview-capture-${timestamp}.webp`);
       if (attachment.size > MAX_CHAT_IMAGE_BYTES) {
         setAttachmentError(`Screenshot is larger than ${formatBytes(MAX_CHAT_IMAGE_BYTES)}`);
         return;
