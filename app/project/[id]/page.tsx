@@ -1716,7 +1716,15 @@ export default function ProjectWorkspace({
 
   useEffect(() => {
     if (project?.status !== "RUNNING") return;
-    const base = process.env.NEXT_PUBLIC_WS_PROXY_URL ?? "ws://localhost:4100";
+    const base =
+      process.env.NEXT_PUBLIC_WS_PROXY_URL ??
+      (() => {
+        const isHttps = window.location.protocol === "https:";
+        const proto = isHttps ? "wss:" : "ws:";
+        // Dev: ws-proxy on its own port. Prod (https): same-origin via Caddy on 443.
+        const port = isHttps ? "" : ":4100";
+        return `${proto}//${window.location.hostname}${port}`;
+      })();
     let unmounted = false;
     let reconnectAttempt = 0;
     let reconnectTimer: number | null = null;
