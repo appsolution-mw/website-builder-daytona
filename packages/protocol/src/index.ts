@@ -82,6 +82,7 @@ export type BrokerToHost =
       runtime: AgentRuntime;
       providerSessionId: string;
       modelId?: string;
+      resumed?: boolean;
     }
   | { type: "agent.chunk"; turnId: string; delta: string; agentId?: string }
   | {
@@ -100,9 +101,18 @@ export type BrokerToHost =
       costUsd: number;
       exitCode: number;
       usage?: AgentUsageDetails;
+      subtype?: string;
     }
   | AgentUsageEvent
   | { type: "agent.error"; turnId: string; message: string; agentId?: string }
+  | {
+      type: "agent.policy_violation";
+      turnId: string;
+      tool: string;
+      reason: string;
+      redactedInput: string;
+      agentId?: string;
+    }
   | {
       type: "file.list.result";
       requestId: string;
@@ -163,4 +173,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.13.0" as const;
+export const PROTOCOL_VERSION = "1.14.0" as const;
