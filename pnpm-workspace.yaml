@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "container/sandbox/broker"
+  - "container/sandbox/agent-runner"
   - "ws-proxy"
   - "worker-agent"
 
