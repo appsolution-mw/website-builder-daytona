@@ -21,3 +21,8 @@ export interface BuildServerOptions {
   agentContextDir?: string; // default /opt/agent-context
   workspaceDir?: string; // default /workspace
 }
+
+export interface InFlightTurn {
+  abort: AbortController;
+  startedAt: number;
+}
