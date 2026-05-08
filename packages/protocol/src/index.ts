@@ -101,7 +101,13 @@ export type BrokerToHost =
       costUsd: number;
       exitCode: number;
       usage?: AgentUsageDetails;
-      subtype?: string;
+      subtype?:
+        | "success"
+        | "error_max_turns"
+        | "error_max_budget_usd"
+        | "error_during_execution"
+        | "error_max_structured_output_retries"
+        | (string & {});
     }
   | AgentUsageEvent
   | { type: "agent.error"; turnId: string; message: string; agentId?: string }

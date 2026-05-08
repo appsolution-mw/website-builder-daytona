@@ -1,40 +1,25 @@
 import { describe, it, expectTypeOf } from "vitest";
 import type { BrokerToHost } from "../index";
 
+type Session = Extract<BrokerToHost, { type: "agent.session" }>;
+type Done = Extract<BrokerToHost, { type: "agent.done" }>;
+type Violation = Extract<BrokerToHost, { type: "agent.policy_violation" }>;
+
 describe("protocol additions for Agent SDK", () => {
-  it("agent.session accepts optional resumed flag", () => {
-    const evt: BrokerToHost = {
-      type: "agent.session",
-      turnId: "t1",
-      runtime: "claude-code",
-      providerSessionId: "sess-1",
-      resumed: true,
-    };
-    expectTypeOf(evt).toMatchTypeOf<BrokerToHost>();
+  it("agent.session has optional resumed: boolean", () => {
+    expectTypeOf<Session>().toHaveProperty("resumed").toEqualTypeOf<boolean | undefined>();
   });
 
-  it("agent.done accepts optional subtype", () => {
-    const evt: BrokerToHost = {
-      type: "agent.done",
-      turnId: "t1",
-      durationMs: 1234,
-      tokensIn: 0,
-      tokensOut: 0,
-      costUsd: 0,
-      exitCode: 0,
-      subtype: "success",
-    };
-    expectTypeOf(evt).toMatchTypeOf<BrokerToHost>();
+  it("agent.done has optional subtype, agent.session does not", () => {
+    expectTypeOf<Done>().toHaveProperty("subtype");
+    expectTypeOf<Session>().not.toHaveProperty("subtype");
   });
 
-  it("agent.policy_violation event exists", () => {
-    const evt: BrokerToHost = {
-      type: "agent.policy_violation",
-      turnId: "t1",
-      tool: "Bash",
-      reason: "Destructive pattern blocked",
-      redactedInput: "rm -rf /",
-    };
-    expectTypeOf(evt).toMatchTypeOf<BrokerToHost>();
+  it("agent.policy_violation has the expected shape", () => {
+    expectTypeOf<Violation>().toHaveProperty("turnId").toEqualTypeOf<string>();
+    expectTypeOf<Violation>().toHaveProperty("tool").toEqualTypeOf<string>();
+    expectTypeOf<Violation>().toHaveProperty("reason").toEqualTypeOf<string>();
+    expectTypeOf<Violation>().toHaveProperty("redactedInput").toEqualTypeOf<string>();
+    expectTypeOf<Violation>().toHaveProperty("agentId").toEqualTypeOf<string | undefined>();
   });
 });
