@@ -15,7 +15,7 @@ export function verifyRequest(args: {
   if (!Number.isFinite(tsNum)) return false;
   if (Math.abs(Date.now() - tsNum) > args.maxAgeMs) return false;
   const expected = signRequest({ body: args.body, ts: args.ts, secret: args.secret });
-  if (expected.length !== args.sig.length) return false;
+  if (args.sig.length !== 64) return false;
   try {
     return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(args.sig, "hex"));
   } catch {

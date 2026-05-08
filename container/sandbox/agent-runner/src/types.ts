@@ -26,3 +26,9 @@ export interface InFlightTurn {
   abort: AbortController;
   startedAt: number;
 }
+
+declare module "fastify" {
+  interface FastifyInstance {
+    inFlight: Map<string, InFlightTurn>;
+  }
+}

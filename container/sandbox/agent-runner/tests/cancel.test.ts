@@ -48,7 +48,7 @@ describe("/claude-sdk/cancel", () => {
   });
 
   it("aborts and returns 200 when in flight", async () => {
-    const map = (app as unknown as { inFlight: Map<string, { abort: AbortController; startedAt: number }> }).inFlight;
+    const map = app.inFlight;
     const ac = new AbortController();
     map.set("p1", { abort: ac, startedAt: Date.now() });
     const res = await app.inject({
