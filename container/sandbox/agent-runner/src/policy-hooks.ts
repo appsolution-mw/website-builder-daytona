@@ -92,7 +92,7 @@ export async function denyOutsideWorkspace(
       reason: "Path missing — cannot verify it is inside /workspace",
     };
   }
-  if (path.includes("..")) {
+  if (/(?:^|\/)\.\.(?:\/|$)/.test(path)) {
     return { allow: false, reason: `Path contains parent segment: ${path}` };
   }
   if (!path.startsWith("/workspace/")) {
@@ -187,7 +187,10 @@ export function policyHooksToSdk(
       hooks: entry.hooks.map(
         (fn) =>
           // SDK calls with full PreToolUseHookInput; we narrow to tool_input.
-          (async (sdkInput): Promise<HookJSONOutput> => {
+          // _toolUseID and _options (containing AbortSignal) are intentionally
+          // unused: current policy hooks are synchronous and stateless;
+          // cancellation is not needed.
+          (async (sdkInput, _toolUseID, _options): Promise<HookJSONOutput> => {
             const toolInput =
               (sdkInput as PreToolUseHookInput).tool_input ?? {};
             const result = await fn({

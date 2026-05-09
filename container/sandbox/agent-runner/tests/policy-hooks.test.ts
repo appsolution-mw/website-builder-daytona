@@ -4,6 +4,7 @@ import {
   denyOutsideWorkspace,
   redactToolInput,
   buildPolicyHooks,
+  policyHooksToSdk,
 } from "../src/policy-hooks.js";
 
 describe("denyDestructiveBash", () => {
@@ -79,6 +80,12 @@ describe("denyOutsideWorkspace", () => {
       tool_input: { file_path: "/workspace/../etc/passwd" },
     });
     expect(r.allow).toBe(false);
+  });
+  it("allows /workspace/foo..bar.ts (filename with .. substring, not segment)", async () => {
+    const r = await denyOutsideWorkspace({
+      tool_input: { file_path: "/workspace/foo..bar.ts" },
+    });
+    expect(r.allow).toBe(true);
   });
   it("allows Write to /workspace/x", async () => {
     const r = await denyOutsideWorkspace({
@@ -168,5 +175,32 @@ describe("buildPolicyHooks", () => {
     } as never);
     expect(result.allow).toBe(true);
     expect(violations.length).toBe(0);
+  });
+});
+
+describe("policyHooksToSdk", () => {
+  it("translates allow → empty SDK output", async () => {
+    const sdk = policyHooksToSdk(buildPolicyHooks({ emitViolation: () => {} }));
+    const bash = sdk.PreToolUse![0];
+    const cb = bash.hooks[0];
+    const out = await cb(
+      { tool_input: { command: "ls" } } as never,
+      undefined,
+      { signal: new AbortController().signal },
+    );
+    expect(out).toEqual({});
+  });
+
+  it("translates deny → SDK { decision: 'block', reason }", async () => {
+    const sdk = policyHooksToSdk(buildPolicyHooks({ emitViolation: () => {} }));
+    const bash = sdk.PreToolUse![0];
+    const cb = bash.hooks[0];
+    const out = await cb(
+      { tool_input: { command: "rm -rf /" } } as never,
+      undefined,
+      { signal: new AbortController().signal },
+    );
+    expect(out).toMatchObject({ decision: "block" });
+    expect((out as { reason?: string }).reason).toContain("Destructive");
   });
 });
