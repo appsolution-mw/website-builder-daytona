@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import type { BuildServerOptions, InFlightTurn } from "./types.js";
+import type { BuildServerOptions, InFlightTurn, TurnRequest } from "./types.js";
 import { verifyRequest } from "./hmac.js";
+import { runTurn } from "./sdk-runner.js";
 
 const HMAC_MAX_AGE_MS = 60_000;
 
@@ -56,6 +57,49 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
       return { ok: true };
     },
   );
+
+  app.post("/claude-sdk/turn", async (req, reply) => {
+    // preHandler unwraps __raw/parsed; body is now TurnRequest
+    const body = req.body as unknown as TurnRequest;
+
+    if (inFlight.has(body.providerSessionId)) {
+      return reply.code(409).send({ error: "already in flight" });
+    }
+    const abort = new AbortController();
+    inFlight.set(body.providerSessionId, { abort, startedAt: Date.now() });
+
+    reply.raw.setHeader("Content-Type", "application/x-ndjson");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    const flushHeaders = (reply.raw as { flushHeaders?: () => void }).flushHeaders;
+    if (typeof flushHeaders === "function") flushHeaders.call(reply.raw);
+
+    const emit = (ev: unknown): void => {
+      reply.raw.write(`${JSON.stringify(ev)}\n`);
+    };
+
+    try {
+      await runTurn(body, {
+        workspaceDir: opts.workspaceDir ?? "/workspace",
+        abort,
+        runtime: "claude-code",
+        emit,
+        // Task 8 will inject real PreToolUse/PostToolUse policy hooks.
+        buildHooks: () => ({}),
+      });
+    } catch (err) {
+      emit({
+        type: "agent.error",
+        turnId: body.turnId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      inFlight.delete(body.providerSessionId);
+      reply.raw.end();
+    }
+  });
 
   return app;
 }
