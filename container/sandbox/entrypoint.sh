@@ -151,9 +151,19 @@ fi
 
 cd /opt/builder
 
+# Redirect Claude Agent SDK auto-memory writes to /workspace/.claude so they
+# stay inside the workspace boundary enforced by the agent-runner policy hooks
+# (T-20260509-003). Without this, the SDK would target $HOME/.claude (=
+# /root/.claude in this image) and PreToolUse would correctly deny those writes
+# as outside-workspace, silently losing useful auto-memory entries. The
+# bootstrap merge already populates /workspace/.claude with CLAUDE.md/skills,
+# so SDK writes simply land alongside.
+mkdir -p /workspace/.claude
+
 echo "[entrypoint] starting agent-runner on 127.0.0.1:${AGENT_RUNNER_PORT} (background)"
 AGENT_RUNNER_PORT="${AGENT_RUNNER_PORT}" \
 AGENT_RUNNER_HMAC_SECRET="${AGENT_RUNNER_HMAC_SECRET}" \
+CLAUDE_CONFIG_DIR="/workspace/.claude" \
   pnpm -F @wbd/agent-runner start > /workspace/agent-runner.log 2>&1 &
 RUNNER_PID=$!
 

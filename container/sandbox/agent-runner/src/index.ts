@@ -143,5 +143,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const app = await buildServer({ hmacSecret: secret });
   const port = Number(process.env.AGENT_RUNNER_PORT ?? "7050");
+  // Log the resolved Claude SDK config dir at startup so we can confirm
+  // auto-memory writes land inside /workspace (T-20260509-003).
+  app.log.info(
+    {
+      claudeConfigDir:
+        process.env.CLAUDE_CONFIG_DIR ?? `${process.env.HOME ?? "<unset>"}/.claude (inferred)`,
+    },
+    "claude-sdk auto-memory dir",
+  );
   await app.listen({ host: "127.0.0.1", port });
 }
