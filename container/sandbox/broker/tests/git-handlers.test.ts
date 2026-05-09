@@ -280,8 +280,9 @@ describe("commitAgentTurn", () => {
       modelId: null,
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.reason).toBe("commit_failed");
+    if (result.ok || result.reason !== "commit_failed") {
+      throw new Error(`expected commit_failed, got ${JSON.stringify(result)}`);
+    }
     expect(typeof result.detail).toBe("string");
     expect(result.detail).not.toMatch(/gh[pousr]_[A-Za-z0-9_]+/);
   });
