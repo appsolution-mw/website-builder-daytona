@@ -90,6 +90,14 @@ describe("mergeAgentContext", () => {
     expect(await readFile(join(workspace, ".claude/CLAUDE.md"), "utf8")).toContain("rules");
   });
 
+  it("handles defaults CLAUDE.md without trailing newline", async () => {
+    const { defaults, workspace } = await setup();
+    await writeFile(join(defaults, "CLAUDE.md"), "no-trailing-newline"); // intentionally no \n
+    await mergeAgentContext({ defaultsDir: defaults, workspaceDir: workspace });
+    const merged = await readFile(join(workspace, ".claude/CLAUDE.md"), "utf8");
+    expect(merged).toMatch(/no-trailing-newline\n\n<!-- agent-context-merged -->/);
+  });
+
   it("does not overwrite existing project files outside CLAUDE.md", async () => {
     const { defaults, workspace } = await setup();
     await mkdir(join(defaults, "skills/y"), { recursive: true });

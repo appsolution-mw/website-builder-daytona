@@ -77,11 +77,12 @@ async function mergeClaudeMd(from: string, to: string): Promise<void> {
   const projectText = await readFile(to, "utf8").catch(() => "");
   if (projectText.includes(SENTINEL)) return; // already merged
 
+  const dt = defaultText.trimEnd();
   let merged: string;
   if (projectText.length > 0) {
-    merged = `${defaultText}\n${SENTINEL}\n\n## Project Notes\n${projectText}`;
+    merged = `${dt}\n\n${SENTINEL}\n\n## Project Notes\n${projectText}`;
   } else {
-    merged = `${defaultText}\n${SENTINEL}\n`;
+    merged = `${dt}\n\n${SENTINEL}\n`;
   }
   await writeFile(to, merged);
 }
