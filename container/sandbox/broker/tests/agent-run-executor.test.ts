@@ -1,9 +1,14 @@
-import type { AgentProvider } from "../src/agent-provider";
+import type { AgentProvider, AgentTurnOptions } from "../src/agent-provider";
+import type { SpawnFn } from "../src/spawn-types";
 import type { BrokerToHost, PromptImageAttachment } from "@wbd/protocol";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const execFileAsync = promisify(execFile);
 
 const runTurnMock = vi.hoisted(() => vi.fn());
 const createAgentProviderMock = vi.hoisted(() => vi.fn());
@@ -193,5 +198,186 @@ describe("executeAgentRun", () => {
       // Claude Code path must NOT use the codex-only attachmentPaths channel.
       expect(call.attachmentPaths).toBeUndefined();
     });
+  });
+});
+
+describe("executeAgentRun — commit hook", () => {
+  const tempDirs: string[] = [];
+
+  async function git(cwd: string, args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
+    return stdout.trim();
+  }
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-exec-commit-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "README.md"), "initial\n");
+    await git(root, ["add", "README.md"]);
+    await git(root, ["commit", "-q", "-m", "Initial commit"]);
+    return root;
+  }
+
+  // SpawnFn-shaped sentinel that also carries the desired agent.done exitCode.
+  // The createAgentProviderMock below reads `(spawn as { __exitCode?: number }).__exitCode`
+  // off the spawn passed via `__testSpawn` and emits a single agent.done event with it.
+  function makeFakeSuccessSpawn(opts: { exitCode: number }): SpawnFn {
+    const fn: SpawnFn = () => {
+      // Never actually invoked — the mocked provider intercepts the call.
+      throw new Error("makeFakeSuccessSpawn child should never spawn in unit tests");
+    };
+    (fn as unknown as { __exitCode: number }).__exitCode = opts.exitCode;
+    return fn;
+  }
+
+  beforeEach(() => {
+    runTurnMock.mockReset();
+    createAgentProviderMock.mockReset();
+    createAgentProviderMock.mockImplementation((opts: { __testSpawn?: SpawnFn; runtime: string }) => {
+      const exitCode = (opts.__testSpawn as unknown as { __exitCode?: number } | undefined)
+        ?.__exitCode ?? 0;
+      const provider: AgentProvider = {
+        runtime: opts.runtime as AgentProvider["runtime"],
+        async runTurn(turn: AgentTurnOptions) {
+          await turn.onEvent({
+            type: "agent.done",
+            turnId: turn.turnId,
+            durationMs: 0,
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: 0,
+            exitCode,
+          });
+        },
+      };
+      return provider;
+    });
+  });
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  it("emits git.commit after a successful agent.done when working tree is dirty", async () => {
+    const projectRoot = await createRepository();
+    await writeFile(join(projectRoot, "page.tsx"), "x\n");
+    const events: BrokerToHost[] = [];
+
+    await executeAgentRun({
+      projectId: "p1",
+      sessionId: "s1",
+      providerSessionId: "ps1",
+      runId: "run_x",
+      attemptId: "a1",
+      prompt: "Add a hero section",
+      runtime: "claude-code",
+      resumeSession: false,
+      projectRoot,
+      signal: new AbortController().signal,
+      persistEvent: async (e) => {
+        events.push(e);
+      },
+      broadcastEvent: () => {},
+      __testSpawn: makeFakeSuccessSpawn({ exitCode: 0 }),
+    });
+
+    const commitEvents = events.filter((e) => e.type === "git.commit");
+    expect(commitEvents).toHaveLength(1);
+    expect(commitEvents[0]).toMatchObject({
+      type: "git.commit",
+      turnId: "run_x",
+      runtime: "claude-code",
+      authorKind: "AGENT",
+      title: "Add a hero section",
+    });
+  });
+
+  it("emits git.commit.skipped with no_changes for a clean working tree", async () => {
+    const projectRoot = await createRepository();
+    const events: BrokerToHost[] = [];
+
+    await executeAgentRun({
+      projectId: "p1",
+      sessionId: "s1",
+      providerSessionId: "ps1",
+      runId: "run_y",
+      attemptId: "a1",
+      prompt: "noop",
+      runtime: "claude-code",
+      resumeSession: false,
+      projectRoot,
+      signal: new AbortController().signal,
+      persistEvent: async (e) => {
+        events.push(e);
+      },
+      broadcastEvent: () => {},
+      __testSpawn: makeFakeSuccessSpawn({ exitCode: 0 }),
+    });
+
+    const skipped = events.filter((e) => e.type === "git.commit.skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({ type: "git.commit.skipped", reason: "no_changes" });
+  });
+
+  it("does not emit a commit event when agent.done has non-zero exitCode", async () => {
+    const projectRoot = await createRepository();
+    await writeFile(join(projectRoot, "x.txt"), "x\n");
+    const events: BrokerToHost[] = [];
+
+    await executeAgentRun({
+      projectId: "p1",
+      sessionId: "s1",
+      providerSessionId: "ps1",
+      runId: "run_z",
+      attemptId: "a1",
+      prompt: "fail",
+      runtime: "claude-code",
+      resumeSession: false,
+      projectRoot,
+      signal: new AbortController().signal,
+      persistEvent: async (e) => {
+        events.push(e);
+      },
+      broadcastEvent: () => {},
+      __testSpawn: makeFakeSuccessSpawn({ exitCode: 1 }),
+    });
+
+    expect(
+      events.some((e) => e.type === "git.commit" || e.type === "git.commit.skipped"),
+    ).toBe(false);
+  });
+
+  it("does not emit a commit event when the run is aborted", async () => {
+    const projectRoot = await createRepository();
+    await writeFile(join(projectRoot, "x.txt"), "x\n");
+    const events: BrokerToHost[] = [];
+    const controller = new AbortController();
+    controller.abort();
+
+    await executeAgentRun({
+      projectId: "p1",
+      sessionId: "s1",
+      providerSessionId: "ps1",
+      runId: "run_a",
+      attemptId: "a1",
+      prompt: "aborted",
+      runtime: "claude-code",
+      resumeSession: false,
+      projectRoot,
+      signal: controller.signal,
+      persistEvent: async (e) => {
+        events.push(e);
+      },
+      broadcastEvent: () => {},
+      __testSpawn: makeFakeSuccessSpawn({ exitCode: 0 }),
+    });
+
+    expect(
+      events.some((e) => e.type === "git.commit" || e.type === "git.commit.skipped"),
+    ).toBe(false);
   });
 });

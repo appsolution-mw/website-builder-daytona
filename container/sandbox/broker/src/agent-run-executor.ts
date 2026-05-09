@@ -1,6 +1,7 @@
 import type { AgentRuntime, BrokerToHost, PromptImageAttachment } from "@wbd/protocol";
 import { createAgentProvider } from "./agent-provider-factory";
 import { prepareDiskAttachments } from "./chat-attachments";
+import { commitAgentTurn } from "./git-handlers";
 import type { SpawnFn } from "./spawn-types";
 
 export type PersistRunEvent = (event: BrokerToHost) => Promise<void>;
@@ -65,29 +66,92 @@ export async function executeAgentRun(input: {
     // vercel-ai: ignore — host already rejects vercel-ai + attachments combos.
   }
 
-  await provider.runTurn({
-    projectId: input.projectId,
-    sessionId: input.providerSessionId,
-    resumeSession: input.resumeSession,
-    prompt,
-    turnId: input.runId,
+  let lastDoneExitCode: number | null = null;
+  let aborted = input.signal.aborted;
+  const onAbort = () => {
+    aborted = true;
+  };
+  input.signal.addEventListener("abort", onAbort);
+
+  try {
+    await provider.runTurn({
+      projectId: input.projectId,
+      sessionId: input.providerSessionId,
+      resumeSession: input.resumeSession,
+      prompt,
+      turnId: input.runId,
+      projectRoot: input.projectRoot,
+      modelId: input.modelId,
+      ...(attachmentsForRunner ? { attachments: attachmentsForRunner } : {}),
+      ...(attachmentPathsForRunner ? { attachmentPaths: attachmentPathsForRunner } : {}),
+      ...(input.runtime === "claude-code" && input.replayContext && input.replayContext.length > 0
+        ? { replayContext: input.replayContext }
+        : {}),
+      onEvent: async (event) => {
+        if (event.type === "agent.done") lastDoneExitCode = event.exitCode;
+        await input.persistEvent(event);
+        input.broadcastEvent(event);
+      },
+      signal: input.signal,
+      run: {
+        runId: input.runId,
+        attemptId: input.attemptId,
+        conversationId: input.providerSessionId,
+        persistenceDir: `${input.projectRoot}/.agent-artifacts/openhands/conversations`,
+      },
+    });
+  } finally {
+    input.signal.removeEventListener("abort", onAbort);
+  }
+
+  if (aborted || lastDoneExitCode !== 0) return;
+
+  const commitResult = await commitAgentTurn({
     projectRoot: input.projectRoot,
-    modelId: input.modelId,
-    ...(attachmentsForRunner ? { attachments: attachmentsForRunner } : {}),
-    ...(attachmentPathsForRunner ? { attachmentPaths: attachmentPathsForRunner } : {}),
-    ...(input.runtime === "claude-code" && input.replayContext && input.replayContext.length > 0
-      ? { replayContext: input.replayContext }
-      : {}),
-    onEvent: async (event) => {
-      await input.persistEvent(event);
-      input.broadcastEvent(event);
-    },
-    signal: input.signal,
-    run: {
-      runId: input.runId,
-      attemptId: input.attemptId,
-      conversationId: input.providerSessionId,
-      persistenceDir: `${input.projectRoot}/.agent-artifacts/openhands/conversations`,
-    },
+    runId: input.runId,
+    userPromptFirstLine: firstNonEmptyLine(input.prompt),
+    userPromptFull: input.prompt,
+    runtime: input.runtime,
+    modelId: input.modelId ?? null,
   });
+
+  const commitEvent: BrokerToHost = commitResult.ok
+    ? {
+        type: "git.commit",
+        turnId: input.runId,
+        sha: commitResult.sha,
+        shortSha: commitResult.shortSha,
+        title: commitResult.title,
+        bodyMessage: commitResult.bodyMessage,
+        filesChanged: commitResult.filesChanged,
+        insertions: commitResult.insertions,
+        deletions: commitResult.deletions,
+        runtime: input.runtime,
+        modelId: input.modelId ?? null,
+        authorKind: "AGENT",
+        committedAt: commitResult.committedAt,
+      }
+    : commitResult.reason === "no_changes"
+      ? {
+          type: "git.commit.skipped",
+          turnId: input.runId,
+          reason: "no_changes",
+        }
+      : {
+          type: "git.commit.skipped",
+          turnId: input.runId,
+          reason: "commit_failed",
+          detail: commitResult.detail,
+        };
+
+  await input.persistEvent(commitEvent);
+  input.broadcastEvent(commitEvent);
+}
+
+function firstNonEmptyLine(input: string): string | null {
+  for (const line of input.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
 }
