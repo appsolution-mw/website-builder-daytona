@@ -89,7 +89,15 @@ describe("executeAgentRun", () => {
       },
     });
 
-    expect(order).toEqual(["persist", "broadcast"]);
+    // persist must always come before its corresponding broadcast. The post-run
+    // commit hook may add an extra git.commit.skipped pair (the bogus
+    // /workspace/project path makes getGitStatus throw → commit_failed), but
+    // the persist-before-broadcast invariant must hold for every event.
+    for (let i = 0; i < order.length; i += 2) {
+      expect(order[i]).toBe("persist");
+      expect(order[i + 1]).toBe("broadcast");
+    }
+    expect(order.length).toBeGreaterThanOrEqual(2);
   });
 
   describe("with image attachments", () => {
@@ -323,7 +331,10 @@ describe("executeAgentRun — commit hook", () => {
     expect(skipped[0]).toMatchObject({ type: "git.commit.skipped", reason: "no_changes" });
   });
 
-  it("does not emit a commit event when agent.done has non-zero exitCode", async () => {
+  it("emits git.commit when agent.done reports non-zero exitCode but the working tree is dirty", async () => {
+    // Claude Agent SDK's `error_during_execution` subtype frequently fires
+    // after real file writes succeeded. The commit gate must not lose that
+    // work just because the SDK reported a non-zero exit.
     const projectRoot = await createRepository();
     await writeFile(join(projectRoot, "x.txt"), "x\n");
     const events: BrokerToHost[] = [];
@@ -334,7 +345,7 @@ describe("executeAgentRun — commit hook", () => {
       providerSessionId: "ps1",
       runId: "run_z",
       attemptId: "a1",
-      prompt: "fail",
+      prompt: "Add x file",
       runtime: "claude-code",
       resumeSession: false,
       projectRoot,
@@ -346,9 +357,41 @@ describe("executeAgentRun — commit hook", () => {
       __testSpawn: makeFakeSuccessSpawn({ exitCode: 1 }),
     });
 
-    expect(
-      events.some((e) => e.type === "git.commit" || e.type === "git.commit.skipped"),
-    ).toBe(false);
+    const commitEvents = events.filter((e) => e.type === "git.commit");
+    expect(commitEvents).toHaveLength(1);
+    expect(commitEvents[0]).toMatchObject({
+      type: "git.commit",
+      turnId: "run_z",
+      runtime: "claude-code",
+      authorKind: "AGENT",
+    });
+  });
+
+  it("emits git.commit.skipped when agent.done reports non-zero exitCode and the working tree is clean", async () => {
+    const projectRoot = await createRepository();
+    const events: BrokerToHost[] = [];
+
+    await executeAgentRun({
+      projectId: "p1",
+      sessionId: "s1",
+      providerSessionId: "ps1",
+      runId: "run_z2",
+      attemptId: "a1",
+      prompt: "noop",
+      runtime: "claude-code",
+      resumeSession: false,
+      projectRoot,
+      signal: new AbortController().signal,
+      persistEvent: async (e) => {
+        events.push(e);
+      },
+      broadcastEvent: () => {},
+      __testSpawn: makeFakeSuccessSpawn({ exitCode: 1 }),
+    });
+
+    const skipped = events.filter((e) => e.type === "git.commit.skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({ type: "git.commit.skipped", reason: "no_changes" });
   });
 
   it("does not emit a commit event when the run is aborted", async () => {

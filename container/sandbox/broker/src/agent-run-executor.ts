@@ -66,7 +66,6 @@ export async function executeAgentRun(input: {
     // vercel-ai: ignore — host already rejects vercel-ai + attachments combos.
   }
 
-  let lastDoneExitCode: number | null = null;
   let aborted = input.signal.aborted;
   const onAbort = () => {
     aborted = true;
@@ -88,7 +87,6 @@ export async function executeAgentRun(input: {
         ? { replayContext: input.replayContext }
         : {}),
       onEvent: async (event) => {
-        if (event.type === "agent.done") lastDoneExitCode = event.exitCode;
         await input.persistEvent(event);
         input.broadcastEvent(event);
       },
@@ -104,8 +102,14 @@ export async function executeAgentRun(input: {
     input.signal.removeEventListener("abort", onAbort);
   }
 
-  if (aborted || lastDoneExitCode !== 0) return;
+  if (aborted) return;
 
+  // Run the commit hook regardless of agent.done exitCode. Claude Agent SDK's
+  // `error_during_execution` subtype frequently fires after the agent has
+  // already written real, valid changes (mid-flow tool hiccup, sub-agent
+  // recovery, late cleanup error). commitAgentTurn's own no_changes branch
+  // handles the "nothing was actually written" case — so we only ever commit
+  // when the working tree is dirty.
   const commitResult = await commitAgentTurn({
     projectRoot: input.projectRoot,
     runId: input.runId,

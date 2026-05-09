@@ -229,7 +229,15 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         }
         // git.commit is emitted by the broker after the final agent.done; sawDone is already set.
         // Persist the Commit row and skip persistBrokerEvent — no AgentRunEvent for commits.
+        // Also: receiving a git.commit means the agent produced real, committed
+        // work, so we treat the run as successful even if agent.done reported a
+        // non-zero exitCode (Claude Agent SDK's `error_during_execution` is
+        // frequently a mid-flow hiccup after the actual file writes succeeded).
+        // CANCELLED runs (exitCode -1) keep their cancellation status.
         if (event.type === "git.commit") {
+          if (terminalError !== null && !cancelled) {
+            terminalError = null;
+          }
           await persistCommitEvent({
             event,
             projectId,

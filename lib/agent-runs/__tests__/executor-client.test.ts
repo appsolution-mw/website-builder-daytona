@@ -367,6 +367,66 @@ describe("executor-client", () => {
     expect(events.map((e) => e.type)).not.toContain("FILE_CHANGED");
   });
 
+  it("treats a non-zero agent.done exitCode as success when followed by git.commit", async () => {
+    // Real-world Claude Agent SDK behaviour: complex multi-step turns can
+    // emit `subtype: "error_during_execution"` (exitCode 1) AFTER the agent
+    // has already written real changes to disk. The broker still emits a
+    // git.commit for the dirty tree, and the host must downgrade the failure
+    // to success so the run does NOT block the queue with a scary "Run exited
+    // with code 1" error bubble.
+    process.env.WORKER_AGENT_HMAC_SECRET = "secret-for-worker-agent";
+    const project = await createProject();
+    await createSandbox(project.id);
+    const queued = await enqueueProjectRun({ projectId: project.id });
+    const sha = "b".repeat(40);
+
+    mockedAgent.executeProjectRun.mockImplementationOnce(async (
+      _sandboxId: string,
+      _request: unknown,
+      onEvent: (event: unknown) => void | Promise<void>,
+    ) => {
+      await onEvent({
+        type: "agent.done",
+        turnId: queued.runId,
+        durationMs: 10,
+        tokensIn: 1,
+        tokensOut: 2,
+        costUsd: 0,
+        exitCode: 1,
+        subtype: "error_during_execution",
+      });
+      await onEvent({
+        type: "git.commit",
+        turnId: queued.runId,
+        sha,
+        shortSha: "bbbbbbb",
+        title: "Real work despite SDK hiccup",
+        bodyMessage: "body",
+        filesChanged: 1,
+        insertions: 3,
+        deletions: 0,
+        runtime: "claude-code",
+        modelId: "claude-sonnet-4-5",
+        authorKind: "AGENT",
+        committedAt: new Date().toISOString(),
+      });
+    });
+
+    await requestProjectQueueDrain(project.id);
+
+    const run = await prisma.agentRun.findUniqueOrThrow({
+      where: { id: queued.runId },
+      select: { status: true, blockedReason: true },
+    });
+    expect(run.status).toBe("SUCCEEDED");
+    expect(run.blockedReason).toBeNull();
+
+    const commit = await prisma.commit.findUniqueOrThrow({
+      where: { agentRunId: queued.runId },
+    });
+    expect(commit.sha).toBe(sha);
+  });
+
   it("does not persist a Commit row when the broker emits git.commit.skipped", async () => {
     process.env.WORKER_AGENT_HMAC_SECRET = "secret-for-worker-agent";
     const project = await createProject();
