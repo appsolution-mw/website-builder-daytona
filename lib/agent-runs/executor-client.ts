@@ -227,6 +227,8 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         if (event.type === "agent.error") {
           terminalError = event.message;
         }
+        // git.commit is emitted by the broker after the final agent.done; sawDone is already set.
+        // Persist the Commit row and skip persistBrokerEvent — no AgentRunEvent for commits.
         if (event.type === "git.commit") {
           await persistCommitEvent({
             event,
@@ -431,30 +433,39 @@ async function persistCommitEvent(input: {
   runId: string;
 }): Promise<void> {
   const { event, projectId, sessionId, runId } = input;
-  try {
-    await prisma.commit.create({
-      data: {
-        projectId,
-        sessionId,
-        agentRunId: runId,
-        sha: event.sha,
-        shortSha: event.shortSha,
-        authorKind: event.authorKind,
-        runtime: protocolRuntimeToDb(event.runtime),
-        modelId: event.modelId,
-        title: event.title,
-        bodyMessage: event.bodyMessage,
-        filesChanged: event.filesChanged,
-        insertions: event.insertions,
-        deletions: event.deletions,
-        createdAt: new Date(event.committedAt),
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(
-      `[agent-runs] failed to persist commit for run ${runId}: ${message}`,
-    );
+  const data = {
+    projectId,
+    sessionId,
+    agentRunId: runId,
+    sha: event.sha,
+    shortSha: event.shortSha,
+    authorKind: event.authorKind,
+    runtime: protocolRuntimeToDb(event.runtime),
+    modelId: event.modelId,
+    title: event.title,
+    bodyMessage: event.bodyMessage,
+    filesChanged: event.filesChanged,
+    insertions: event.insertions,
+    deletions: event.deletions,
+    createdAt: new Date(event.committedAt),
+  };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await prisma.commit.create({ data });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt === 1) {
+        console.warn(
+          `[agent-runs] commit persist attempt 1 failed for run ${runId} sha ${event.sha}, retrying: ${message}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      } else {
+        console.error(
+          `[agent-runs] failed to persist commit ${event.sha} for run ${runId} after 2 attempts: ${message}`,
+        );
+      }
+    }
   }
 }
 
