@@ -482,6 +482,7 @@ model TokenUsage {
   webFetchRequests         Int             @default(0)
   costUsd                  Decimal         @default(0) @db.Decimal(18, 9)
   exitCode                 Int             @default(0)
+  subtype                  String?
   serviceTier              String?
   inferenceGeo             String?
   rawUsage                 Json?
