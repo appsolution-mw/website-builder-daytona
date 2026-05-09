@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { BuildServerOptions, InFlightTurn, TurnRequest } from "./types.js";
 import { verifyRequest } from "./hmac.js";
 import { runTurn } from "./sdk-runner.js";
+import { mergeAgentContext } from "./bootstrap-merge.js";
 
 const HMAC_MAX_AGE_MS = 60_000;
 
@@ -45,6 +46,17 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
   app.decorate("inFlight", inFlight);
 
   app.get("/healthz", async () => ({ ok: true }));
+
+  let bootstrapped = false;
+  app.post("/claude-sdk/bootstrap", async () => {
+    if (bootstrapped) return { ok: true, alreadyDone: true };
+    await mergeAgentContext({
+      defaultsDir: opts.agentContextDir ?? "/opt/agent-context",
+      workspaceDir: opts.workspaceDir ?? "/workspace",
+    });
+    bootstrapped = true;
+    return { ok: true };
+  });
 
   app.post<{ Params: { providerSessionId: string } }>(
     "/claude-sdk/cancel/:providerSessionId",
