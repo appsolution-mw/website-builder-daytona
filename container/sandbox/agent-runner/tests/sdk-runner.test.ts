@@ -4,6 +4,7 @@ import { signRequest } from "../src/hmac.js";
 import { runTurn } from "../src/sdk-runner.js";
 import type { TurnRequest } from "../src/types.js";
 import type { BrokerToHost } from "@wbd/protocol";
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
 
 // Build a fake SDK iterator factory that yields a deterministic stream.
 function fakeQueryFactory(messages: unknown[]) {
@@ -161,6 +162,134 @@ describe("runTurn (unit, injected query)", () => {
       (e): e is Extract<BrokerToHost, { type: "agent.session" }> => e.type === "agent.session",
     );
     expect(session?.modelId).toBe("claude-sonnet-4-6");
+  });
+
+  it("fallback runs when resume returns a different session id and emits two agent.session events", async () => {
+    let callCount = 0;
+    const fakeQuery = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        const iter = (async function* () {
+          yield { type: "system", subtype: "init", session_id: "different-session", model: "m" };
+          // Would yield more events, but the runner detects the resume mismatch
+          // on the system.init above, calls interrupt(), and breaks out of the
+          // loop before consuming further yields.
+          yield {
+            type: "stream_event",
+            event: { type: "content_block_delta", delta: { type: "text_delta", text: "ignored" } },
+          };
+        })() as AsyncGenerator<unknown, void> & { interrupt?: () => Promise<void> };
+        iter.interrupt = vi.fn().mockResolvedValue(undefined);
+        return iter;
+      }
+      const iter = (async function* () {
+        yield { type: "system", subtype: "init", session_id: "fresh-session", model: "m" };
+        yield {
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } },
+        };
+        yield {
+          type: "result",
+          subtype: "success",
+          duration_ms: 1,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        };
+      })() as AsyncGenerator<unknown, void> & { interrupt?: () => Promise<void> };
+      iter.interrupt = vi.fn().mockResolvedValue(undefined);
+      return iter;
+    });
+
+    const events: BrokerToHost[] = [];
+    const abort = new AbortController();
+    await runTurn(
+      makeReq({
+        providerSessionId: "requested-id",
+        resumeRequested: true,
+        prompt: "current",
+        replayContext: [
+          { role: "user", text: "earlier" },
+          { role: "assistant", text: "reply" },
+        ],
+      }),
+      {
+        workspaceDir: "/w",
+        abort,
+        runtime: "claude-code",
+        emit: (e) => {
+          events.push(e);
+        },
+        buildHooks: () => ({}),
+        query: fakeQuery as never,
+      },
+    );
+
+    const sessions = events.filter(
+      (e): e is Extract<BrokerToHost, { type: "agent.session" }> => e.type === "agent.session",
+    );
+    expect(sessions.length).toBe(2);
+    expect(sessions[0]).toMatchObject({ providerSessionId: "different-session", resumed: false });
+    expect(sessions[1]).toMatchObject({ providerSessionId: "fresh-session" });
+    expect("resumed" in sessions[1]).toBe(false);
+    const chunk = events.find(
+      (e): e is Extract<BrokerToHost, { type: "agent.chunk" }> => e.type === "agent.chunk",
+    );
+    expect(chunk?.delta).toBe("ok");
+    expect(events.find((e) => e.type === "agent.done")).toBeTruthy();
+
+    // Second SDK call should have received a prompt augmented with replay context
+    expect(fakeQuery).toHaveBeenCalledTimes(2);
+    const secondCallArgs = fakeQuery.mock.calls[1][0] as { prompt: string; options: Options };
+    expect(secondCallArgs.prompt).toContain("[Previous conversation]");
+    expect(secondCallArgs.prompt).toContain("user: earlier");
+    expect(secondCallArgs.prompt).toContain("assistant: reply");
+    expect(secondCallArgs.prompt).toContain("[Current message]");
+    expect(secondCallArgs.prompt).toContain("current");
+    expect(secondCallArgs.options.resume).toBeUndefined();
+  });
+
+  it("does not run fallback when resume succeeds (session ids match)", async () => {
+    const fakeQuery = vi.fn().mockImplementation(() => {
+      const iter = (async function* () {
+        yield { type: "system", subtype: "init", session_id: "matching-id", model: "m" };
+        yield {
+          type: "result",
+          subtype: "success",
+          duration_ms: 1,
+          total_cost_usd: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        };
+      })() as AsyncGenerator<unknown, void> & { interrupt?: () => Promise<void> };
+      iter.interrupt = vi.fn().mockResolvedValue(undefined);
+      return iter;
+    });
+
+    const events: BrokerToHost[] = [];
+    await runTurn(
+      makeReq({
+        providerSessionId: "matching-id",
+        resumeRequested: true,
+        prompt: "p",
+        replayContext: [{ role: "user", text: "x" }],
+      }),
+      {
+        workspaceDir: "/w",
+        abort: new AbortController(),
+        runtime: "claude-code",
+        emit: (e) => {
+          events.push(e);
+        },
+        buildHooks: () => ({}),
+        query: fakeQuery as never,
+      },
+    );
+
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    const sessions = events.filter(
+      (e): e is Extract<BrokerToHost, { type: "agent.session" }> => e.type === "agent.session",
+    );
+    expect(sessions.length).toBe(1);
+    expect(sessions[0]).toMatchObject({ resumed: true });
   });
 });
 

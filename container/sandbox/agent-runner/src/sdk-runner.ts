@@ -1,6 +1,7 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import type { BrokerToHost, AgentRuntime } from "@wbd/protocol";
 import { mapSdkMessage } from "./sdk-event-mapper.js";
+import { buildReplayPrompt, detectResumeOutcome } from "./resume-detector.js";
 import type { TurnRequest } from "./types.js";
 
 export interface RunTurnDeps {
@@ -19,56 +20,94 @@ export interface RunTurnDeps {
 /**
  * Run a single Claude Agent SDK turn.
  *
- * - Calls `query()` with the SDK options derived from the turn request.
- * - Captures the provider session_id from the first `system.init` message and
- *   emits exactly one `agent.session` event.
- * - Streams the rest of the SDK messages through {@link mapSdkMessage} and
- *   forwards each derived broker event via `deps.emit`.
- * - Wires `deps.abort` to the SDK iterator's `interrupt()` (best-effort).
+ * High-level flow:
  *
- * Resume detection in this V1 is naive: if `req.resumeRequested` is true, we
- * pass `resume: req.providerSessionId` to the SDK and report `resumed` based
- * on whether the SDK's returned session_id matches the requested one. Task 6
- * replaces this with the real resume detector + DB-replay fallback.
+ *   1. Call `query()` with `resume: providerSessionId` if the host requested
+ *      resume, otherwise with `resume: undefined`.
+ *   2. On the FIRST `system.init` we receive, capture the SDK's session id and
+ *      emit `agent.session`.
+ *   3. If resume was requested but the SDK returned a different session id,
+ *      the JSONL transcript was missing — silently the SDK started fresh. We
+ *      detect that, emit `agent.session { resumed: false }` for the failed
+ *      session id, abandon the iterator via `interrupt()`, then re-call
+ *      `query()` WITHOUT resume, with a prompt augmented by the host-supplied
+ *      `replayContext` (DB-replay fallback). A second `agent.session` is
+ *      emitted for the fresh session id (also `resumed: false`); the host
+ *      treats the latest one as authoritative.
+ *   4. If resume succeeded (ids match) we emit `agent.session { resumed: true }`
+ *      and continue streaming normally.
+ *   5. If resume was not requested at all, no `resumed` flag is sent.
  *
- * Hooks are injected via `deps.buildHooks()` as an opaque value (Task 8 will
- * supply the real PreToolUse/PostToolUse policy hooks).
+ * Cancellation: `deps.abort.signal` is wired to the currently-active
+ * iterator's `interrupt()` (best-effort). If a fallback iterator runs, the
+ * abort listener is re-attached for it.
+ *
+ * The public signature is intentionally unchanged from Task 5 so the HTTP
+ * route in `index.ts` does not need to know about the fallback.
  */
 export async function runTurn(req: TurnRequest, deps: RunTurnDeps): Promise<void> {
   const queryFn = deps.query ?? query;
+  const sdkOptionsBase = buildSdkOptionsBase(req, deps);
 
-  const iterator = queryFn({
-    prompt: buildPrompt(req),
-    options: {
-      cwd: deps.workspaceDir,
+  const first = await streamOnce(deps, req, queryFn, {
+    expectResume: req.resumeRequested,
+    prompt: req.prompt,
+    sdkOptions: {
+      ...sdkOptionsBase,
       resume: req.resumeRequested ? req.providerSessionId : undefined,
-      settingSources: ["project"],
-      skills: req.skills ?? "all",
-      agents: req.agents,
-      // The SDK's mcpServers type is a union that's tricky to narrow at the
-      // boundary; the host-side schema validates this before we get here.
-      mcpServers: req.mcpServers as Options["mcpServers"],
-      allowedTools: req.allowedTools,
-      permissionMode: "acceptEdits",
-      includePartialMessages: true,
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: req.systemPromptAppend,
-        excludeDynamicSections: true,
-      },
-      // Hook shape varies across SDK minor versions; the policy layer (Task 8)
-      // owns the concrete shape. Cast through unknown because buildHooks is
-      // intentionally typed as unknown until Task 8 supplies the real shape.
-      hooks: deps.buildHooks() as Options["hooks"],
-      model: req.modelId,
-      // Cancellation flows through iterator.interrupt() in onAbort below — a
-      // single graceful path. Do NOT also pass abortController here; double
-      // cancellation races two paths.
     },
   });
 
-  // Wire abort to SDK interrupt (best-effort — Query exposes .interrupt() in 0.2.x).
+  if (first.failedResume) {
+    const replayPrompt = buildReplayPrompt({
+      replayContext: req.replayContext ?? [],
+      prompt: req.prompt,
+    });
+    // expectResume=false on the retry: the host already saw `resumed:false`.
+    // The fresh session_id from this iterator is reported as a NEW agent.session
+    // event; the host updates `providerSessionId` from the latest event.
+    await streamOnce(deps, req, queryFn, {
+      expectResume: false,
+      prompt: replayPrompt,
+      sdkOptions: {
+        ...sdkOptionsBase,
+        resume: undefined,
+      },
+    });
+  }
+}
+
+interface StreamOnceOptions {
+  /** When true, runTurn detects whether the SDK honoured `resume`. */
+  expectResume: boolean;
+  /** Prompt to feed `query()`. May be augmented with replay context. */
+  prompt: string;
+  /** SDK options for this query() call. */
+  sdkOptions: Options;
+}
+
+interface StreamOnceResult {
+  /** True iff resume was requested and the SDK returned a different session id. */
+  failedResume: boolean;
+}
+
+/**
+ * Run a single `query()` invocation and stream its events to `deps.emit`.
+ *
+ * Owns the abort listener for THIS iterator only (attaches in entry, removes
+ * in `finally`) so a subsequent fallback iterator can re-attach cleanly.
+ */
+async function streamOnce(
+  deps: RunTurnDeps,
+  req: TurnRequest,
+  queryFn: typeof query,
+  opts: StreamOnceOptions,
+): Promise<StreamOnceResult> {
+  const iterator = queryFn({
+    prompt: opts.prompt,
+    options: opts.sdkOptions,
+  });
+
   const onAbort = () => {
     try {
       const maybeInterrupt = (iterator as { interrupt?: () => Promise<void> }).interrupt;
@@ -84,36 +123,89 @@ export async function runTurn(req: TurnRequest, deps: RunTurnDeps): Promise<void
   deps.abort.signal.addEventListener("abort", onAbort);
 
   let agentSessionEmitted = false;
+  let failedResume = false;
+
   try {
     for await (const msg of iterator) {
       const out = mapSdkMessage(msg, { turnId: req.turnId, runtime: deps.runtime });
+
       if (!agentSessionEmitted && out.captured?.providerSessionId) {
         agentSessionEmitted = true;
         const providerSessionId = out.captured.providerSessionId;
+
+        let resumedFlag: boolean | undefined;
+        if (opts.expectResume) {
+          const outcome = detectResumeOutcome({
+            requested: req.providerSessionId,
+            got: providerSessionId,
+          });
+          resumedFlag = outcome.resumed;
+        }
+
         const sessionEvent: BrokerToHost = {
           type: "agent.session",
           turnId: req.turnId,
           runtime: deps.runtime,
           providerSessionId,
           ...(out.captured.modelId ? { modelId: out.captured.modelId } : {}),
-          // Task 6 owns real resume detection. V1 reports based on whether
-          // the SDK echoed back the requested providerSessionId.
-          ...(req.resumeRequested
-            ? { resumed: req.providerSessionId === providerSessionId }
-            : {}),
+          ...(resumedFlag !== undefined ? { resumed: resumedFlag } : {}),
         };
         await deps.emit(sessionEvent);
+
+        if (resumedFlag === false) {
+          failedResume = true;
+          // Cancel the wrong session and stop consuming this iterator. The
+          // caller will run a second query() with replay context.
+          try {
+            const maybeInterrupt = (iterator as { interrupt?: () => Promise<void> }).interrupt;
+            if (typeof maybeInterrupt === "function") {
+              void maybeInterrupt.call(iterator).catch(() => {
+                /* ignore */
+              });
+            }
+          } catch {
+            /* ignore */
+          }
+          break;
+        }
       }
-      for (const ev of out.events) await deps.emit(ev);
+
+      if (!failedResume) {
+        for (const ev of out.events) await deps.emit(ev);
+      }
     }
   } finally {
     deps.abort.signal.removeEventListener("abort", onAbort);
   }
+
+  return { failedResume };
 }
 
-function buildPrompt(req: TurnRequest): string {
-  // V1: forward the text prompt as-is. Image attachments will be wired through
-  // the SDK content-blocks surface in a follow-up task; for the happy-path V1
-  // we only send text. The SDK's `query()` accepts a string prompt.
-  return req.prompt;
+function buildSdkOptionsBase(req: TurnRequest, deps: RunTurnDeps): Options {
+  return {
+    cwd: deps.workspaceDir,
+    settingSources: ["project"],
+    skills: req.skills ?? "all",
+    agents: req.agents,
+    // The SDK's mcpServers type is a union that's tricky to narrow at the
+    // boundary; the host-side schema validates this before we get here.
+    mcpServers: req.mcpServers as Options["mcpServers"],
+    allowedTools: req.allowedTools,
+    permissionMode: "acceptEdits",
+    includePartialMessages: true,
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append: req.systemPromptAppend,
+      excludeDynamicSections: true,
+    },
+    // Hook shape varies across SDK minor versions; the policy layer (Task 8)
+    // owns the concrete shape. Cast through unknown because buildHooks is
+    // intentionally typed as unknown until Task 8 supplies the real shape.
+    hooks: deps.buildHooks() as Options["hooks"],
+    model: req.modelId,
+    // Cancellation flows through iterator.interrupt() in onAbort below — a
+    // single graceful path. Do NOT also pass abortController here; double
+    // cancellation races two paths.
+  };
 }
