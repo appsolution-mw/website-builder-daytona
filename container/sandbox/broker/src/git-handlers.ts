@@ -318,6 +318,47 @@ function extractErrorMessage(error: unknown): string {
   return String(error);
 }
 
+export async function getCommitFiles(input: {
+  projectRoot: string;
+  sha: string;
+}): Promise<{ files: { path: string; insertions: number; deletions: number }[] }> {
+  if (!/^[a-f0-9]{40}$/.test(input.sha)) throw new GitCommandError("invalid sha");
+  const out = await runGit(input.projectRoot, ["show", "--numstat", "--format=", input.sha]);
+  const files = out
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [ins, del, ...rest] = line.split("\t");
+      return {
+        insertions: ins === "-" ? 0 : parseInt(ins ?? "", 10) || 0,
+        deletions: del === "-" ? 0 : parseInt(del ?? "", 10) || 0,
+        path: rest.join("\t"),
+      };
+    });
+  return { files };
+}
+
+export async function getCommitDiff(input: {
+  projectRoot: string;
+  sha: string;
+  path: string;
+}): Promise<{ diff: string }> {
+  if (!/^[a-f0-9]{40}$/.test(input.sha)) throw new GitCommandError("invalid sha");
+  if (!isSafeRelativePath(input.path)) throw new GitCommandError("invalid path");
+  const out = await runGit(input.projectRoot, [
+    "show",
+    "--format=",
+    input.sha,
+    "--",
+    input.path,
+  ]);
+  return { diff: sanitizeGitOutput(out) };
+}
+
+function isSafeRelativePath(p: string): boolean {
+  return p.length > 0 && !p.startsWith("/") && !p.includes("..") && !p.includes("\0");
+}
+
 async function readShortstat(
   projectRoot: string,
   sha: string,

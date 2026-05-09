@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import {
   commitAgentTurn,
   commitAndPushChanges,
+  getCommitDiff,
+  getCommitFiles,
   getGitStatus,
   sanitizeCommitTitle,
   sanitizeGitOutput,
@@ -323,5 +325,83 @@ describe("commitAgentTurn", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.filesChanged).toBe(1);
+  });
+});
+
+describe("getCommitFiles", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-git-commit-files-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "seed.txt"), "seed\n");
+    await git(root, ["add", "seed.txt"]);
+    await git(root, ["commit", "-m", "seed"]);
+    return root;
+  }
+
+  it("returns numstat per file for a known sha", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "a.txt"), "1\n");
+    await writeFile(join(root, "b.txt"), "1\n2\n");
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-m", "two files"]);
+    const sha = (await git(root, ["rev-parse", "HEAD"])).trim();
+    const { files } = await getCommitFiles({ projectRoot: root, sha });
+    expect(files.map((f) => f.path).sort()).toEqual(["a.txt", "b.txt"]);
+    const a = files.find((f) => f.path === "a.txt")!;
+    expect(a.insertions).toBe(1);
+    expect(a.deletions).toBe(0);
+  });
+
+  it("rejects an invalid sha", async () => {
+    const root = await createRepository();
+    await expect(getCommitFiles({ projectRoot: root, sha: "not-a-sha" })).rejects.toThrow();
+  });
+});
+
+describe("getCommitDiff", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-git-commit-diff-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "seed.txt"), "seed\n");
+    await git(root, ["add", "seed.txt"]);
+    await git(root, ["commit", "-m", "seed"]);
+    return root;
+  }
+
+  it("returns the unified diff for a single path", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "a.txt"), "hello\n");
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-m", "init file"]);
+    const sha = (await git(root, ["rev-parse", "HEAD"])).trim();
+    const { diff } = await getCommitDiff({ projectRoot: root, sha, path: "a.txt" });
+    expect(diff).toContain("+hello");
+  });
+
+  it("rejects path traversal", async () => {
+    const root = await createRepository();
+    await expect(
+      getCommitDiff({ projectRoot: root, sha: "0".repeat(40), path: "../etc/passwd" }),
+    ).rejects.toThrow();
   });
 });

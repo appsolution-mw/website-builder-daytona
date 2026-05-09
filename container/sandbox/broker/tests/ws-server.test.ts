@@ -309,6 +309,75 @@ describe("broker ws server", () => {
     expect(pushResult.commitSha).toBe(remoteSha);
   });
 
+  it("serves internal git commit-files and commit-diff routes", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const execFileAsync = promisify(execFile);
+    const root = await mkdtemp(join(tmpdir(), "wbd-ws-commit-detail-"));
+    const git = async (args: string[], cwd = root): Promise<string> => {
+      const { stdout } = await execFileAsync("git", args, { cwd });
+      return stdout.trim();
+    };
+    await git(["init", "-q", "-b", "main"]);
+    await git(["config", "user.name", "Test User"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "a.txt"), "hello\n");
+    await writeFile(join(root, "b.txt"), "1\n2\n");
+    await git(["add", "-A"]);
+    await git(["commit", "-q", "-m", "two files"]);
+    const sha = await git(["rev-parse", "HEAD"]);
+    process.env.BROKER_TOKEN = "broker-token";
+    handle = await startBroker({ port: 0, projectRoot: root, enableFsTracker: false });
+
+    const filesResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/commit-files`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer broker-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sha }),
+      },
+    );
+    expect(filesResponse.status).toBe(200);
+    const filesResult = await filesResponse.json() as {
+      files: { path: string; insertions: number; deletions: number }[];
+    };
+    expect(filesResult.files.map((f) => f.path).sort()).toEqual(["a.txt", "b.txt"]);
+
+    const diffResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/commit-diff`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer broker-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sha, path: "a.txt" }),
+      },
+    );
+    expect(diffResponse.status).toBe(200);
+    const diffResult = await diffResponse.json() as { diff: string };
+    expect(diffResult.diff).toContain("+hello");
+
+    const badPathResponse = await fetch(
+      `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/commit-diff`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer broker-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sha, path: "../etc/passwd" }),
+      },
+    );
+    expect(badPathResponse.status).toBe(500);
+  });
+
   it("streams file.changed events from the fs tracker during an internal durable run", async () => {
     const { mkdtemp, writeFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");

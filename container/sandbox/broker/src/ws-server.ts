@@ -26,6 +26,8 @@ import {
 } from "./terminal-runner";
 import {
   commitAndPushChanges,
+  getCommitDiff,
+  getCommitFiles,
   getGitStatus,
   GitCommandError,
 } from "./git-handlers";
@@ -521,6 +523,42 @@ async function handleInternalHttpRequest(
     return;
   }
 
+  const gitCommitFilesMatch = /^\/internal\/projects\/([^/]+)\/git\/commit-files$/.exec(url.pathname);
+  if (gitCommitFilesMatch) {
+    const body = await readJsonBody(req);
+    if (!isGitCommitFilesBody(body)) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    try {
+      const result = await getCommitFiles({ projectRoot: opts.projectRoot, sha: body.sha });
+      writeJson(res, 200, result);
+    } catch (error) {
+      writeGitError(res, error);
+    }
+    return;
+  }
+
+  const gitCommitDiffMatch = /^\/internal\/projects\/([^/]+)\/git\/commit-diff$/.exec(url.pathname);
+  if (gitCommitDiffMatch) {
+    const body = await readJsonBody(req);
+    if (!isGitCommitDiffBody(body)) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    try {
+      const result = await getCommitDiff({
+        projectRoot: opts.projectRoot,
+        sha: body.sha,
+        path: body.path,
+      });
+      writeJson(res, 200, result);
+    } catch (error) {
+      writeGitError(res, error);
+    }
+    return;
+  }
+
   const executeMatch = /^\/internal\/projects\/([^/]+)\/runs\/([^/]+)\/execute$/.exec(url.pathname);
   if (executeMatch) {
     const projectId = decodeURIComponent(executeMatch[1]);
@@ -683,6 +721,23 @@ function isGitPushBody(value: unknown): value is {
     body.branch.length > 0 &&
     typeof body.commitMessage === "string" &&
     body.commitMessage.length > 0
+  );
+}
+
+function isGitCommitFilesBody(value: unknown): value is { sha: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.sha === "string" && body.sha.length > 0;
+}
+
+function isGitCommitDiffBody(value: unknown): value is { sha: string; path: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    typeof body.sha === "string" &&
+    body.sha.length > 0 &&
+    typeof body.path === "string" &&
+    body.path.length > 0
   );
 }
 
