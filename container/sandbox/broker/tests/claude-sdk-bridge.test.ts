@@ -121,6 +121,7 @@ describe("claude-sdk-bridge", () => {
       turnId: "t1",
       modelId: "claude-sonnet-4-6",
       attachments: [{ name: "img.png", mimeType: "image/png", dataBase64: "ZGF0YQ==" }],
+      replayContext: [{ role: "user", text: "earlier" }],
       onEvent: () => {},
     });
 
@@ -138,6 +139,11 @@ describe("claude-sdk-bridge", () => {
     expect(parsed.modelId).toBe("claude-sonnet-4-6");
     const attachments = parsed.attachments as Array<{ dataBase64?: string }> | undefined;
     expect(attachments?.[0]?.dataBase64).toBe("ZGF0YQ==");
+    const replayContext = parsed.replayContext as
+      | Array<{ role: string; text: string }>
+      | undefined;
+    expect(replayContext?.[0]?.text).toBe("earlier");
+    expect(replayContext?.[0]?.role).toBe("user");
   });
 
   it("throws on non-200 response", async () => {
