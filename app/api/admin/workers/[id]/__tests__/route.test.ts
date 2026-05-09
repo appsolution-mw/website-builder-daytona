@@ -5,6 +5,8 @@ const mockProvision = vi.hoisted(() => vi.fn());
 const mockDestroy = vi.hoisted(() => vi.fn());
 const mockListOwned = vi.hoisted(() => vi.fn());
 const originalDevUserId = process.env.DEV_USER_ID;
+const originalAdminUserIds = process.env.ADMIN_USER_IDS;
+const originalAdminEmails = process.env.ADMIN_EMAILS;
 
 vi.mock("@/lib/runtime/provisioner/hetzner", () => ({
   createHetznerWorkerProvisionerFromEnv: vi.fn(() => ({
@@ -43,6 +45,8 @@ describe("DELETE /api/admin/workers/[id]", () => {
     vi.resetModules();
     vi.clearAllMocks();
     process.env.DEV_USER_ID = "admin-test-user";
+    delete process.env.ADMIN_USER_IDS;
+    delete process.env.ADMIN_EMAILS;
     mockDestroy.mockResolvedValue(undefined);
     await prisma.workerSandbox.deleteMany({});
     await prisma.worker.deleteMany({});
@@ -53,6 +57,10 @@ describe("DELETE /api/admin/workers/[id]", () => {
     await prisma.worker.deleteMany({});
     if (originalDevUserId === undefined) delete process.env.DEV_USER_ID;
     else process.env.DEV_USER_ID = originalDevUserId;
+    if (originalAdminUserIds === undefined) delete process.env.ADMIN_USER_IDS;
+    else process.env.ADMIN_USER_IDS = originalAdminUserIds;
+    if (originalAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = originalAdminEmails;
   });
 
   it("requires authentication", async () => {

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db/client";
 
 const originalDevUserId = process.env.DEV_USER_ID;
+const originalAdminUserIds = process.env.ADMIN_USER_IDS;
+const originalAdminEmails = process.env.ADMIN_EMAILS;
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -12,6 +14,8 @@ function context(id: string): RouteContext {
 describe("POST /api/admin/workers/[id]/drain", () => {
   beforeEach(async () => {
     process.env.DEV_USER_ID = "admin-test-user";
+    delete process.env.ADMIN_USER_IDS;
+    delete process.env.ADMIN_EMAILS;
     await prisma.workerSandbox.deleteMany({});
     await prisma.worker.deleteMany({});
   });
@@ -21,6 +25,10 @@ describe("POST /api/admin/workers/[id]/drain", () => {
     await prisma.worker.deleteMany({});
     if (originalDevUserId === undefined) delete process.env.DEV_USER_ID;
     else process.env.DEV_USER_ID = originalDevUserId;
+    if (originalAdminUserIds === undefined) delete process.env.ADMIN_USER_IDS;
+    else process.env.ADMIN_USER_IDS = originalAdminUserIds;
+    if (originalAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = originalAdminEmails;
   });
 
   it("requires authentication", async () => {
