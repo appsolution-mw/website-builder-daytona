@@ -121,6 +121,10 @@ describe("POST /api/projects/[id]/restart", () => {
     });
     expect(projectUpdateMock).toHaveBeenCalledWith({
       where: { id: "project-1" },
+      data: { brokerReady: false, brokerReadyAt: null },
+    });
+    expect(projectUpdateMock).toHaveBeenCalledWith({
+      where: { id: "project-1" },
       data: {
         status: "RUNNING",
         sandboxId: "sandbox-new",
@@ -128,6 +132,8 @@ describe("POST /api/projects/[id]/restart", () => {
         brokerPreviewToken: "new-token",
         previewUrl: "http://localhost:3001",
         provisioningError: null,
+        brokerReady: false,
+        brokerReadyAt: null,
       },
     });
   });
@@ -168,6 +174,7 @@ describe("POST /api/projects/[id]/restart", () => {
       previewUrl: "http://localhost:3001",
     });
     projectUpdateMock
+      .mockResolvedValueOnce({ ...project, brokerReady: false, brokerReadyAt: null })
       .mockRejectedValueOnce(new Error("database unavailable"))
       .mockResolvedValueOnce({
         ...project,
@@ -409,6 +416,8 @@ describe("POST /api/projects/[id]/restart", () => {
         brokerUrl: null,
         brokerPreviewToken: null,
         previewUrl: null,
+        brokerReady: false,
+        brokerReadyAt: null,
         provisioningError: "No ready worker has a free project slot",
       },
     });
