@@ -1,11 +1,11 @@
 "use client";
 
 import { type ReactNode } from "react";
-import { Code2, Eye, ScrollText, Terminal } from "lucide-react";
+import { Code2, Eye, GitCommit, ScrollText, Terminal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export type RightPaneTab = "code" | "preview" | "terminal" | "console";
+export type RightPaneTab = "code" | "preview" | "terminal" | "console" | "history";
 
 export interface RightPaneProps {
   tab: RightPaneTab;
@@ -14,10 +14,12 @@ export interface RightPaneProps {
   preview: ReactNode;
   terminal: ReactNode;
   console: ReactNode;
+  history: ReactNode;
   previewActions?: ReactNode;
   codeActions?: ReactNode;
   terminalActions?: ReactNode;
   consoleActions?: ReactNode;
+  historyActions?: ReactNode;
 }
 
 const TABS: { id: RightPaneTab; label: string; Icon: typeof Code2 }[] = [
@@ -25,6 +27,7 @@ const TABS: { id: RightPaneTab; label: string; Icon: typeof Code2 }[] = [
   { id: "preview", label: "Preview", Icon: Eye },
   { id: "terminal", label: "Terminal", Icon: Terminal },
   { id: "console", label: "Console", Icon: ScrollText },
+  { id: "history", label: "History", Icon: GitCommit },
 ];
 
 export function RightPane(props: RightPaneProps) {
@@ -34,7 +37,9 @@ export function RightPane(props: RightPaneProps) {
       ? props.terminalActions
       : props.tab === "console"
         ? props.consoleActions
-        : props.codeActions;
+        : props.tab === "history"
+          ? props.historyActions
+          : props.codeActions;
 
   return (
     <section className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -80,6 +85,9 @@ export function RightPane(props: RightPaneProps) {
         </div>
         <div className={`min-w-0 flex-1 ${props.tab === "console" ? "flex" : "hidden"}`}>
           {props.console}
+        </div>
+        <div className={`min-w-0 flex-1 ${props.tab === "history" ? "flex" : "hidden"}`}>
+          {props.history}
         </div>
       </div>
     </section>

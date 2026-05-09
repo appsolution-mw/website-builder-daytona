@@ -20,7 +20,6 @@ import {
   Camera,
   Code2,
   ExternalLink,
-  GitCommit,
   GitPullRequest,
   Globe2,
   History,
@@ -679,7 +678,6 @@ export default function ProjectWorkspace({
   const [agentConfigSaving, setAgentConfigSaving] = useState(false);
   const [agentConfigSyncWarning, setAgentConfigSyncWarning] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
-  const [mode, setMode] = useState<"code" | "history">("code");
   const [device, setDevice] = useState<DeviceView>("desktop");
   const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
   const [devIndicatorSaving, setDevIndicatorSaving] = useState(false);
@@ -2844,7 +2842,6 @@ export default function ProjectWorkspace({
           tab={tab}
           onTabChange={setTab}
           code={
-            mode === "code" ? (
             <div className="relative flex h-full w-full bg-background">
               <aside className="w-64 shrink-0 overflow-auto border-r border-border bg-card">
                 <div className="flex min-h-11 items-center justify-between border-b border-border px-3">
@@ -2973,15 +2970,15 @@ export default function ProjectWorkspace({
                 />
               )}
             </div>
-            ) : (
-              <HistoryMode
-                projectId={id}
-                commits={commitHistory.commits}
-                loadMore={commitHistory.loadMore}
-                hasMore={commitHistory.hasMore}
-                loading={commitHistory.loading}
-              />
-            )
+          }
+          history={
+            <HistoryMode
+              projectId={id}
+              commits={commitHistory.commits}
+              loadMore={commitHistory.loadMore}
+              hasMore={commitHistory.hasMore}
+              loading={commitHistory.loading}
+            />
           }
           terminal={
             tab === "terminal" ? (
@@ -3058,22 +3055,6 @@ export default function ProjectWorkspace({
           }
           codeActions={
             <>
-              <div className="flex items-center gap-1 rounded-md border border-border bg-background p-0.5 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setMode("code")}
-                  className={`flex items-center gap-1 rounded px-2 py-1 ${mode === "code" ? "bg-accent" : ""}`}
-                >
-                  <Code2 className="size-3.5" /> Code
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMode("history")}
-                  className={`flex items-center gap-1 rounded px-2 py-1 ${mode === "history" ? "bg-accent" : ""}`}
-                >
-                  <GitCommit className="size-3.5" /> History
-                </button>
-              </div>
               <Button
                 type="button"
                 variant={agentConfigOpen ? "secondary" : "ghost"}
