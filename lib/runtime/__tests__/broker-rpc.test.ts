@@ -76,6 +76,30 @@ describe("brokerJsonRpc", () => {
       ),
     ).rejects.toBeInstanceOf(BrokerRpcError);
   });
+
+  it("aborts and throws BrokerRpcError when broker exceeds the timeout", async () => {
+    globalThis.fetch = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          });
+        }
+      });
+    }) as typeof globalThis.fetch;
+
+    await expect(
+      brokerJsonRpc(
+        { brokerUrl: "wss://broker.example/api", brokerPreviewToken: null },
+        "/git/commit-files",
+        { sha: "0".repeat(40) },
+        { timeoutMs: 50 },
+      ),
+    ).rejects.toThrow(/timed out/);
+  });
 });
 
 describe("brokerGetCommitFiles + brokerGetCommitDiff", () => {

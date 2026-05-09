@@ -36,7 +36,9 @@ export async function brokerJsonRpc<T>(
   project: BrokerRpcProject,
   path: string,
   body: unknown,
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
   const url = buildBrokerHttpUrl(project.brokerUrl, path);
   const token = project.brokerPreviewToken ?? "";
   const headers: Record<string, string> = {
@@ -47,20 +49,36 @@ export async function brokerJsonRpc<T>(
     headers["x-daytona-preview-token"] = token;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new BrokerRpcError(
-      `broker rpc ${path} failed: ${response.status}`,
-      response.status,
-      text,
-    );
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new BrokerRpcError(
+        `broker rpc ${path} failed: ${response.status}`,
+        response.status,
+        text,
+      );
+    }
+    return text ? (JSON.parse(text) as T) : (undefined as T);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new BrokerRpcError(
+        `broker rpc ${path} timed out after ${timeoutMs}ms`,
+        0,
+        "",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
 function buildBrokerHttpUrl(brokerUrl: string, path: string): string {
