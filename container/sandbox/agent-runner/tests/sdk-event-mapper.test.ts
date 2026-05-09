@@ -111,4 +111,40 @@ describe("mapSdkMessage", () => {
     );
     expect(out.events[0]).toMatchObject({ agentId: "code-reviewer" });
   });
+
+  it("agentId from ctx propagates to agent.tool_use as well", () => {
+    const out = mapSdkMessage(
+      { type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Read", input: {} }] } } as any,
+      { ...ctx, agentId: "code-reviewer" },
+    );
+    expect(out.events[0]).toMatchObject({ agentId: "code-reviewer" });
+  });
+
+  it("agent.done never carries agentId, even when ctx provides one", () => {
+    const out = mapSdkMessage(
+      { type: "result", subtype: "success", duration_ms: 1, total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 } } as any,
+      { ...ctx, agentId: "code-reviewer" },
+    );
+    expect((out.events[0] as any).agentId).toBeUndefined();
+  });
+
+  it("result.error_max_budget_usd → exit code 3", () => {
+    const out = mapSdkMessage(
+      { type: "result", subtype: "error_max_budget_usd", duration_ms: 0, total_cost_usd: 5,
+        usage: { input_tokens: 0, output_tokens: 0 } } as any,
+      ctx,
+    );
+    expect(out.events[0]).toMatchObject({ subtype: "error_max_budget_usd", exitCode: 3 });
+  });
+
+  it("result.error_max_structured_output_retries → exit code 4", () => {
+    const out = mapSdkMessage(
+      { type: "result", subtype: "error_max_structured_output_retries", duration_ms: 0,
+        total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } } as any,
+      ctx,
+    );
+    expect(out.events[0]).toMatchObject({ subtype: "error_max_structured_output_retries", exitCode: 4 });
+  });
 });

@@ -50,11 +50,11 @@ container/sandbox/agent-runner/
     hmac.ts                     ← request signature verification
     types.ts                    ← request/response shapes
   tests/
-    sdk-event-mapper.spec.ts
-    resume-detector.spec.ts
-    bootstrap-merge.spec.ts
-    policy-hooks.spec.ts
-    integration.spec.ts
+    sdk-event-mapper.test.ts
+    resume-detector.test.ts
+    bootstrap-merge.test.ts
+    policy-hooks.test.ts
+    integration.test.ts
 
 container/sandbox/broker/src/
   claude-sdk-bridge.ts          ← replaces claude-runner.ts
@@ -71,10 +71,10 @@ agent-context/                  ← repo root, baked into sandbox image
 
 lib/agents/runtimes/claude-code/
   replay-context.ts             ← last-N messages → primer payload
-  __tests__/replay-context.spec.ts
+  __tests__/replay-context.test.ts
 
 e2e/
-  claude-agent-sdk.spec.ts
+  claude-agent-sdk.test.ts
 ```
 
 **Modified:**
@@ -92,7 +92,7 @@ prisma/schema.prisma                                         ← + subtype field
 **Deleted:**
 ```
 container/sandbox/broker/src/claude-runner.ts
-container/sandbox/broker/src/__tests__/claude-runner.spec.ts (if exists)
+container/sandbox/broker/src/__tests__/claude-runner.test.ts (if exists)
 container/sandbox/Dockerfile entries that install the `claude` CLI binary
 ```
 
@@ -102,7 +102,7 @@ container/sandbox/Dockerfile entries that install the `claude` CLI binary
 
 **Files:**
 - Modify: `packages/protocol/src/index.ts`
-- Test: `packages/protocol/src/__tests__/agent-events.spec.ts` (create or extend)
+- Test: `packages/protocol/src/__tests__/agent-events.test.ts` (create or extend)
 
 - [ ] **Step 1: Read current shape**
 
@@ -112,7 +112,7 @@ Confirm `agent.chunk` uses `delta`, `agent.session` exists, `agent.done` has `co
 - [ ] **Step 2: Write failing test for new fields/events**
 
 ```ts
-// packages/protocol/src/__tests__/agent-events.spec.ts
+// packages/protocol/src/__tests__/agent-events.test.ts
 import { describe, it, expectTypeOf } from "vitest";
 import type { BrokerToHost } from "../index";
 
@@ -157,7 +157,7 @@ describe("protocol additions for Agent SDK", () => {
 
 - [ ] **Step 3: Run test, verify type errors**
 
-Run: `pnpm --filter @wbd/protocol test agent-events.spec.ts`
+Run: `pnpm --filter @wbd/protocol test agent-events.test.ts`
 Expected: FAIL — `Property 'resumed' does not exist`, etc.
 
 - [ ] **Step 4: Edit `packages/protocol/src/index.ts`**
@@ -181,13 +181,13 @@ Bump `PROTOCOL_VERSION` from `"1.13.0"` to `"1.14.0"`.
 
 - [ ] **Step 5: Run test, verify pass**
 
-Run: `pnpm --filter @wbd/protocol test agent-events.spec.ts`
+Run: `pnpm --filter @wbd/protocol test agent-events.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/protocol/src/index.ts packages/protocol/src/__tests__/agent-events.spec.ts
+git add packages/protocol/src/index.ts packages/protocol/src/__tests__/agent-events.test.ts
 git commit -m "feat(protocol): agent.policy_violation + resumed/subtype fields T-20260509-001"
 ```
 
@@ -201,7 +201,7 @@ git commit -m "feat(protocol): agent.policy_violation + resumed/subtype fields T
 - Create: `container/sandbox/agent-runner/vitest.config.ts`
 - Create: `container/sandbox/agent-runner/src/index.ts`
 - Create: `container/sandbox/agent-runner/src/types.ts`
-- Create: `container/sandbox/agent-runner/tests/healthz.spec.ts`
+- Create: `container/sandbox/agent-runner/tests/healthz.test.ts`
 
 - [ ] **Step 1: Write `package.json`**
 
@@ -248,14 +248,14 @@ Adjust `include`/`exclude` paths if needed.
 ```ts
 import { defineConfig } from "vitest/config";
 export default defineConfig({
-  test: { environment: "node", include: ["tests/**/*.spec.ts"] },
+  test: { environment: "node", include: ["tests/**/*.test.ts"] },
 });
 ```
 
 - [ ] **Step 4: Write failing healthz test**
 
 ```ts
-// tests/healthz.spec.ts
+// tests/healthz.test.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../src/index.js";
@@ -346,12 +346,12 @@ git commit -m "feat(agent-runner): fastify scaffold + healthz T-20260509-001"
 **Files:**
 - Create: `container/sandbox/agent-runner/src/hmac.ts`
 - Modify: `container/sandbox/agent-runner/src/index.ts`
-- Test: `container/sandbox/agent-runner/tests/hmac.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/hmac.test.ts`
 
 - [ ] **Step 1: Write failing HMAC test**
 
 ```ts
-// tests/hmac.spec.ts
+// tests/hmac.test.ts
 import { describe, it, expect } from "vitest";
 import { signRequest, verifyRequest } from "../src/hmac.js";
 
@@ -401,7 +401,7 @@ export function verifyRequest(args: {
 
 - [ ] **Step 3: Run test, verify pass**
 
-Run: `pnpm --filter @wbd/agent-runner test hmac.spec.ts`
+Run: `pnpm --filter @wbd/agent-runner test hmac.test.ts`
 Expected: PASS.
 
 - [ ] **Step 4: Add HMAC plugin + cancel endpoint to `src/index.ts`**
@@ -449,7 +449,7 @@ Update `preHandler` to read `(req.body as any).__raw` for the signature; replace
 - [ ] **Step 6: Add cancel-endpoint test**
 
 ```ts
-// tests/cancel.spec.ts
+// tests/cancel.test.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { buildServer } from "../src/index.js";
 import { signRequest } from "../src/hmac.js";
@@ -491,7 +491,7 @@ git commit -m "feat(agent-runner): hmac + cancel endpoint T-20260509-001"
 
 **Files:**
 - Create: `container/sandbox/agent-runner/src/sdk-event-mapper.ts`
-- Test: `container/sandbox/agent-runner/tests/sdk-event-mapper.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/sdk-event-mapper.test.ts`
 
 This task covers the mapping logic in isolation, fed by mocked SDK output.
 
@@ -502,7 +502,7 @@ Run: `node -e "console.log(Object.keys(require('@anthropic-ai/claude-agent-sdk')
 - [ ] **Step 2: Write failing mapper test**
 
 ```ts
-// tests/sdk-event-mapper.spec.ts
+// tests/sdk-event-mapper.test.ts
 import { describe, it, expect } from "vitest";
 import { mapSdkMessage } from "../src/sdk-event-mapper.js";
 
@@ -614,7 +614,7 @@ export function mapSdkMessage(msg: any, ctx: MapContext): MapResult {
 
 - [ ] **Step 4: Run test**
 
-Run: `pnpm --filter @wbd/agent-runner test sdk-event-mapper.spec.ts`
+Run: `pnpm --filter @wbd/agent-runner test sdk-event-mapper.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -631,12 +631,12 @@ git commit -m "feat(agent-runner): SDK→broker event mapper T-20260509-001"
 **Files:**
 - Create: `container/sandbox/agent-runner/src/sdk-runner.ts`
 - Modify: `container/sandbox/agent-runner/src/index.ts`
-- Test: `container/sandbox/agent-runner/tests/sdk-runner.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/sdk-runner.test.ts`
 
 - [ ] **Step 1: Write failing turn-endpoint test (with mocked SDK)**
 
 ```ts
-// tests/sdk-runner.spec.ts
+// tests/sdk-runner.test.ts
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { buildServer } from "../src/index.js";
 import { signRequest } from "../src/hmac.js";
@@ -788,7 +788,7 @@ app.post("/claude-sdk/turn", async (req, reply) => {
 
 - [ ] **Step 4: Run test**
 
-Run: `pnpm --filter @wbd/agent-runner test sdk-runner.spec.ts`
+Run: `pnpm --filter @wbd/agent-runner test sdk-runner.test.ts`
 Expected: PASS. If `query` mock doesn't fire (ESM hoist issue), replace with direct unit test on `runTurn` passing a fake iterator.
 
 - [ ] **Step 5: Commit**
@@ -805,12 +805,12 @@ git commit -m "feat(agent-runner): /claude-sdk/turn with SDK streaming T-2026050
 **Files:**
 - Create: `container/sandbox/agent-runner/src/resume-detector.ts`
 - Modify: `container/sandbox/agent-runner/src/sdk-runner.ts` (use detector)
-- Test: `container/sandbox/agent-runner/tests/resume-detector.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/resume-detector.test.ts`
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
-// tests/resume-detector.spec.ts
+// tests/resume-detector.test.ts
 import { describe, it, expect } from "vitest";
 import { detectResumeOutcome, buildReplayPrompt } from "../src/resume-detector.js";
 
@@ -905,7 +905,7 @@ await streamOnce(req.prompt, firstResume);
 - [ ] **Step 4: Add integration test for fallback path**
 
 ```ts
-// tests/resume-detector.spec.ts (extended)
+// tests/resume-detector.test.ts (extended)
 // Mock SDK so the first call returns a different session_id than requested,
 // the second call (without resume) emits text. Assert two query() calls.
 ```
@@ -929,12 +929,12 @@ git commit -m "feat(agent-runner): resume detection + DB-replay fallback T-20260
 **Files:**
 - Create: `container/sandbox/agent-runner/src/bootstrap-merge.ts`
 - Modify: `container/sandbox/agent-runner/src/index.ts`
-- Test: `container/sandbox/agent-runner/tests/bootstrap-merge.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/bootstrap-merge.test.ts`
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
-// tests/bootstrap-merge.spec.ts
+// tests/bootstrap-merge.test.ts
 import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1081,12 +1081,12 @@ git commit -m "feat(agent-runner): bootstrap merge endpoint T-20260509-001"
 - Create: `container/sandbox/agent-runner/src/policy-hooks.ts`
 - Modify: `container/sandbox/agent-runner/src/index.ts`
 - Modify: `container/sandbox/agent-runner/src/sdk-runner.ts`
-- Test: `container/sandbox/agent-runner/tests/policy-hooks.spec.ts`
+- Test: `container/sandbox/agent-runner/tests/policy-hooks.test.ts`
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
-// tests/policy-hooks.spec.ts
+// tests/policy-hooks.test.ts
 import { describe, it, expect } from "vitest";
 import { denyDestructiveBash, denyOutsideWorkspace, redactToolInput } from "../src/policy-hooks.js";
 
@@ -1215,13 +1215,13 @@ git commit -m "feat(agent-runner): policy hooks + violation events T-20260509-00
 - Create: `container/sandbox/broker/src/claude-sdk-bridge.ts`
 - Modify: `container/sandbox/broker/src/agent-provider-factory.ts`
 - Delete: `container/sandbox/broker/src/claude-runner.ts`
-- Delete: `container/sandbox/broker/src/__tests__/claude-runner.spec.ts` (if exists)
-- Test: `container/sandbox/broker/src/__tests__/claude-sdk-bridge.spec.ts`
+- Delete: `container/sandbox/broker/src/__tests__/claude-runner.test.ts` (if exists)
+- Test: `container/sandbox/broker/src/__tests__/claude-sdk-bridge.test.ts`
 
 - [ ] **Step 1: Write failing bridge test (with mocked HTTP server)**
 
 ```ts
-// tests/claude-sdk-bridge.spec.ts
+// tests/claude-sdk-bridge.test.ts
 import { describe, it, expect } from "vitest";
 import { runClaudeSdkTurn } from "../claude-sdk-bridge.js";
 import http from "node:http";
@@ -1351,7 +1351,7 @@ If the host still calls `runReview` for claude-code, gate the call site to no-op
 
 ```bash
 git rm container/sandbox/broker/src/claude-runner.ts
-git rm container/sandbox/broker/src/__tests__/claude-runner.spec.ts || true
+git rm container/sandbox/broker/src/__tests__/claude-runner.test.ts || true
 ```
 
 - [ ] **Step 5: Run broker tests**
@@ -1572,7 +1572,7 @@ git commit -m "feat(db): add subtype column for agent turn results T-20260509-00
 
 **Files:**
 - Modify: `lib/agent-runs/executor-client.ts`
-- Test: `lib/agent-runs/__tests__/sdk-events.spec.ts` (or extend existing)
+- Test: `lib/agent-runs/__tests__/sdk-events.test.ts` (or extend existing)
 
 - [ ] **Step 1: Locate the event-sink function**
 
@@ -1581,7 +1581,7 @@ Open `lib/agent-runs/executor-client.ts`. Find the switch in `runEventTypeForBro
 - [ ] **Step 2: Write failing test**
 
 ```ts
-// lib/agent-runs/__tests__/sdk-events.spec.ts
+// lib/agent-runs/__tests__/sdk-events.test.ts
 import { describe, it, expect, vi } from "vitest";
 import type { BrokerToHost } from "@wbd/protocol";
 // import the runEventTypeForBrokerEvent and persist function
@@ -1637,13 +1637,13 @@ git commit -m "feat(host): persist subtype + policy_violation + resumed flag T-2
 
 **Files:**
 - Create: `lib/agents/runtimes/claude-code/replay-context.ts`
-- Create: `lib/agents/runtimes/claude-code/__tests__/replay-context.spec.ts`
+- Create: `lib/agents/runtimes/claude-code/__tests__/replay-context.test.ts`
 - Modify: the host turn-dispatcher (likely in `lib/agent-runs/executor-client.ts` near where the broker `start_turn` payload is constructed)
 
 - [ ] **Step 1: Write failing test**
 
 ```ts
-// lib/agents/runtimes/claude-code/__tests__/replay-context.spec.ts
+// lib/agents/runtimes/claude-code/__tests__/replay-context.test.ts
 import { describe, it, expect } from "vitest";
 import { buildReplayContext } from "../replay-context";
 
@@ -1711,12 +1711,12 @@ git commit -m "feat(host): replay-context builder + dispatcher integration T-202
 ## Task 15: E2E (Playwright) — happy path + resume + restart fallback + policy
 
 **Files:**
-- Create: `e2e/claude-agent-sdk.spec.ts`
+- Create: `e2e/claude-agent-sdk.test.ts`
 
 - [ ] **Step 1: Set up test scenarios**
 
 ```ts
-// e2e/claude-agent-sdk.spec.ts
+// e2e/claude-agent-sdk.test.ts
 import { test, expect } from "@playwright/test";
 
 test.describe("Claude Agent SDK", () => {
@@ -1755,14 +1755,14 @@ Flesh out selectors based on the existing chat-UI structure.
 - [ ] **Step 2: Run on staging**
 
 ```bash
-PLAYWRIGHT_BASE_URL=https://staging.example pnpm playwright test e2e/claude-agent-sdk.spec.ts
+PLAYWRIGHT_BASE_URL=https://staging.example pnpm playwright test e2e/claude-agent-sdk.test.ts
 ```
 Expected: ALL PASS.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add e2e/claude-agent-sdk.spec.ts
+git add e2e/claude-agent-sdk.test.ts
 git commit -m "test(e2e): claude agent SDK end-to-end scenarios T-20260509-001"
 ```
 

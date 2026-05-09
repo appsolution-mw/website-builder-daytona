@@ -134,7 +134,7 @@ export function mapSdkMessage(msg: unknown, ctx: MapContext): MapResult {
 type BrokerToHostDoneSubtype = Extract<BrokerToHost, { type: "agent.done" }>["subtype"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function numberOr0(value: unknown): number {
