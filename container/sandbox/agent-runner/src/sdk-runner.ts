@@ -4,6 +4,23 @@ import { mapSdkMessage } from "./sdk-event-mapper.js";
 import { buildReplayPrompt, detectResumeOutcome } from "./resume-detector.js";
 import type { TurnRequest } from "./types.js";
 
+/**
+ * Best-effort cancel of an SDK query iterator.
+ *
+ * The SDK's iterator exposes an optional `interrupt()` method that returns a
+ * Promise. We invoke it fire-and-forget: callers either break out of the
+ * for-await loop (discarding subsequent output) or are tearing down the
+ * iterator naturally, so awaiting the resolution would not change behaviour.
+ */
+function safeInterrupt(iterator: AsyncIterable<unknown>): void {
+  const fn = (iterator as { interrupt?: () => Promise<void> }).interrupt;
+  if (typeof fn === "function") {
+    void fn.call(iterator).catch(() => {
+      /* ignore */
+    });
+  }
+}
+
 export interface RunTurnDeps {
   workspaceDir: string;
   abort: AbortController;
@@ -109,16 +126,7 @@ async function streamOnce(
   });
 
   const onAbort = () => {
-    try {
-      const maybeInterrupt = (iterator as { interrupt?: () => Promise<void> }).interrupt;
-      if (typeof maybeInterrupt === "function") {
-        void maybeInterrupt.call(iterator).catch(() => {
-          /* ignore */
-        });
-      }
-    } catch {
-      /* ignore */
-    }
+    safeInterrupt(iterator);
   };
   deps.abort.signal.addEventListener("abort", onAbort);
 
@@ -156,16 +164,10 @@ async function streamOnce(
           failedResume = true;
           // Cancel the wrong session and stop consuming this iterator. The
           // caller will run a second query() with replay context.
-          try {
-            const maybeInterrupt = (iterator as { interrupt?: () => Promise<void> }).interrupt;
-            if (typeof maybeInterrupt === "function") {
-              void maybeInterrupt.call(iterator).catch(() => {
-                /* ignore */
-              });
-            }
-          } catch {
-            /* ignore */
-          }
+          // Fire-and-forget: we exit the for-await via break, so any subsequent
+          // generator output is unread and discarded. The async resolution of
+          // interrupt() doesn't gate this loop's exit.
+          safeInterrupt(iterator);
           break;
         }
       }
