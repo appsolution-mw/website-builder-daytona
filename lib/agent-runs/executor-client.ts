@@ -5,10 +5,12 @@ import {
   buildReplayContext,
   type ReplayMessage,
 } from "@/lib/agents/runtimes/claude-code/replay-context";
+import { estimateCostUsd } from "@/lib/agents/runtimes/claude-code/model-pricing";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
 import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
 import { withTokenRecovery } from "@/lib/runtime/worker-pool/with-token-recovery";
-import type { BrokerToHost } from "@wbd/protocol";
+import type { AgentRuntime as PrismaAgentRuntime, Prisma } from "@prisma/client";
+import type { AgentUsageDetails, BrokerToHost } from "@wbd/protocol";
 import type { AgentClient } from "@/lib/runtime/worker-pool/types";
 import { appendRunEvent } from "./events";
 import { drainProjectQueue, type RunExecutionAdapter } from "./drain";
@@ -141,6 +143,12 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
     let cancelled = false;
     let terminalError: string | null = null;
     const chunks: string[] = [];
+    // Track the most recent modelId observed via agent.session so we can
+    // estimate cost on agent.done when the upstream (e.g. OpenRouter) strips
+    // total_cost_usd. The host's run.modelId is the requested model; the SDK
+    // reports the actual model in system.init / agent.session, which is what
+    // we want to bill against.
+    let observedModelId: string | null = run.modelId ?? null;
     const resumeSession = await shouldResumeRun(run);
     const protocolRuntime = dbRuntimeToProtocol(run.runtime);
     const replayContext =
@@ -178,16 +186,21 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         if (event.type === "agent.chunk") {
           chunks.push(event.delta);
         }
-        if (event.type === "agent.session" && event.resumed === false) {
-          console.warn(
-            "[agent-runs] resume failed; replay fallback engaged",
-            {
-              projectId,
-              sessionId: run.sessionId,
-              runId,
-              providerSessionId: event.providerSessionId,
-            },
-          );
+        if (event.type === "agent.session") {
+          if (event.modelId) {
+            observedModelId = event.modelId;
+          }
+          if (event.resumed === false) {
+            console.warn(
+              "[agent-runs] resume failed; replay fallback engaged",
+              {
+                projectId,
+                sessionId: run.sessionId,
+                runId,
+                providerSessionId: event.providerSessionId,
+              },
+            );
+          }
         }
         if (event.type === "agent.done") {
           sawDone = true;
@@ -201,6 +214,14 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
             projectId,
             turnId: event.turnId,
             subtype: event.subtype,
+            runtime: run.runtime,
+            modelId: observedModelId,
+            durationMs: event.durationMs,
+            tokensIn: event.tokensIn,
+            tokensOut: event.tokensOut,
+            costUsd: event.costUsd,
+            exitCode: event.exitCode,
+            usage: event.usage,
           });
         }
         if (event.type === "agent.error") {
@@ -303,11 +324,66 @@ async function persistTurnSubtype(input: {
   projectId: string;
   turnId: string;
   subtype: string | undefined;
+  runtime: PrismaAgentRuntime;
+  modelId: string | null;
+  durationMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+  exitCode: number;
+  usage?: AgentUsageDetails | undefined;
 }): Promise<void> {
   if (!input.subtype) {
     return;
   }
+
+  // SDK-reported costUsd may be 0 when the upstream (e.g. OpenRouter) strips
+  // total_cost_usd from the Anthropic-API-compat response. Token counts
+  // remain authoritative. When cost is missing but tokens are present, fall
+  // back to a price-table estimate so /usage rolls up something useful.
+  const usage = input.usage;
+  const inputTokens = usage?.inputTokens ?? input.tokensIn;
+  const outputTokens = usage?.outputTokens ?? input.tokensOut;
+  const cacheCreationInputTokens = usage?.cacheCreationInputTokens ?? 0;
+  const cacheReadInputTokens = usage?.cacheReadInputTokens ?? 0;
+  const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
+  const hasTokens =
+    inputTokens > 0 ||
+    outputTokens > 0 ||
+    cacheCreationInputTokens > 0 ||
+    cacheReadInputTokens > 0;
+
+  const costUsd =
+    input.costUsd > 0 || !hasTokens
+      ? input.costUsd
+      : estimateCostUsd({
+          modelId: input.modelId,
+          inputTokens,
+          outputTokens,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
+        });
+
   try {
+    const baseFields = {
+      runtime: input.runtime,
+      modelId: input.modelId,
+      durationMs: input.durationMs,
+      inputTokens,
+      outputTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      totalTokens,
+      webSearchRequests: usage?.webSearchRequests ?? 0,
+      webFetchRequests: usage?.webFetchRequests ?? 0,
+      costUsd,
+      exitCode: input.exitCode,
+      subtype: input.subtype,
+      serviceTier: usage?.serviceTier ?? null,
+      inferenceGeo: usage?.inferenceGeo ?? null,
+      rawUsage: jsonOrUndefined(usage?.rawUsage),
+      modelUsage: jsonOrUndefined(usage?.modelUsage),
+    } satisfies Partial<Prisma.TokenUsageUncheckedCreateInput>;
     await prisma.tokenUsage.upsert({
       where: {
         projectId_turnId_label: {
@@ -320,18 +396,20 @@ async function persistTurnSubtype(input: {
         projectId: input.projectId,
         turnId: input.turnId,
         label: "TURN",
-        subtype: input.subtype,
+        ...baseFields,
       },
-      update: {
-        subtype: input.subtype,
-      },
+      update: baseFields,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(
-      `[agent-runs] failed to persist turn subtype for run ${input.turnId}: ${message}`,
+      `[agent-runs] failed to persist turn usage for run ${input.turnId}: ${message}`,
     );
   }
+}
+
+function jsonOrUndefined(value: unknown): Prisma.InputJsonValue | undefined {
+  return value === undefined ? undefined : (value as Prisma.InputJsonValue);
 }
 
 async function persistBrokerEvent(input: {
