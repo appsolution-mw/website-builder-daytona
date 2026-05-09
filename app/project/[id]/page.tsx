@@ -1602,6 +1602,18 @@ export default function ProjectWorkspace({
       });
       return;
     }
+
+    if (ev.type === "git.commit.skipped") {
+      const text = ev.reason === "no_changes"
+        ? "no code changes"
+        : `couldn't save commit${ev.detail ? `: ${ev.detail.slice(0, 200)}` : ""}`;
+      setMessages((prev) => prev.map((m) =>
+        m.kind === "agent" && m.turnId === ev.turnId
+          ? { ...m, footer: m.footer ? `${m.footer} · ${text}` : text }
+          : m,
+      ));
+      return;
+    }
   }
 
   useEffect(() => { handleEventRef.current = handleEvent; });
