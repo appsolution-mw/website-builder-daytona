@@ -166,6 +166,17 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         if (event.type === "agent.chunk") {
           chunks.push(event.delta);
         }
+        if (event.type === "agent.session" && event.resumed === false) {
+          console.warn(
+            "[agent-runs] resume failed; replay fallback engaged",
+            {
+              projectId,
+              sessionId: run.sessionId,
+              runId,
+              providerSessionId: event.providerSessionId,
+            },
+          );
+        }
         if (event.type === "agent.done") {
           sawDone = true;
           if (event.exitCode !== 0) {
@@ -174,6 +185,11 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
               ? "Run was cancelled"
               : `Run exited with code ${event.exitCode}`;
           }
+          await persistTurnSubtype({
+            projectId,
+            turnId: event.turnId,
+            subtype: event.subtype,
+          });
         }
         if (event.type === "agent.error") {
           terminalError = event.message;
@@ -239,6 +255,41 @@ async function shouldResumeRun(run: {
   return previousRuns > 0;
 }
 
+async function persistTurnSubtype(input: {
+  projectId: string;
+  turnId: string;
+  subtype: string | undefined;
+}): Promise<void> {
+  if (!input.subtype) {
+    return;
+  }
+  try {
+    await prisma.tokenUsage.upsert({
+      where: {
+        projectId_turnId_label: {
+          projectId: input.projectId,
+          turnId: input.turnId,
+          label: "TURN",
+        },
+      },
+      create: {
+        projectId: input.projectId,
+        turnId: input.turnId,
+        label: "TURN",
+        subtype: input.subtype,
+      },
+      update: {
+        subtype: input.subtype,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[agent-runs] failed to persist turn subtype for run ${input.turnId}: ${message}`,
+    );
+  }
+}
+
 async function persistBrokerEvent(input: {
   event: BrokerToHost;
   projectId: string;
@@ -262,7 +313,7 @@ async function persistBrokerEvent(input: {
   });
 }
 
-function runEventTypeForBrokerEvent(
+export function runEventTypeForBrokerEvent(
   event: BrokerToHost,
 ): Parameters<typeof appendRunEvent>[0]["type"] | null {
   switch (event.type) {
@@ -275,6 +326,8 @@ function runEventTypeForBrokerEvent(
       return "TOOL_USE";
     case "agent.usage":
       return "USAGE";
+    case "agent.policy_violation":
+      return "POLICY_VIOLATION";
     case "file.changed":
       return "FILE_CHANGED";
     default:

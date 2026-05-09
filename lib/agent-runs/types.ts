@@ -21,7 +21,8 @@ export type AgentRunEventType =
   | "USAGE"
   | "DONE"
   | "ERROR"
-  | "FILE_CHANGED";
+  | "FILE_CHANGED"
+  | "POLICY_VIOLATION";
 
 export type SerializableRunEvent = {
   id: string;

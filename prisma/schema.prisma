@@ -392,6 +392,7 @@ enum AgentRunEventType {
   DONE
   ERROR
   FILE_CHANGED
+  POLICY_VIOLATION
 }
 
 enum ProjectQueueStatus {

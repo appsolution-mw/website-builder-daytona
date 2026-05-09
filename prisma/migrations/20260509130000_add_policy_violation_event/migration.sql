@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "AgentRunEventType" ADD VALUE 'POLICY_VIOLATION';
