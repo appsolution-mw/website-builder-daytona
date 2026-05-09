@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import WebSocket, { WebSocketServer, type AddressInfo } from "ws";
 import { startProxy, type ProxyHandle, extractProjectId } from "../src/index";
-import type { AgentUsageEvent } from "@wbd/protocol";
+import type { AgentUsageEvent, ProxyToBrowser } from "@wbd/protocol";
 
 // Minimal mock broker: accepts connections, echoes ping → pong.
 function startMockBroker(opts: {
@@ -161,6 +161,76 @@ describe("ws-proxy", () => {
 
     expect(JSON.parse(reply)).toEqual(usageEvent);
     expect(recorded).toEqual([{ projectId: "test-project", event: usageEvent }]);
+    client.close();
+  });
+
+  it("forwards git.commit and git.commit.skipped frames unmodified to the browser", async () => {
+    // Regression for T-20260509-006 / Phase 1.4a Task 7. The ws-proxy is a
+    // typed pass-through: any BrokerToHost frame must reach the browser leg
+    // byte-for-byte. If a future change introduces an event-type allowlist or
+    // switch, this test will fail and force an explicit decision.
+    await proxy?.close();
+    await broker?.close();
+
+    const commitEvent: ProxyToBrowser = {
+      type: "git.commit",
+      turnId: "turn-42",
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      shortSha: "0123456",
+      title: "feat: add forwarding regression test",
+      bodyMessage: "",
+      filesChanged: 1,
+      insertions: 10,
+      deletions: 0,
+      runtime: "claude-code",
+      modelId: "claude-opus-4-7",
+      authorKind: "AGENT",
+      committedAt: "2026-05-09T12:00:00.000Z",
+    };
+    const skippedEvent: ProxyToBrowser = {
+      type: "git.commit.skipped",
+      turnId: "turn-42",
+      reason: "no_changes",
+    };
+
+    broker = await startMockBroker({
+      onConnection: (socket) => {
+        socket.once("message", () => {
+          socket.send(JSON.stringify(commitEvent));
+          socket.send(JSON.stringify(skippedEvent));
+        });
+      },
+    });
+
+    proxy = await startProxy({
+      port: 0,
+      resolveBrokerUrl: () => `ws://localhost:${broker!.port}`,
+    });
+
+    const client = new WebSocket(`ws://localhost:${proxy.port}/p/test-project`);
+    await new Promise<void>((resolve, reject) => {
+      client.once("open", () => resolve());
+      client.once("error", reject);
+    });
+
+    const received: ProxyToBrowser[] = await new Promise((resolve, reject) => {
+      const collected: ProxyToBrowser[] = [];
+      const timeout = setTimeout(
+        () => reject(new Error("timed out waiting for forwarded frames")),
+        1000,
+      );
+      client.on("message", (data) => {
+        collected.push(JSON.parse(data.toString()) as ProxyToBrowser);
+        if (collected.length === 2) {
+          clearTimeout(timeout);
+          resolve(collected);
+        }
+      });
+      client.send(JSON.stringify({ type: "ping", nonce: "kick" }));
+    });
+
+    expect(received[0]).toEqual(commitEvent);
+    expect(received[1]).toEqual(skippedEvent);
     client.close();
   });
 });
