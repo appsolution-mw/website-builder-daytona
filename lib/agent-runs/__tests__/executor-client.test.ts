@@ -62,6 +62,9 @@ async function cleanup(): Promise<void> {
   await prisma.agentRunEvent.deleteMany({
     where: { projectId: { in: projects.map((project) => project.id) } },
   });
+  await prisma.commit.deleteMany({
+    where: { projectId: { in: projects.map((project) => project.id) } },
+  });
   await prisma.agentRunAttempt.deleteMany({
     where: { run: { projectId: { in: projects.map((project) => project.id) } } },
   });
@@ -293,5 +296,109 @@ describe("executor-client", () => {
       status: "FAILED",
       blockedReason: expect.stringMatching(/WORKER_AGENT_HMAC_SECRET/),
     });
+  });
+
+  it("persists a Commit row when the broker emits git.commit", async () => {
+    process.env.WORKER_AGENT_HMAC_SECRET = "secret-for-worker-agent";
+    const project = await createProject();
+    await createSandbox(project.id);
+    const queued = await enqueueProjectRun({ projectId: project.id });
+    const committedAt = new Date("2026-05-09T12:00:00.000Z").toISOString();
+    const sha = "a".repeat(40);
+
+    mockedAgent.executeProjectRun.mockImplementationOnce(async (
+      _sandboxId: string,
+      _request: unknown,
+      onEvent: (event: unknown) => void | Promise<void>,
+    ) => {
+      await onEvent({ type: "agent.chunk", turnId: queued.runId, delta: "Done" });
+      await onEvent({
+        type: "git.commit",
+        turnId: queued.runId,
+        sha,
+        shortSha: "aaaaaaa",
+        title: "Add hero",
+        bodyMessage: "body",
+        filesChanged: 2,
+        insertions: 5,
+        deletions: 1,
+        runtime: "claude-code",
+        modelId: "claude-sonnet-4-5",
+        authorKind: "AGENT",
+        committedAt,
+      });
+      await onEvent({
+        type: "agent.done",
+        turnId: queued.runId,
+        durationMs: 10,
+        tokensIn: 1,
+        tokensOut: 2,
+        costUsd: 0,
+        exitCode: 0,
+      });
+    });
+
+    await requestProjectQueueDrain(project.id);
+
+    const commit = await prisma.commit.findUniqueOrThrow({
+      where: { agentRunId: queued.runId },
+    });
+    expect(commit).toMatchObject({
+      projectId: project.id,
+      sessionId: queued.sessionId,
+      agentRunId: queued.runId,
+      sha,
+      shortSha: "aaaaaaa",
+      title: "Add hero",
+      bodyMessage: "body",
+      filesChanged: 2,
+      insertions: 5,
+      deletions: 1,
+      runtime: "CLAUDE_CODE",
+      modelId: "claude-sonnet-4-5",
+      authorKind: "AGENT",
+    });
+    expect(commit.createdAt.toISOString()).toBe(committedAt);
+
+    const events = await prisma.agentRunEvent.findMany({
+      where: { runId: queued.runId },
+      select: { type: true },
+    });
+    expect(events.map((e) => e.type)).not.toContain("FILE_CHANGED");
+  });
+
+  it("does not persist a Commit row when the broker emits git.commit.skipped", async () => {
+    process.env.WORKER_AGENT_HMAC_SECRET = "secret-for-worker-agent";
+    const project = await createProject();
+    await createSandbox(project.id);
+    const queued = await enqueueProjectRun({ projectId: project.id });
+
+    mockedAgent.executeProjectRun.mockImplementationOnce(async (
+      _sandboxId: string,
+      _request: unknown,
+      onEvent: (event: unknown) => void | Promise<void>,
+    ) => {
+      await onEvent({
+        type: "git.commit.skipped",
+        turnId: queued.runId,
+        reason: "no_changes",
+      });
+      await onEvent({
+        type: "agent.done",
+        turnId: queued.runId,
+        durationMs: 10,
+        tokensIn: 1,
+        tokensOut: 2,
+        costUsd: 0,
+        exitCode: 0,
+      });
+    });
+
+    await requestProjectQueueDrain(project.id);
+
+    const count = await prisma.commit.count({
+      where: { agentRunId: queued.runId },
+    });
+    expect(count).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/client";
-import { dbRuntimeToProtocol } from "@/lib/agents/runtime";
+import { dbRuntimeToProtocol, protocolRuntimeToDb } from "@/lib/agents/runtime";
 import { prependOpenHandsLibrarySnapshotToPrompt } from "@/lib/agents/openhands-library-snapshot";
 import {
   buildReplayContext,
@@ -227,6 +227,18 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         if (event.type === "agent.error") {
           terminalError = event.message;
         }
+        if (event.type === "git.commit") {
+          await persistCommitEvent({
+            event,
+            projectId,
+            sessionId: run.sessionId,
+            runId,
+          });
+          return;
+        }
+        if (event.type === "git.commit.skipped") {
+          return;
+        }
         await persistBrokerEvent({
           event,
           projectId,
@@ -410,6 +422,40 @@ async function persistTurnSubtype(input: {
 
 function jsonOrUndefined(value: unknown): Prisma.InputJsonValue | undefined {
   return value === undefined ? undefined : (value as Prisma.InputJsonValue);
+}
+
+async function persistCommitEvent(input: {
+  event: Extract<BrokerToHost, { type: "git.commit" }>;
+  projectId: string;
+  sessionId: string;
+  runId: string;
+}): Promise<void> {
+  const { event, projectId, sessionId, runId } = input;
+  try {
+    await prisma.commit.create({
+      data: {
+        projectId,
+        sessionId,
+        agentRunId: runId,
+        sha: event.sha,
+        shortSha: event.shortSha,
+        authorKind: event.authorKind,
+        runtime: protocolRuntimeToDb(event.runtime),
+        modelId: event.modelId,
+        title: event.title,
+        bodyMessage: event.bodyMessage,
+        filesChanged: event.filesChanged,
+        insertions: event.insertions,
+        deletions: event.deletions,
+        createdAt: new Date(event.committedAt),
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[agent-runs] failed to persist commit for run ${runId}: ${message}`,
+    );
+  }
 }
 
 async function persistBrokerEvent(input: {
