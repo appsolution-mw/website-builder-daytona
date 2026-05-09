@@ -171,6 +171,27 @@ export type BrokerToHost =
       path: string;
       event: "add" | "change" | "unlink";
       source: "agent" | "external";
+    }
+  | {
+      type: "git.commit";
+      turnId: string;
+      sha: string;
+      shortSha: string;
+      title: string;
+      bodyMessage: string;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+      runtime: AgentRuntime;
+      modelId: string | null;
+      authorKind: "AGENT";
+      committedAt: string;
+    }
+  | {
+      type: "git.commit.skipped";
+      turnId: string;
+      reason: "no_changes" | "commit_failed";
+      detail?: string;
     };
 
 // Messages the browser receives from the ws-proxy (currently identical to BrokerToHost)
@@ -179,4 +200,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.14.0" as const;
+export const PROTOCOL_VERSION = "1.15.0" as const;
