@@ -20,6 +20,7 @@ import {
   Camera,
   Code2,
   ExternalLink,
+  GitCommit,
   GitPullRequest,
   Globe2,
   History,
@@ -56,6 +57,9 @@ import { PresetPicker, type PresetOption } from "@/components/library/PresetPick
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
+import { HistoryMode } from "@/components/workspace/HistoryMode";
+import { useCommitHistory } from "@/lib/workspace/use-commit-history";
+import type { CommitView } from "@/lib/workspace/commit-types";
 import { XtermTerminal, type XtermTerminalStatus } from "@/components/workspace/XtermTerminal";
 import { ProjectAgentConfigPanel } from "@/components/agent-config/ProjectAgentConfigPanel";
 import { normalizeProjectAgentConfigResponse } from "@/components/agent-config/normalizers";
@@ -71,7 +75,7 @@ import {
   blockedRunActionState,
   type ProjectRunQueueState,
 } from "@/lib/agent-runs/queue-ui";
-import { runtimeLabel } from "@/lib/agents/runtime";
+import { protocolRuntimeToDb, runtimeLabel } from "@/lib/agents/runtime";
 import { libraryPresetItemIdForRuntimeSync } from "@/lib/agents/openhands-library-snapshot";
 import {
   ensureNextDevtoolsCssImport,
@@ -159,6 +163,7 @@ type Project = {
   brokerReady: boolean;
   chatSession: ChatSession;
   chatSessions: ChatSession[];
+  commits: CommitView[];
 };
 
 type DeviceView = "desktop" | "tablet" | "mobile";
@@ -674,6 +679,7 @@ export default function ProjectWorkspace({
   const [agentConfigSaving, setAgentConfigSaving] = useState(false);
   const [agentConfigSyncWarning, setAgentConfigSyncWarning] = useState<string | null>(null);
   const [tab, setTab] = useState<RightPaneTab>("preview");
+  const [mode, setMode] = useState<"code" | "history">("code");
   const [device, setDevice] = useState<DeviceView>("desktop");
   const [devIndicatorEnabled, setDevIndicatorEnabled] = useState<boolean | null>(null);
   const [devIndicatorSaving, setDevIndicatorSaving] = useState(false);
@@ -691,6 +697,9 @@ export default function ProjectWorkspace({
   const [terminalCloseSignal, setTerminalCloseSignal] = useState(0);
   const [terminalReconnectSignal, setTerminalReconnectSignal] = useState(0);
   const [consoleEntries, setConsoleEntries] = useState<BrowserConsoleEntry[]>([]);
+
+  const initialCommits: CommitView[] = project?.commits ?? [];
+  const commitHistory = useCommitHistory(id, initialCommits);
 
   const pendingRef = useRef<
     Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
@@ -1571,6 +1580,26 @@ export default function ProjectWorkspace({
           void refreshOpenFile(ev.path);
         }
       }
+      return;
+    }
+
+    if (ev.type === "git.commit") {
+      commitHistory.prepend({
+        id: ev.sha,
+        sha: ev.sha,
+        shortSha: ev.shortSha,
+        title: ev.title,
+        bodyMessage: ev.bodyMessage,
+        filesChanged: ev.filesChanged,
+        insertions: ev.insertions,
+        deletions: ev.deletions,
+        runtime: protocolRuntimeToDb(ev.runtime),
+        modelId: ev.modelId,
+        authorKind: ev.authorKind,
+        sessionId: null,
+        agentRunId: ev.turnId,
+        createdAt: ev.committedAt,
+      });
       return;
     }
   }
@@ -2803,6 +2832,7 @@ export default function ProjectWorkspace({
           tab={tab}
           onTabChange={setTab}
           code={
+            mode === "code" ? (
             <div className="relative flex h-full w-full bg-background">
               <aside className="w-64 shrink-0 overflow-auto border-r border-border bg-card">
                 <div className="flex min-h-11 items-center justify-between border-b border-border px-3">
@@ -2931,6 +2961,15 @@ export default function ProjectWorkspace({
                 />
               )}
             </div>
+            ) : (
+              <HistoryMode
+                projectId={id}
+                commits={commitHistory.commits}
+                loadMore={commitHistory.loadMore}
+                hasMore={commitHistory.hasMore}
+                loading={commitHistory.loading}
+              />
+            )
           }
           terminal={
             tab === "terminal" ? (
@@ -3007,6 +3046,22 @@ export default function ProjectWorkspace({
           }
           codeActions={
             <>
+              <div className="flex items-center gap-1 rounded-md border border-border bg-background p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMode("code")}
+                  className={`flex items-center gap-1 rounded px-2 py-1 ${mode === "code" ? "bg-accent" : ""}`}
+                >
+                  <Code2 className="size-3.5" /> Code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("history")}
+                  className={`flex items-center gap-1 rounded px-2 py-1 ${mode === "history" ? "bg-accent" : ""}`}
+                >
+                  <GitCommit className="size-3.5" /> History
+                </button>
+              </div>
               <Button
                 type="button"
                 variant={agentConfigOpen ? "secondary" : "ghost"}
