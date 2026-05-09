@@ -324,10 +324,7 @@ function summariseTool(tool: string, input: unknown): string {
 }
 
 function appendAgentDelta(text: string, delta: string): string {
-  if (!text) return delta;
-  if (!delta) return text;
-  if (/\s$/.test(text) || /^\s/.test(delta)) return text + delta;
-  return `${text}\n\n${delta}`;
+  return text + delta;
 }
 
 function hasImageDataTransferItems(items: DataTransferItemList): boolean {
