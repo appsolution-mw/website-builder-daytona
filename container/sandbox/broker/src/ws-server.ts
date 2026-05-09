@@ -7,7 +7,7 @@ import type {
   PromptImageAttachment,
 } from "@wbd/protocol";
 import { handleMessage } from "./handlers";
-import type { SpawnFn } from "./claude-runner";
+import type { SpawnFn } from "./spawn-types";
 import { executeAgentRun } from "./agent-run-executor";
 import { agentRuntimeFromEnv } from "./agent-provider";
 import { createFsTracker, type FsTracker } from "./fs-tracker";
@@ -39,7 +39,12 @@ export interface StartBrokerOptions {
   port: number;
   projectRoot?: string;
   enableFsTracker?: boolean;
-  /** Test-only: override child_process.spawn used by claude-runner. */
+  /**
+   * Test-only: override child_process.spawn used by spawn-based runners
+   * (openhands and tooling). The claude-code path no longer spawns processes —
+   * it talks to the agent-runner over HTTP+HMAC, configured via
+   * AGENT_RUNNER_URL and AGENT_RUNNER_HMAC_SECRET.
+   */
   __testSpawn?: SpawnFn;
   /** Test-only: override node-pty spawn used by the interactive terminal. */
   __testPtySpawn?: PtySpawnFn;

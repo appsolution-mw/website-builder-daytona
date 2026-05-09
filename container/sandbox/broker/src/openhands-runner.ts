@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { BrokerToHost } from "@wbd/protocol";
 import type { AgentReviewOptions, AgentTurnOptions } from "./agent-provider";
 import { parseOpenHandsBridgeLine } from "./openhands-bridge-events";
-import type { SpawnFn, SpawnedChild } from "./claude-runner";
+import type { SpawnFn, SpawnedChild } from "./spawn-types";
 
 const OPENHANDS_BRIDGE_PATH = "/opt/builder/container/sandbox/broker/python/openhands_bridge.py";
 const PROJECT_ROOT = "/workspace/project";

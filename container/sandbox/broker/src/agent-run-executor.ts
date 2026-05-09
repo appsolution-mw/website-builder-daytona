@@ -1,7 +1,7 @@
 import type { AgentRuntime, BrokerToHost, PromptImageAttachment } from "@wbd/protocol";
 import { createAgentProvider } from "./agent-provider-factory";
 import { prepareDiskAttachments } from "./chat-attachments";
-import type { SpawnFn } from "./claude-runner";
+import type { SpawnFn } from "./spawn-types";
 
 export type PersistRunEvent = (event: BrokerToHost) => Promise<void>;
 

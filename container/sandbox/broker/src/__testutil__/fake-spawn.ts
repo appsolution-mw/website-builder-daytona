@@ -1,6 +1,6 @@
 import { Readable, Writable } from "node:stream";
 import { EventEmitter } from "node:events";
-import type { SpawnFn, SpawnedChild } from "../claude-runner";
+import type { SpawnFn, SpawnedChild } from "../spawn-types";
 
 export interface FakeSpawnScript {
   /** JSON objects to push as NDJSON lines on stdout, one per entry. */

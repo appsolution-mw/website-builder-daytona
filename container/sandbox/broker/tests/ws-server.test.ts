@@ -182,75 +182,69 @@ describe("broker ws server", () => {
   });
 
   it("executes an internal durable run command and streams NDJSON events", async () => {
-    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
+    const { startFakeAgentRunner } = await import("./helpers/fake-agent-runner");
     const root = await mkdtemp(join(tmpdir(), "wbd-ws-execute-"));
-    const { fakeSpawn } = spawnsSetup([
+    const fakeRunner = await startFakeAgentRunner([
+      { type: "agent.chunk", turnId: "run-1", delta: "done from broker" },
       {
-        stdout: [
-          { type: "system", subtype: "init" },
-          {
-            type: "assistant",
-            message: { content: [{ type: "text", text: "done from broker" }] },
-          },
-          {
-            type: "result",
-            subtype: "success",
-            duration_ms: 100,
-            usage: {
-              input_tokens: 1,
-              output_tokens: 2,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-            },
-            total_cost_usd: 0,
-          },
-        ],
+        type: "agent.done",
+        turnId: "run-1",
+        durationMs: 100,
+        tokensIn: 1,
+        tokensOut: 2,
+        costUsd: 0,
+        exitCode: 0,
       },
     ]);
-    process.env.BROKER_TOKEN = "broker-token";
-    handle = await startBroker({
-      port: 0,
-      projectRoot: root,
-      enableFsTracker: false,
-      __testSpawn: fakeSpawn,
-    });
+    try {
+      process.env.BROKER_TOKEN = "broker-token";
+      process.env.AGENT_RUNNER_URL = fakeRunner.url;
+      process.env.AGENT_RUNNER_HMAC_SECRET = "test-secret";
+      handle = await startBroker({
+        port: 0,
+        projectRoot: root,
+        enableFsTracker: false,
+      });
 
-    const response = await fetch(
-      `http://127.0.0.1:${handle.port}/internal/projects/project-1/runs/run-1/execute`,
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer broker-token",
-          "content-type": "application/json",
+      const response = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/runs/run-1/execute`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer broker-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            projectId: "project-1",
+            sessionId: "session-1",
+            providerSessionId: CLAUDE_SESSION_ID,
+            runId: "run-1",
+            attemptId: "attempt-1",
+            prompt: "Build it",
+            runtime: "claude-code",
+            resumeSession: false,
+          }),
         },
-        body: JSON.stringify({
-          projectId: "project-1",
-          sessionId: "session-1",
-          providerSessionId: CLAUDE_SESSION_ID,
-          runId: "run-1",
-          attemptId: "attempt-1",
-          prompt: "Build it",
-          runtime: "claude-code",
-          resumeSession: false,
-        }),
-      },
-    );
+      );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("application/x-ndjson");
-    const events = (await response.text())
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { type: string });
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "agent.chunk", turnId: "run-1", delta: "done from broker" }),
-        expect.objectContaining({ type: "agent.done", turnId: "run-1", exitCode: 0 }),
-      ]),
-    );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "agent.chunk", turnId: "run-1", delta: "done from broker" }),
+          expect.objectContaining({ type: "agent.done", turnId: "run-1", exitCode: 0 }),
+        ]),
+      );
+    } finally {
+      await fakeRunner.close();
+    }
   });
 
   it("serves internal git status and push commands", async () => {
@@ -316,75 +310,85 @@ describe("broker ws server", () => {
   });
 
   it("streams file.changed events from the fs tracker during an internal durable run", async () => {
-    const { spawnsSetup } = await import("../src/__testutil__/fake-spawn");
     const { mkdtemp, writeFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
+    const { startFakeAgentRunner } = await import("./helpers/fake-agent-runner");
     const root = await mkdtemp(join(tmpdir(), "wbd-ws-execute-fs-"));
-    const { fakeSpawn } = spawnsSetup([
-      {
-        stdout: [
-          { type: "system", subtype: "init" },
-          {
-            type: "result",
-            subtype: "success",
-            duration_ms: 100,
-            usage: {
-              input_tokens: 1,
-              output_tokens: 1,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-            },
-            total_cost_usd: 0,
-          },
-        ],
-        closeDelayMs: 300,
-      },
-    ]);
-    process.env.BROKER_TOKEN = "broker-token";
-    handle = await startBroker({
-      port: 0,
-      projectRoot: root,
-      enableFsTracker: true,
-      __testSpawn: fakeSpawn,
-    });
-
-    const response = await fetch(
-      `http://127.0.0.1:${handle.port}/internal/projects/project-1/runs/run-1/execute`,
-      {
-        method: "POST",
-        headers: {
-          authorization: "Bearer broker-token",
-          "content-type": "application/json",
+    // Emit a noop status event immediately so the broker flushes headers and
+    // the test's `await fetch` resolves; hold the response open via
+    // closeDelayMs so the run remains active when the writeFile fires.
+    const fakeRunner = await startFakeAgentRunner(
+      [
+        {
+          type: "agent.status",
+          turnId: "run-1",
+          phase: "starting",
         },
-        body: JSON.stringify({
-          projectId: "project-1",
-          sessionId: "session-1",
-          providerSessionId: CLAUDE_SESSION_ID,
-          runId: "run-1",
-          attemptId: "attempt-1",
-          prompt: "Build it",
-          runtime: "claude-code",
-          resumeSession: false,
-        }),
-      },
+      ],
+      { closeDelayMs: 1500, finalEvent: {
+        type: "agent.done",
+        turnId: "run-1",
+        durationMs: 100,
+        tokensIn: 1,
+        tokensOut: 1,
+        costUsd: 0,
+        exitCode: 0,
+      } },
     );
-    await writeFile(join(root, "changed.txt"), "changed");
+    try {
+      process.env.BROKER_TOKEN = "broker-token";
+      process.env.AGENT_RUNNER_URL = fakeRunner.url;
+      process.env.AGENT_RUNNER_HMAC_SECRET = "test-secret";
+      handle = await startBroker({
+        port: 0,
+        projectRoot: root,
+        enableFsTracker: true,
+      });
 
-    const events = (await response.text())
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { type: string });
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "file.changed",
-          path: "changed.txt",
-          source: "agent",
-        }),
-        expect.objectContaining({ type: "agent.done", turnId: "run-1", exitCode: 0 }),
-      ]),
-    );
+      const response = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/runs/run-1/execute`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer broker-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            projectId: "project-1",
+            sessionId: "session-1",
+            providerSessionId: CLAUDE_SESSION_ID,
+            runId: "run-1",
+            attemptId: "attempt-1",
+            prompt: "Build it",
+            runtime: "claude-code",
+            resumeSession: false,
+          }),
+        },
+      );
+      // The fake runner emits an immediate `agent.status` event so the
+      // broker flushes response headers; the test then writes a file while
+      // the runner is still holding the connection open (closeDelayMs).
+      await new Promise((r) => setTimeout(r, 200));
+      await writeFile(join(root, "changed.txt"), "changed");
+
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "file.changed",
+            path: "changed.txt",
+            source: "agent",
+          }),
+          expect.objectContaining({ type: "agent.done", turnId: "run-1", exitCode: 0 }),
+        ]),
+      );
+    } finally {
+      await fakeRunner.close();
+    }
   });
 
   it("responds to file.list with sorted paths", async () => {
