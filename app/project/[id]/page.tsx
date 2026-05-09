@@ -1269,13 +1269,10 @@ export default function ProjectWorkspace({
     const session = activeSessionRef.current;
     if (!session) return;
     const existingState = runtimeStateForSession(session, runtime);
-    // The SDK assigns its own session_id per turn; the host's seed is what we
-    // use across turns for resume. Once a providerSessionId is committed, keep it.
-    const effectiveProviderSessionId = existingState?.providerSessionId ?? providerSessionId;
     if (
       libraryPresetItemId === undefined &&
       existingState &&
-      existingState.providerSessionId === effectiveProviderSessionId &&
+      existingState.providerSessionId === providerSessionId &&
       existingState.modelId === (modelId ?? existingState.modelId ?? null)
     ) {
       return;
@@ -1283,7 +1280,7 @@ export default function ProjectWorkspace({
 
     const nextState: RuntimeState = {
       runtime,
-      providerSessionId: effectiveProviderSessionId,
+      providerSessionId,
       modelId: modelId ?? null,
       lastUsedAt: new Date().toISOString(),
       ...(existingState?.librarySnapshot ? { librarySnapshot: existingState.librarySnapshot } : {}),
@@ -1317,7 +1314,7 @@ export default function ProjectWorkspace({
       body: JSON.stringify({
         runtimeState: {
           runtime,
-          providerSessionId: effectiveProviderSessionId,
+          providerSessionId,
           ...(modelId ? { modelId } : {}),
           ...(libraryPresetItemId ? { libraryPresetItemId } : {}),
         },

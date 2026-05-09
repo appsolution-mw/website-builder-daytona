@@ -283,11 +283,15 @@ async function shouldResumeRun(run: {
   if (run.lastAttemptNumber > 1) {
     return true;
   }
+  // Resume any previous successful run in the same session+runtime, regardless
+  // of providerSessionId. The SDK assigns its own session_id per turn (which
+  // differs from the seed used on the first AgentRun row), so an exact
+  // providerSessionId match would never resume after Turn 1. The agent-runner
+  // detects mismatched session ids and triggers DB-replay fallback if needed.
   const previousRuns = await prisma.agentRun.count({
     where: {
       projectId: run.projectId,
       sessionId: run.sessionId,
-      providerSessionId: run.providerSessionId,
       queueSequence: { lt: run.queueSequence },
       status: { in: ["SUCCEEDED", "FAILED", "CANCELLED"] },
     },

@@ -176,6 +176,27 @@ async function streamOnce(
         for (const ev of out.events) await deps.emit(ev);
       }
     }
+  } catch (err) {
+    // The SDK throws "No conversation found with session ID" when the resume
+    // target's transcript file is missing (e.g., sandbox restart after the
+    // session was created). Treat this as a silent resume failure so the
+    // caller fires the DB-replay fallback path. Re-throw any other error.
+    const message = err instanceof Error ? err.message : String(err);
+    if (opts.expectResume && /no conversation found with session id/i.test(message)) {
+      if (!agentSessionEmitted) {
+        await deps.emit({
+          type: "agent.session",
+          turnId: req.turnId,
+          runtime: deps.runtime,
+          providerSessionId: req.providerSessionId,
+          resumed: false,
+        });
+        agentSessionEmitted = true;
+      }
+      failedResume = true;
+    } else {
+      throw err;
+    }
   } finally {
     deps.abort.signal.removeEventListener("abort", onAbort);
   }
