@@ -187,6 +187,9 @@ function bufferToString(value: string | Buffer | undefined): string {
   return Buffer.isBuffer(value) ? value.toString("utf8") : value;
 }
 
+const COMMIT_BODY_MAX_BYTES = 8 * 1024;
+const AGENT_AUTHOR = "launchnode-agent <agent@launchnode.de>";
+
 const COMMIT_TITLE_MAX = 72;
 
 export function sanitizeCommitTitle(input: string | null | undefined, fallback = "agent turn"): string {
@@ -199,4 +202,129 @@ export function sanitizeCommitTitle(input: string | null | undefined, fallback =
   if (!stripped) return fallback;
   if (stripped.length <= COMMIT_TITLE_MAX) return stripped;
   return `${stripped.slice(0, COMMIT_TITLE_MAX - 1)}…`;
+}
+
+export interface CommitAgentTurnRequest {
+  projectRoot: string;
+  runId: string;
+  userPromptFirstLine: string | null;
+  userPromptFull: string | null;
+  runtime: string;
+  modelId: string | null;
+}
+
+export type CommitAgentTurnResponse =
+  | {
+      ok: true;
+      sha: string;
+      shortSha: string;
+      title: string;
+      bodyMessage: string;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+      committedAt: string;
+    }
+  | { ok: false; reason: "no_changes" }
+  | { ok: false; reason: "commit_failed"; detail: string };
+
+export async function commitAgentTurn(
+  input: CommitAgentTurnRequest,
+): Promise<CommitAgentTurnResponse> {
+  let status: GitStatusResponse;
+  try {
+    status = await getGitStatus({ projectRoot: input.projectRoot });
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+  if (!status.hasChanges) return { ok: false, reason: "no_changes" };
+
+  const fallbackTitle = `agent turn ${input.runId.slice(0, 10)}`;
+  const title = sanitizeCommitTitle(input.userPromptFirstLine, fallbackTitle);
+  const bodyMessage = buildCommitBody(input);
+
+  try {
+    await runGit(input.projectRoot, ["add", "-A"]);
+    const commitArgs = [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      `--author=${AGENT_AUTHOR}`,
+      "-m",
+      title,
+      "-m",
+      bodyMessage,
+    ];
+    await runGit(input.projectRoot, commitArgs);
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+
+  const sha = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
+  const stat = await readShortstat(input.projectRoot, sha);
+
+  return {
+    ok: true,
+    sha,
+    shortSha: sha.slice(0, 7),
+    title,
+    bodyMessage,
+    filesChanged: stat.filesChanged,
+    insertions: stat.insertions,
+    deletions: stat.deletions,
+    committedAt: new Date().toISOString(),
+  };
+}
+
+function buildCommitBody(input: CommitAgentTurnRequest): string {
+  const fullPrompt = (input.userPromptFull ?? "").trim();
+  const truncatedPrompt = byteTruncate(fullPrompt, COMMIT_BODY_MAX_BYTES - 256);
+  const trailers = [
+    `Runtime: ${input.runtime}`,
+    input.modelId ? `Model: ${input.modelId}` : null,
+    `Run: ${input.runId}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const sections = [truncatedPrompt, trailers].filter((s) => s.length > 0);
+  return sections.join("\n\n");
+}
+
+function byteTruncate(input: string, maxBytes: number): string {
+  if (Buffer.byteLength(input, "utf8") <= maxBytes) return input;
+  const buf = Buffer.from(input, "utf8");
+  return `${buf.subarray(0, maxBytes).toString("utf8")}…`;
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "stderr" in error) {
+    const stderr = (error as { stderr?: unknown }).stderr;
+    if (typeof stderr === "string" && stderr.length > 0) return stderr;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+async function readShortstat(
+  projectRoot: string,
+  sha: string,
+): Promise<{ filesChanged: number; insertions: number; deletions: number }> {
+  let raw: string;
+  try {
+    raw = await runGit(projectRoot, ["diff", "--shortstat", `${sha}~1`, sha]);
+  } catch {
+    raw = await runGit(projectRoot, ["diff-tree", "--shortstat", "--root", sha]);
+  }
+  const text = raw.trim();
+  const filesChanged = matchInt(text, /(\d+)\s+files?\s+changed/);
+  const insertions = matchInt(text, /(\d+)\s+insertions?\(\+\)/);
+  const deletions = matchInt(text, /(\d+)\s+deletions?\(-\)/);
+  return { filesChanged, insertions, deletions };
+}
+
+function matchInt(text: string, re: RegExp): number {
+  const m = re.exec(text);
+  return m ? parseInt(m[1]!, 10) : 0;
 }

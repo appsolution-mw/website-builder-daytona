@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  commitAgentTurn,
   commitAndPushChanges,
   getGitStatus,
   sanitizeCommitTitle,
@@ -186,5 +187,122 @@ describe("sanitizeCommitTitle", () => {
   it("handles multi-byte unicode without overshooting the byte cap", () => {
     const result = sanitizeCommitTitle("café".repeat(20));
     expect(result.length).toBeLessThanOrEqual(72);
+  });
+});
+
+describe("commitAgentTurn", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-commit-agent-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    await writeFile(join(root, "README.md"), "initial\n");
+    await git(root, ["add", "README.md"]);
+    await git(root, ["commit", "-m", "Initial commit"]);
+    return root;
+  }
+
+  it("returns no_changes for a clean working tree", async () => {
+    const root = await createRepository();
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_1",
+      userPromptFirstLine: "Add a hero section",
+      userPromptFull: "Add a hero section",
+      runtime: "claude-code",
+      modelId: "sonnet-4-6",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_changes");
+  });
+
+  it("commits a dirty working tree with sanitised title and bot author", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "page.tsx"), "export default function Page() {}\n");
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_2",
+      userPromptFirstLine: "Add a hero section\nwith a CTA",
+      userPromptFull: "Add a hero section\nwith a CTA",
+      runtime: "claude-code",
+      modelId: "sonnet-4-6",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.sha).toMatch(/^[a-f0-9]{40}$/);
+    expect(result.shortSha).toBe(result.sha.slice(0, 7));
+    expect(result.title).toBe("Add a hero section");
+    expect(result.filesChanged).toBe(1);
+    expect(result.insertions).toBeGreaterThanOrEqual(1);
+
+    const lastAuthor = (await git(root, ["log", "-1", "--format=%an <%ae>"])).trim();
+    expect(lastAuthor).toBe("launchnode-agent <agent@launchnode.de>");
+
+    const body = (await git(root, ["log", "-1", "--format=%B"])).trim();
+    expect(body).toContain("Runtime: claude-code");
+    expect(body).toContain("Run: run_2");
+  });
+
+  it("uses the fallback title when the user prompt is null", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "x.txt"), "x\n");
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_abc1234",
+      userPromptFirstLine: null,
+      userPromptFull: null,
+      runtime: "claude-code",
+      modelId: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.title).toBe("agent turn run_abc123");
+  });
+
+  it("returns commit_failed with sanitised detail when commit throws", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "x.txt"), "x\n");
+    await writeFile(join(root, ".git/index"), "corrupt-index");
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_3",
+      userPromptFirstLine: "broken",
+      userPromptFull: "broken",
+      runtime: "claude-code",
+      modelId: null,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("commit_failed");
+    expect(typeof result.detail).toBe("string");
+    expect(result.detail).not.toMatch(/gh[pousr]_[A-Za-z0-9_]+/);
+  });
+
+  it("computes shortstat for the very first commit using --root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wbd-commit-empty-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.email", "init@test.local"]);
+    await git(root, ["config", "user.name", "Init"]);
+    await writeFile(join(root, "first.txt"), "first\n");
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_first",
+      userPromptFirstLine: "first commit",
+      userPromptFull: "first commit",
+      runtime: "claude-code",
+      modelId: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.filesChanged).toBe(1);
   });
 });
