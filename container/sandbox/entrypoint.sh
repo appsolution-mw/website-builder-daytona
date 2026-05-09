@@ -5,22 +5,27 @@
 #   1) seeds /workspace/project or clones the selected GitHub repo
 #   2) installs project deps when a repo was cloned
 #   3) starts the app dev server in the background on PREVIEW_PORT
-#   4) execs broker in the foreground on BROKER_PORT
+#   4) starts the agent-runner sibling in the background on AGENT_RUNNER_PORT
+#   5) execs broker in the foreground on BROKER_PORT
 #
 # Required env (injected by the host via worker-agent):
-#   PROJECT_ID    — project uuid
-#   BROKER_TOKEN  — random token forwarded to broker for ws auth
+#   PROJECT_ID                — project uuid
+#   BROKER_TOKEN              — random token forwarded to broker for ws auth
+#   AGENT_RUNNER_HMAC_SECRET  — shared secret broker<->agent-runner HTTP HMAC
 # Optional:
-#   BROKER_PORT   — defaults 4000
-#   PREVIEW_PORT  — defaults 3000
+#   BROKER_PORT        — defaults 4000
+#   PREVIEW_PORT       — defaults 3000
+#   AGENT_RUNNER_PORT  — defaults 7050 (loopback only)
 #   PROJECT_SOURCE_TYPE — template|github; defaults template
 
 set -eu
 
 : "${PROJECT_ID:?PROJECT_ID is required}"
 : "${BROKER_TOKEN:?BROKER_TOKEN is required}"
+: "${AGENT_RUNNER_HMAC_SECRET:?AGENT_RUNNER_HMAC_SECRET is required}"
 BROKER_PORT="${BROKER_PORT:-4000}"
 PREVIEW_PORT="${PREVIEW_PORT:-3000}"
+AGENT_RUNNER_PORT="${AGENT_RUNNER_PORT:-7050}"
 PROJECT_SOURCE_TYPE="${PROJECT_SOURCE_TYPE:-template}"
 GITHUB_REPO_OWNER="${GITHUB_REPO_OWNER:-}"
 GITHUB_REPO_NAME="${GITHUB_REPO_NAME:-}"
@@ -144,6 +149,29 @@ if ! kill -0 "${NEXT_PID}" 2>/dev/null; then
   exit 1
 fi
 
-echo "[entrypoint] starting broker on :${BROKER_PORT} (foreground)"
 cd /opt/builder
-BROKER_PORT="${BROKER_PORT}" BROKER_TOKEN="${BROKER_TOKEN}" exec pnpm -F @wbd/broker start
+
+echo "[entrypoint] starting agent-runner on 127.0.0.1:${AGENT_RUNNER_PORT} (background)"
+AGENT_RUNNER_PORT="${AGENT_RUNNER_PORT}" \
+AGENT_RUNNER_HMAC_SECRET="${AGENT_RUNNER_HMAC_SECRET}" \
+  pnpm -F @wbd/agent-runner start > /workspace/agent-runner.log 2>&1 &
+RUNNER_PID=$!
+
+# Propagate signals to the agent-runner so the container shuts down cleanly.
+trap 'kill -TERM "${RUNNER_PID}" 2>/dev/null || true' TERM INT EXIT
+
+# Brief liveness check: agent-runner is required for any claude-code turn,
+# so fail fast if it died during startup.
+sleep 1
+if ! kill -0 "${RUNNER_PID}" 2>/dev/null; then
+  echo "[entrypoint] FATAL: agent-runner died during startup" >&2
+  cat /workspace/agent-runner.log >&2 || true
+  exit 1
+fi
+
+echo "[entrypoint] starting broker on :${BROKER_PORT} (foreground)"
+BROKER_PORT="${BROKER_PORT}" \
+BROKER_TOKEN="${BROKER_TOKEN}" \
+AGENT_RUNNER_HMAC_SECRET="${AGENT_RUNNER_HMAC_SECRET}" \
+AGENT_RUNNER_PORT="${AGENT_RUNNER_PORT}" \
+  exec pnpm -F @wbd/broker start

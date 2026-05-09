@@ -58,12 +58,16 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
         autoProvisionWhenFull: args.autoProvisionWhenFull ?? true,
       };
       const reservation = await reserveSandboxSlot(args, defaults, spawn.projectId);
-      const { worker, sandboxId, brokerToken, ws } = reservation;
+      const { worker, sandboxId, brokerToken, agentRunnerHmacSecret, ws } = reservation;
       const agent = args.agentClientFor(worker);
       let sandboxCreatedOnWorker = false;
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
+        // Per-sandbox shared secret used by the broker to sign HTTP calls to
+        // the in-container agent-runner sibling and by the agent-runner to
+        // verify them. Generated fresh per sandbox alongside BROKER_TOKEN.
+        AGENT_RUNNER_HMAC_SECRET: agentRunnerHmacSecret,
         ...args.brokerEnv?.(),
         ...sourceEnv(spawn.source),
       };
@@ -170,15 +174,17 @@ async function reserveSandboxSlot(
   worker: WorkerRecord;
   sandboxId: string;
   brokerToken: string;
+  agentRunnerHmacSecret: string;
   ws: { id: string };
 }> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const worker = await ensureWorker(args.scheduler, args.provisioner, defaults);
     const sandboxId = randomBytes(16).toString("hex");
     const brokerToken = randomBytes(32).toString("hex");
+    const agentRunnerHmacSecret = randomBytes(32).toString("hex");
     const ws = await reserveWorkerSandbox(worker, sandboxId, projectId);
     if (ws) {
-      return { worker, sandboxId, brokerToken, ws };
+      return { worker, sandboxId, brokerToken, agentRunnerHmacSecret, ws };
     }
   }
 
