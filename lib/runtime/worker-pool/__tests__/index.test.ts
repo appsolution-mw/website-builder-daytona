@@ -122,6 +122,14 @@ describe("createHetznerWorkerPoolRuntime", () => {
       SANDBOX_IMAGE: "wbd/sandbox:dev",
       WORKER_AGENT_HMAC_SECRET: "x".repeat(32),
     };
+    // Strip Hetzner-side env that the developer's .env (loaded into
+    // process.env at vitest setup time) leaves on `originalEnv`.
+    delete process.env.HETZNER_API_TOKEN;
+    delete process.env.TAILSCALE_API_KEY;
+    delete process.env.TAILSCALE_TAILNET;
+    delete process.env.WORKER_AGENT_IMAGE;
+    delete process.env.APP_BASE_URL;
+    delete process.env.WATCHTOWER_HTTP_API_TOKEN;
 
     expect(() => createHetznerWorkerPoolRuntime()).toThrow(/HETZNER_API_TOKEN/);
   });
@@ -156,8 +164,13 @@ describe("createHetznerWorkerPoolRuntime", () => {
       TAILSCALE_API_KEY: "tailscale-key",
       TAILSCALE_TAILNET: "example.ts.net",
       APP_BASE_URL: "https://app.example.com",
+      WATCHTOWER_HTTP_API_TOKEN: "watchtower-token",
       PUBLIC_BASE_DOMAIN: "example.com",
     };
+    // Strip the developer's CADDY_ADMIN_URL leaking from .env so the
+    // public-routing inconsistency check (only PUBLIC_BASE_DOMAIN set)
+    // actually fires.
+    delete process.env.CADDY_ADMIN_URL;
 
     expect(() => createHetznerWorkerPoolRuntime()).toThrow(
       /PUBLIC_BASE_DOMAIN and CADDY_ADMIN_URL/,

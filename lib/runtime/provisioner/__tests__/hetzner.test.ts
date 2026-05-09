@@ -345,6 +345,7 @@ describe("HetznerProvisioner", () => {
       WORKER_AGENT_HMAC_SECRET: "agent-secret",
       APP_BASE_URL: "https://app.example.com",
       SANDBOX_IMAGE: "sandbox:test",
+      WATCHTOWER_HTTP_API_TOKEN: "watchtower-token",
     });
 
     expect(provisioner.providerId).toBe("hetzner");
