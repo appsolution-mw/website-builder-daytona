@@ -15,8 +15,6 @@ export function CommitFileDiff({
 
   useEffect(() => {
     let cancelled = false;
-    setDiff(null);
-    setError(null);
     fetch(`/api/projects/${projectId}/commits/${sha}/diff?path=${encodeURIComponent(path)}`)
       .then(async (res) => {
         if (cancelled) return;

@@ -9,10 +9,15 @@ export function CommitDetail({ projectId, commit }: { projectId: string; commit:
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const [trackedSha, setTrackedSha] = useState<string | null>(commit?.sha ?? null);
+  if (trackedSha !== (commit?.sha ?? null)) {
+    setTrackedSha(commit?.sha ?? null);
     setFiles([]);
     setOpenPath(null);
     setError(null);
+  }
+
+  useEffect(() => {
     if (!commit) return;
     let cancelled = false;
     fetch(`/api/projects/${projectId}/commits/${commit.sha}/files`)
