@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/db/client";
 import { dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { prependOpenHandsLibrarySnapshotToPrompt } from "@/lib/agents/openhands-library-snapshot";
+import {
+  buildReplayContext,
+  type ReplayMessage,
+} from "@/lib/agents/runtimes/claude-code/replay-context";
 import { createAgentClient } from "@/lib/runtime/worker-pool/agent-client";
 import { resolveWorkerAgentClientConfig } from "@/lib/runtime/worker-pool";
 import { withTokenRecovery } from "@/lib/runtime/worker-pool/with-token-recovery";
@@ -138,6 +142,11 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
     let terminalError: string | null = null;
     const chunks: string[] = [];
     const resumeSession = await shouldResumeRun(run);
+    const protocolRuntime = dbRuntimeToProtocol(run.runtime);
+    const replayContext =
+      protocolRuntime === "claude-code"
+        ? await loadReplayContextForSession(run.sessionId)
+        : undefined;
     await withTokenRecovery(target.client, target.sandboxId, () =>
       target.client.executeProjectRun(
       target.sandboxId,
@@ -149,14 +158,17 @@ function createRunExecutionAdapter(projectId: string): RunExecutionAdapter {
         attemptId,
         prompt: promptForRun({
           prompt: userMessage.content,
-          runtime: dbRuntimeToProtocol(run.runtime),
+          runtime: protocolRuntime,
           snapshot: run.librarySnapshot?.snapshotJson,
         }),
-        runtime: dbRuntimeToProtocol(run.runtime),
+        runtime: protocolRuntime,
         resumeSession,
         ...(run.modelId ? { modelId: run.modelId } : {}),
         ...(userMessage.attachments.length > 0
           ? { attachments: userMessage.attachments }
+          : {}),
+        ...(replayContext && replayContext.length > 0
+          ? { replayContext }
           : {}),
       },
       async (event) => {
@@ -231,6 +243,34 @@ function promptForRun(input: {
     prompt: input.prompt,
     snapshot: input.snapshot,
   });
+}
+
+async function loadReplayContextForSession(
+  sessionId: string,
+): Promise<ReplayMessage[]> {
+  const recent = await prisma.message.findMany({
+    where: { sessionId, role: { in: ["USER", "AGENT"] } },
+    orderBy: { createdAt: "desc" },
+    take: 20,
+    select: {
+      role: true,
+      content: true,
+      attachments: {
+        orderBy: { position: "asc" },
+        select: { name: true, sizeBytes: true },
+      },
+    },
+  });
+  // findMany with desc returns newest first — reverse so the chronological
+  // order matches the original conversation.
+  recent.reverse();
+  return buildReplayContext(
+    recent.map((m) => ({
+      role: m.role === "USER" ? ("user" as const) : ("assistant" as const),
+      content: m.content,
+      attachments: m.attachments,
+    })),
+  );
 }
 
 async function shouldResumeRun(run: {

@@ -23,6 +23,12 @@ export interface AgentTurnOptions {
    * inputs. Broker-internal: not part of the host↔broker protocol.
    */
   attachmentPaths?: string[];
+  /**
+   * Last-N replay context (Task 14). Forwarded only by the claude-code provider
+   * to the agent-runner; ignored by other runtimes. Always sent on every turn so
+   * the runner can fall back to a transcript when SDK resume fails.
+   */
+  replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
   onEvent: (event: BrokerToHost) => unknown;
   signal?: AbortSignal;
   run?: AgentRunMetadata;

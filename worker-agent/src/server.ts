@@ -453,8 +453,22 @@ function isExecuteProjectRunRequest(value: unknown): value is ExecuteProjectRunR
     isWorkerAgentRuntime(body.runtime) &&
     typeof body.resumeSession === "boolean" &&
     (body.modelId === undefined || typeof body.modelId === "string") &&
-    isPromptImageAttachmentArrayOrUndefined(body.attachments)
+    isPromptImageAttachmentArrayOrUndefined(body.attachments) &&
+    isReplayContextOrUndefined(body.replayContext)
   );
+}
+
+function isReplayContextOrUndefined(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    if ((e.role !== "user" && e.role !== "assistant") || typeof e.text !== "string") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isPromptImageAttachmentArrayOrUndefined(value: unknown): boolean {

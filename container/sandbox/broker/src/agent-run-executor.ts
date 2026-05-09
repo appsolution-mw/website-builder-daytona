@@ -16,6 +16,8 @@ export async function executeAgentRun(input: {
   resumeSession: boolean;
   modelId?: string;
   attachments?: PromptImageAttachment[];
+  /** Optional last-N replay context (Task 14). Only forwarded for claude-code. */
+  replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
   projectRoot: string;
   signal: AbortSignal;
   persistEvent: PersistRunEvent;
@@ -73,6 +75,9 @@ export async function executeAgentRun(input: {
     modelId: input.modelId,
     ...(attachmentsForRunner ? { attachments: attachmentsForRunner } : {}),
     ...(attachmentPathsForRunner ? { attachmentPaths: attachmentPathsForRunner } : {}),
+    ...(input.runtime === "claude-code" && input.replayContext && input.replayContext.length > 0
+      ? { replayContext: input.replayContext }
+      : {}),
     onEvent: async (event) => {
       await input.persistEvent(event);
       input.broadcastEvent(event);

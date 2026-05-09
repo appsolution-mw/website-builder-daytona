@@ -67,6 +67,9 @@ export function createAgentProvider(opts: CreateAgentProviderOptions = {}): Agen
               })),
             }
           : {}),
+        ...(turn.replayContext && turn.replayContext.length > 0
+          ? { replayContext: turn.replayContext }
+          : {}),
         onEvent: turn.onEvent,
         ...(turn.signal ? { signal: turn.signal } : {}),
       }),

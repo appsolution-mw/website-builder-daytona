@@ -76,6 +76,12 @@ export interface ExecuteProjectRunRequest {
   resumeSession: boolean;
   modelId?: string;
   attachments?: PromptImageAttachment[];
+  /**
+   * Optional last-N message replay context (Task 14). Only forwarded for
+   * the claude-code runtime — passed as-is from the host to the broker so
+   * the agent-runner can fall back to a transcript when SDK resume fails.
+   */
+  replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 export interface BrokerCommandResponse {

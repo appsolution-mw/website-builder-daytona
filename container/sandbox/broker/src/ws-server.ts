@@ -63,6 +63,11 @@ interface ExecuteRunCommand {
   resumeSession: boolean;
   modelId?: string;
   attachments?: PromptImageAttachment[];
+  /**
+   * Optional replay context forwarded by the host (Task 14). Pass-through to
+   * `executeAgentRun`; only the claude-code runner uses it.
+   */
+  replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 interface ActiveRunState {
@@ -574,6 +579,7 @@ async function executeInternalRun(input: {
       resumeSession: input.command.resumeSession,
       modelId: input.command.modelId,
       attachments: input.command.attachments,
+      replayContext: input.command.replayContext,
       projectRoot: input.projectRoot,
       signal: ctl.signal,
       persistEvent,
@@ -615,8 +621,22 @@ function isExecuteRunCommand(value: unknown): value is ExecuteRunCommand {
     isAgentRuntime(body.runtime) &&
     typeof body.resumeSession === "boolean" &&
     (body.modelId === undefined || typeof body.modelId === "string") &&
-    isPromptImageAttachmentArrayOrUndefined(body.attachments)
+    isPromptImageAttachmentArrayOrUndefined(body.attachments) &&
+    isReplayContextOrUndefined(body.replayContext)
   );
+}
+
+function isReplayContextOrUndefined(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return false;
+    const e = entry as Record<string, unknown>;
+    if ((e.role !== "user" && e.role !== "assistant") || typeof e.text !== "string") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isPromptImageAttachmentArrayOrUndefined(value: unknown): boolean {

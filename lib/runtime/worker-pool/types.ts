@@ -81,6 +81,12 @@ export interface ExecuteProjectRunRequest {
   resumeSession: boolean;
   modelId?: string;
   attachments?: PromptImageAttachment[];
+  /**
+   * Optional last-N message replay context (Task 14). Only set for the
+   * claude-code runtime; the agent-runner uses it as a fallback when SDK
+   * resume cannot rehydrate a session.
+   */
+  replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 export interface AgentClient {
