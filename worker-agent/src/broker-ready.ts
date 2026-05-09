@@ -4,6 +4,12 @@ export interface WatchBrokerReadinessArgs {
   sandboxId: string;
   brokerHost: string;
   brokerPort: number;
+  /**
+   * Optional preview-container host port (typically 3000 -> 3xxxx). Reported
+   * back to the host alongside `brokerPort` so the host can self-heal stale
+   * cached values after a manual `docker restart` re-maps host ports.
+   */
+  previewPort?: number;
   hostUrl: string;
   hmacSecret: string;
   /** Stop polling after this many ms. Defaults to 180_000. */
@@ -41,7 +47,16 @@ export function watchBrokerReadiness(args: WatchBrokerReadinessArgs): () => void
 
   async function reportReady(): Promise<void> {
     const path = `/api/internal/sandboxes/${encodeURIComponent(args.sandboxId)}/broker-ready`;
-    const body = JSON.stringify({});
+    // Include the freshly-observed host ports so the host can self-heal its
+    // cached `WorkerSandbox.brokerPort` / `previewPort` if Docker re-mapped
+    // them (e.g. after a manual `docker restart`).
+    const payload: { brokerPort: number; previewPort?: number } = {
+      brokerPort: args.brokerPort,
+    };
+    if (typeof args.previewPort === "number") {
+      payload.previewPort = args.previewPort;
+    }
+    const body = JSON.stringify(payload);
     const ts = new Date().toISOString();
     const sig = sign({
       secret: args.hmacSecret,

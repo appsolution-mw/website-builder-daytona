@@ -121,6 +121,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
           sandboxId: created.sandboxId,
           brokerHost,
           brokerPort: created.brokerPort,
+          previewPort: created.previewPort,
           hostUrl: args.hostUrl,
           hmacSecret: args.hmacSecret,
         });

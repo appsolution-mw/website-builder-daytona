@@ -38,7 +38,7 @@ export async function POST(req: Request, { params }: RouteParams): Promise<Respo
 
   const sandbox = await prisma.workerSandbox.findUnique({
     where: { id },
-    select: { projectId: true },
+    select: { projectId: true, brokerPort: true, previewPort: true },
   });
   if (!sandbox) return new Response("unknown-sandbox", { status: 404 });
 
@@ -50,5 +50,42 @@ export async function POST(req: Request, { params }: RouteParams): Promise<Respo
     data: { brokerReady: true, brokerReadyAt: new Date() },
   });
 
+  // Self-heal: a manual `docker restart <name>` re-maps the host ports
+  // (4000/tcp -> 3xxxx may shift to a different 3yyyy) but the host has
+  // cached the OLD broker/preview ports. Worker-agent always knows the
+  // current mapping (from `docker inspect`), so it now reports them on
+  // every broker-ready callback. If they differ from what we have stored,
+  // persist the new values so subsequent run dispatches reach the broker.
+  // Old worker-agent versions may omit these fields — treat that as
+  // "no change requested" (keep cached values).
+  let parsedBody: unknown = null;
+  try {
+    parsedBody = body.length > 0 ? JSON.parse(body) : null;
+  } catch {
+    /* keep parsedBody = null; broker readiness flip already happened above */
+  }
+  const reportedBrokerPort = pickPositiveInt(parsedBody, "brokerPort");
+  const reportedPreviewPort = pickPositiveInt(parsedBody, "previewPort");
+  const portUpdate: { brokerPort?: number; previewPort?: number } = {};
+  if (reportedBrokerPort !== undefined && reportedBrokerPort !== sandbox.brokerPort) {
+    portUpdate.brokerPort = reportedBrokerPort;
+  }
+  if (reportedPreviewPort !== undefined && reportedPreviewPort !== sandbox.previewPort) {
+    portUpdate.previewPort = reportedPreviewPort;
+  }
+  if (Object.keys(portUpdate).length > 0) {
+    await prisma.workerSandbox.update({
+      where: { id },
+      data: portUpdate,
+    });
+  }
+
   return new Response(null, { status: 204 });
+}
+
+function pickPositiveInt(obj: unknown, key: string): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) return undefined;
+  return v;
 }

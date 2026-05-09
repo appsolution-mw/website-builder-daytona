@@ -121,6 +121,7 @@ async function main() {
         sandboxId: sandbox.sandboxId,
         brokerHost: BROKER_HOST,
         brokerPort: sandbox.brokerPort,
+        previewPort: sandbox.previewPort,
         hostUrl: HOST_URL,
         hmacSecret: HMAC_SECRET,
       });
