@@ -157,9 +157,6 @@ AGENT_RUNNER_HMAC_SECRET="${AGENT_RUNNER_HMAC_SECRET}" \
   pnpm -F @wbd/agent-runner start > /workspace/agent-runner.log 2>&1 &
 RUNNER_PID=$!
 
-# Propagate signals to the agent-runner so the container shuts down cleanly.
-trap 'kill -TERM "${RUNNER_PID}" 2>/dev/null || true' TERM INT EXIT
-
 # Brief liveness check: agent-runner is required for any claude-code turn,
 # so fail fast if it died during startup.
 sleep 1
@@ -169,9 +166,17 @@ if ! kill -0 "${RUNNER_PID}" 2>/dev/null; then
   exit 1
 fi
 
-echo "[entrypoint] starting broker on :${BROKER_PORT} (foreground)"
+echo "[entrypoint] starting broker on :${BROKER_PORT} (background, foreground via wait)"
 BROKER_PORT="${BROKER_PORT}" \
 BROKER_TOKEN="${BROKER_TOKEN}" \
 AGENT_RUNNER_HMAC_SECRET="${AGENT_RUNNER_HMAC_SECRET}" \
 AGENT_RUNNER_PORT="${AGENT_RUNNER_PORT}" \
-  exec pnpm -F @wbd/broker start
+  pnpm -F @wbd/broker start &
+BROKER_PID=$!
+
+# Propagate signals to all child processes so the container shuts down cleanly.
+# We background the broker and wait so the shell stays alive and the trap fires;
+# `exec` would replace the shell and discard the trap.
+trap 'kill -TERM "${BROKER_PID}" "${RUNNER_PID}" "${NEXT_PID}" 2>/dev/null || true; wait 2>/dev/null || true' TERM INT
+
+wait "${BROKER_PID}"
