@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import type { BrokerToHost, AgentRuntime } from "@wbd/protocol";
 import { mapSdkMessage } from "./sdk-event-mapper.js";
 import type { TurnRequest } from "./types.js";
@@ -47,7 +47,7 @@ export async function runTurn(req: TurnRequest, deps: RunTurnDeps): Promise<void
       agents: req.agents,
       // The SDK's mcpServers type is a union that's tricky to narrow at the
       // boundary; the host-side schema validates this before we get here.
-      mcpServers: req.mcpServers as never,
+      mcpServers: req.mcpServers as Options["mcpServers"],
       allowedTools: req.allowedTools,
       permissionMode: "acceptEdits",
       includePartialMessages: true,
@@ -58,10 +58,13 @@ export async function runTurn(req: TurnRequest, deps: RunTurnDeps): Promise<void
         excludeDynamicSections: true,
       },
       // Hook shape varies across SDK minor versions; the policy layer (Task 8)
-      // owns the concrete shape.
-      hooks: deps.buildHooks() as never,
+      // owns the concrete shape. Cast through unknown because buildHooks is
+      // intentionally typed as unknown until Task 8 supplies the real shape.
+      hooks: deps.buildHooks() as Options["hooks"],
       model: req.modelId,
-      abortController: deps.abort,
+      // Cancellation flows through iterator.interrupt() in onAbort below — a
+      // single graceful path. Do NOT also pass abortController here; double
+      // cancellation races two paths.
     },
   });
 

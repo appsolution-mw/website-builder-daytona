@@ -68,11 +68,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     const abort = new AbortController();
     inFlight.set(body.providerSessionId, { abort, startedAt: Date.now() });
 
+    // Order matters: hijack first, set statusCode BEFORE flushHeaders so Node
+    // commits the intended status (default would silently win otherwise).
+    // setHeader works equivalently before/after hijack; flushHeaders commits.
+    reply.hijack();
+    reply.raw.statusCode = 200;
     reply.raw.setHeader("Content-Type", "application/x-ndjson");
     reply.raw.setHeader("Cache-Control", "no-cache");
     reply.raw.setHeader("Connection", "keep-alive");
-    reply.hijack();
-    reply.raw.statusCode = 200;
     const flushHeaders = (reply.raw as { flushHeaders?: () => void }).flushHeaders;
     if (typeof flushHeaders === "function") flushHeaders.call(reply.raw);
 
