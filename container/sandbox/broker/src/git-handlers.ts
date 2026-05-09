@@ -262,8 +262,15 @@ export async function commitAgentTurn(
     return { ok: false, reason: "commit_failed", detail };
   }
 
-  const sha = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
-  const stat = await readShortstat(input.projectRoot, sha);
+  let sha: string;
+  let stat: { filesChanged: number; insertions: number; deletions: number };
+  try {
+    sha = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
+    stat = await readShortstat(input.projectRoot, sha);
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
 
   return {
     ok: true,
@@ -295,7 +302,11 @@ function buildCommitBody(input: CommitAgentTurnRequest): string {
 function byteTruncate(input: string, maxBytes: number): string {
   if (Buffer.byteLength(input, "utf8") <= maxBytes) return input;
   const buf = Buffer.from(input, "utf8");
-  return `${buf.subarray(0, maxBytes).toString("utf8")}…`;
+  // Walk backwards from maxBytes to the start of the last complete UTF-8 code point.
+  // UTF-8 continuation bytes have the bit pattern 10xxxxxx (0x80–0xBF).
+  let end = maxBytes;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return `${buf.subarray(0, end).toString("utf8")}…`;
 }
 
 function extractErrorMessage(error: unknown): string {

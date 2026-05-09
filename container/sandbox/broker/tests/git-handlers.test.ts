@@ -286,6 +286,24 @@ describe("commitAgentTurn", () => {
     expect(result.detail).not.toMatch(/gh[pousr]_[A-Za-z0-9_]+/);
   });
 
+  it("does not produce U+FFFD replacement characters when truncating multi-byte prompts", async () => {
+    const root = await createRepository();
+    await writeFile(join(root, "x.txt"), "x\n");
+    // 9 KB of German umlauts — each "äöü" is 6 UTF-8 bytes for 3 chars; total well over 8 KB.
+    const longPrompt = "Füge bitte ein Hörmodul für die Übersetzung ein. ".repeat(200);
+    const result = await commitAgentTurn({
+      projectRoot: root,
+      runId: "run_utf8",
+      userPromptFirstLine: longPrompt.split("\n")[0]!,
+      userPromptFull: longPrompt,
+      runtime: "claude-code",
+      modelId: null,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.bodyMessage).not.toContain("�");
+  });
+
   it("computes shortstat for the very first commit using --root", async () => {
     const root = await mkdtemp(join(tmpdir(), "wbd-commit-empty-"));
     tempDirs.push(root);
