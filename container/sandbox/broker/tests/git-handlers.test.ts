@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import {
   commitAndPushChanges,
   getGitStatus,
+  sanitizeCommitTitle,
   sanitizeGitOutput,
 } from "../src/git-handlers";
 
@@ -159,3 +160,31 @@ async function execGit(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args);
   return stdout.trim();
 }
+
+describe("sanitizeCommitTitle", () => {
+  it("returns first non-empty line, trimmed", () => {
+    expect(sanitizeCommitTitle("  hello\nworld  ")).toBe("hello");
+  });
+
+  it("strips control characters and collapses whitespace", () => {
+    expect(sanitizeCommitTitle("a  b\tc")).toBe("a b c");
+  });
+
+  it("truncates titles longer than 72 chars with an ellipsis", () => {
+    const long = "x".repeat(80);
+    const result = sanitizeCommitTitle(long);
+    expect(result.length).toBe(72);
+    expect(result.endsWith("…")).toBe(true);
+  });
+
+  it("returns the fallback when input is null, empty, or whitespace-only", () => {
+    expect(sanitizeCommitTitle(null, "agent turn abc1234")).toBe("agent turn abc1234");
+    expect(sanitizeCommitTitle("", "agent turn abc1234")).toBe("agent turn abc1234");
+    expect(sanitizeCommitTitle("   \n\t  ", "agent turn abc1234")).toBe("agent turn abc1234");
+  });
+
+  it("handles multi-byte unicode without overshooting the byte cap", () => {
+    const result = sanitizeCommitTitle("café".repeat(20));
+    expect(result.length).toBeLessThanOrEqual(72);
+  });
+});

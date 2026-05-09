@@ -186,3 +186,17 @@ function bufferToString(value: string | Buffer | undefined): string {
   if (value === undefined) return "";
   return Buffer.isBuffer(value) ? value.toString("utf8") : value;
 }
+
+const COMMIT_TITLE_MAX = 72;
+
+export function sanitizeCommitTitle(input: string | null | undefined, fallback = "agent turn"): string {
+  if (!input) return fallback;
+  const firstLine = input.split(/\r?\n/)[0] ?? "";
+  const stripped = firstLine
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!stripped) return fallback;
+  if (stripped.length <= COMMIT_TITLE_MAX) return stripped;
+  return `${stripped.slice(0, COMMIT_TITLE_MAX - 1)}…`;
+}
