@@ -6,7 +6,7 @@ export interface WatchBrokerReadinessArgs {
   brokerPort: number;
   hostUrl: string;
   hmacSecret: string;
-  /** Stop polling after this many ms. Defaults to 60_000. */
+  /** Stop polling after this many ms. Defaults to 180_000. */
   timeoutMs?: number;
   /** Polling interval. Defaults to 250ms. */
   intervalMs?: number;
@@ -23,7 +23,7 @@ export function watchBrokerReadiness(args: WatchBrokerReadinessArgs): () => void
   const fetchFn = args.fetch ?? globalThis.fetch;
   const log = args.log ?? ((m, e) => console.warn(`[broker-ready] ${m}`, e ?? ""));
   const intervalMs = args.intervalMs ?? 250;
-  const timeoutMs = args.timeoutMs ?? 60_000;
+  const timeoutMs = args.timeoutMs ?? 180_000;
   const deadline = Date.now() + timeoutMs;
   const probeUrl = `http://${args.brokerHost}:${args.brokerPort}/health`;
 
