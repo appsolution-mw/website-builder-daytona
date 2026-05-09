@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import type { Commit } from "@prisma/client";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
+import { serializeCommit } from "@/lib/workspace/commit-serializer";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -50,36 +50,3 @@ export async function GET(
   });
 }
 
-function serializeCommit(commit: Commit): {
-  id: string;
-  sha: string;
-  shortSha: string;
-  title: string;
-  bodyMessage: string;
-  filesChanged: number;
-  insertions: number;
-  deletions: number;
-  runtime: Commit["runtime"];
-  modelId: string | null;
-  authorKind: Commit["authorKind"];
-  sessionId: string | null;
-  agentRunId: string | null;
-  createdAt: string;
-} {
-  return {
-    id: commit.id,
-    sha: commit.sha,
-    shortSha: commit.shortSha,
-    title: commit.title,
-    bodyMessage: commit.bodyMessage,
-    filesChanged: commit.filesChanged,
-    insertions: commit.insertions,
-    deletions: commit.deletions,
-    runtime: commit.runtime,
-    modelId: commit.modelId,
-    authorKind: commit.authorKind,
-    sessionId: commit.sessionId,
-    agentRunId: commit.agentRunId,
-    createdAt: commit.createdAt.toISOString(),
-  };
-}

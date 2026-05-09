@@ -7,6 +7,7 @@ import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
 import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
+import { serializeCommit } from "@/lib/workspace/commit-serializer";
 
 const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
 const DEFAULT_SESSION_TITLE = "Main chat";
@@ -121,6 +122,11 @@ export async function GET(
 
   const chatSession = await ensureProjectSession(project.id);
   const chatSessions = await listProjectSessions(project.id);
+  const recentCommits = await prisma.commit.findMany({
+    where: { projectId: project.id },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 20,
+  });
 
   return NextResponse.json({
     project: {
@@ -130,6 +136,7 @@ export async function GET(
       availableRuntimes: AGENT_RUNTIME_OPTIONS,
       chatSession: serializeSession(chatSession),
       chatSessions: chatSessions.map(serializeSession),
+      commits: recentCommits.map(serializeCommit),
     },
   });
 }
