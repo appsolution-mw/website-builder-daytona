@@ -3,6 +3,7 @@ import type { BuildServerOptions, InFlightTurn, TurnRequest } from "./types.js";
 import { verifyRequest } from "./hmac.js";
 import { runTurn } from "./sdk-runner.js";
 import { mergeAgentContext } from "./bootstrap-merge.js";
+import { buildPolicyHooks, policyHooksToSdk } from "./policy-hooks.js";
 
 const HMAC_MAX_AGE_MS = 60_000;
 
@@ -101,8 +102,23 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
         abort,
         runtime: "claude-code",
         emit,
-        // Task 8 will inject real PreToolUse/PostToolUse policy hooks.
-        buildHooks: () => ({}),
+        // Task 8: real PreToolUse policy hooks. The internal `PolicyHooks`
+        // shape is adapted to the SDK's `HookCallbackMatcher` shape via
+        // `policyHooksToSdk`. Violations are emitted as `agent.policy_violation`
+        // events on the same NDJSON stream consumed by the broker.
+        buildHooks: () =>
+          policyHooksToSdk(
+            buildPolicyHooks({
+              emitViolation: (v) =>
+                emit({
+                  type: "agent.policy_violation",
+                  turnId: body.turnId,
+                  tool: v.tool,
+                  reason: v.reason,
+                  redactedInput: JSON.stringify(v.redactedInput),
+                }),
+            }),
+          ),
       });
     } catch (err) {
       emit({
