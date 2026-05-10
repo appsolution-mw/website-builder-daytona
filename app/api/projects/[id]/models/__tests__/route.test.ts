@@ -11,6 +11,7 @@ const MODELS_URL =
 
 const originalDevUserId = process.env.DEV_USER_ID;
 const originalOpenHandsModel = process.env.OPENHANDS_MODEL;
+const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
 process.env.DEV_USER_ID = DEV_USER_ID;
 
 async function cleanDatabase(): Promise<void> {
@@ -33,10 +34,15 @@ describe("GET /api/projects/[id]/models", () => {
 
     if (originalOpenHandsModel === undefined) {
       delete process.env.OPENHANDS_MODEL;
-      return;
+    } else {
+      process.env.OPENHANDS_MODEL = originalOpenHandsModel;
     }
 
-    process.env.OPENHANDS_MODEL = originalOpenHandsModel;
+    if (originalAnthropicApiKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
+    }
   });
 
   beforeEach(async () => {
@@ -44,6 +50,7 @@ describe("GET /api/projects/[id]/models", () => {
     vi.unstubAllGlobals();
     process.env.DEV_USER_ID = DEV_USER_ID;
     delete process.env.OPENHANDS_MODEL;
+    delete process.env.ANTHROPIC_API_KEY;
     await cleanDatabase();
     await prisma.user.create({
       data: { id: DEV_USER_ID, email: "models-route-user@example.com" },
@@ -262,7 +269,62 @@ describe("GET /api/projects/[id]/models", () => {
     });
   });
 
-  it("returns the curated Claude model list for runtime=claude-code", async () => {
+  it("fetches Claude models from the Anthropic API and adds [1m] variants", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const target = String(url);
+      expect(target.startsWith("https://api.anthropic.com/v1/models")).toBe(true);
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.["x-api-key"]).toBe("sk-ant-test");
+      expect(headers?.["anthropic-version"]).toBe("2023-06-01");
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              type: "model",
+              id: "claude-opus-4-7-20251101",
+              display_name: "Claude Opus 4.7",
+              created_at: "2025-11-01T00:00:00Z",
+            },
+            {
+              type: "model",
+              id: "claude-haiku-4-5-20251001",
+              display_name: "Claude Haiku 4.5",
+              created_at: "2025-10-01T00:00:00Z",
+            },
+          ],
+          has_more: false,
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=claude-code`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { models: { id: string; contextLength: number }[] };
+    const ids = body.models.map((m) => m.id);
+    expect(ids).toContain("claude-opus-4-7-20251101[1m]");
+    expect(ids).toContain("claude-opus-4-7-20251101");
+    expect(ids).toContain("claude-haiku-4-5-20251001");
+    expect(ids).not.toContain("claude-haiku-4-5-20251001[1m]");
+    const oneMVariant = body.models.find((m) => m.id === "claude-opus-4-7-20251101[1m]");
+    expect(oneMVariant?.contextLength).toBe(1_000_000);
+  });
+
+  it("returns 502 when ANTHROPIC_API_KEY is unset for runtime=claude-code", async () => {
+    delete process.env.ANTHROPIC_API_KEY;
     await prisma.project.create({
       data: {
         id: PROJECT_ID,
@@ -276,10 +338,32 @@ describe("GET /api/projects/[id]/models", () => {
       { params: Promise.resolve({ id: PROJECT_ID }) },
     );
 
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { models: { id: string }[] };
-    expect(body.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
-    expect(body.models.length).toBeGreaterThan(1);
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({
+      error: "ANTHROPIC_API_KEY is not configured",
+    });
+  });
+
+  it("returns 502 when the Anthropic models request fails", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("forbidden", { status: 403 })));
+
+    const res = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=claude-code`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+
+    expect(res.status).toBe(502);
+    await expect(res.json()).resolves.toEqual({
+      error: "Anthropic models request failed: HTTP 403",
+    });
   });
 
   it("rejects requests with no or unsupported runtime", async () => {

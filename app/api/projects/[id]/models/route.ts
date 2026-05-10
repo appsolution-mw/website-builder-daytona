@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
+import { fetchAnthropicModels } from "@/lib/anthropic/models";
 import { fetchOpenRouterModels, type OpenRouterModelOption } from "@/lib/openrouter/models";
-import { CLAUDE_CODE_MODELS } from "@/lib/agents/claude-models";
 
 function normalizeConfiguredModelId(modelId: string): string {
   return modelId.startsWith("openrouter/") ? `openrouter:${modelId.slice("openrouter/".length)}` : modelId;
@@ -81,7 +81,20 @@ export async function GET(
   const runtime = new URL(request.url).searchParams.get("runtime");
 
   if (runtime === "claude-code") {
-    return NextResponse.json({ models: CLAUDE_CODE_MODELS });
+    const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "ANTHROPIC_API_KEY is not configured" },
+        { status: 502 },
+      );
+    }
+    try {
+      const models = await fetchAnthropicModels(apiKey);
+      return NextResponse.json({ models });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Anthropic models request failed";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
   }
   if (runtime === "openhands") {
     return openHandsModels();
