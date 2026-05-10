@@ -204,6 +204,7 @@ model Commit {
   filesChanged  Int
   insertions    Int
   deletions     Int
+  revertedFromSha String?        // 40-char hex; only set when authorKind=ROLLBACK
   createdAt     DateTime         @default(now())
 
   @@index([projectId, createdAt])
@@ -424,6 +425,7 @@ enum AgentRunEventType {
 enum CommitAuthorKind {
   AGENT
   USER
+  ROLLBACK
 }
 
 enum ProjectQueueStatus {
