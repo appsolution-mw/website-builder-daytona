@@ -1658,6 +1658,7 @@ export default function ProjectWorkspace({
         sessionId: null,
         agentRunId: ev.turnId,
         revertedFromSha: ev.revertedFromSha ?? null,
+        userEmail: null,
         createdAt: ev.committedAt,
       });
       // Force-reload the preview iframe whenever the agent commits real
