@@ -48,6 +48,7 @@ export function CommitDetail({
   }
 
   const isRollback = commit.authorKind === "ROLLBACK";
+  const isUser = commit.authorKind === "USER";
   const showRevert = !isHead && !isRollback && Boolean(onRevertClick);
 
   return (
@@ -55,12 +56,12 @@ export function CommitDetail({
       <div className="mb-4 flex items-start gap-3 border-b border-border pb-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold">
-            {isRollback ? "↶ " : ""}{commit.title}
+            {isRollback ? "↶ " : isUser ? "✎ " : ""}{commit.title}
           </h2>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="font-mono">{commit.shortSha}</span>
             <span>·</span>
-            <span>launchnode-agent</span>
+            <span>{isUser ? (commit.userEmail ?? "user") : "launchnode-agent"}</span>
             <span>·</span>
             <span>{new Date(commit.createdAt).toLocaleString()}</span>
             {commit.runtime && (<><span>·</span><span>{runtimeLabel(dbRuntimeToProtocol(commit.runtime))}{commit.modelId ? ` · ${commit.modelId}` : ""}</span></>)}

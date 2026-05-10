@@ -39,7 +39,7 @@ export function CommitList({
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs text-muted-foreground">{c.shortSha}</span>
                 <span className="truncate font-medium">
-                  {c.authorKind === "ROLLBACK" ? "↶ " : ""}{c.title}
+                  {c.authorKind === "ROLLBACK" ? "↶ " : c.authorKind === "USER" ? "✎ " : ""}{c.title}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
