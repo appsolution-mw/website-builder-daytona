@@ -1169,6 +1169,68 @@ describe("broker ws server", () => {
 
       client.close();
     });
+
+    it("flushes pending user-edit commits before reverting (no dirty_tree)", async () => {
+      const { mkdtemp, writeFile } = await import("node:fs/promises");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const execFileAsync = promisify(execFile);
+      const root = await mkdtemp(join(tmpdir(), "wbd-revert-flush-"));
+      const git = async (args: string[]): Promise<string> => {
+        const { stdout } = await execFileAsync("git", args, { cwd: root });
+        return stdout.trim();
+      };
+
+      // Seed two commits.
+      await git(["init", "-q", "-b", "main"]);
+      await git(["config", "user.name", "Seed"]);
+      await git(["config", "user.email", "seed@example.com"]);
+      await writeFile(join(root, "a.txt"), "first\n");
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "first"]);
+      const firstSha = await git(["rev-parse", "HEAD"]);
+      await writeFile(join(root, "a.txt"), "second\n");
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "second"]);
+
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({
+        port: 0,
+        projectRoot: root,
+        enableFsTracker: false,                 // we do NOT want the 5s debounce; we trigger flush via revert.
+        userIdentity: { name: "Alice", email: "alice@example.com" },
+      });
+
+      // Make a user edit BEFORE calling revert. The debounce timer is not
+      // running (no fs-tracker); the pre-revert flush must commit this.
+      await writeFile(join(root, "scratch.txt"), "draft work");
+
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/revert`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer broker-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ sha: firstSha, triggeredBy: "user:u1" }),
+        },
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);              // dirty_tree did NOT block — pre-flush worked.
+
+      // The flush should have created a USER commit and enqueued it for
+      // the worker-agent forwarder to pick up.
+      const pull = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/pull?timeout=500`,
+        { headers: { authorization: "Bearer broker-token" } },
+      );
+      const pulled = (await pull.json()) as { events: unknown[] };
+      expect(pulled.events.length).toBeGreaterThan(0);
+    });
   });
 
   it("rejects internal queue drain without a valid bearer token", async () => {

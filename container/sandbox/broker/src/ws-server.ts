@@ -668,6 +668,7 @@ async function handleInternalHttpRequest(
       return;
     }
     try {
+      await opts.flushUserEdits();
       const result = await revertToCommit({
         projectRoot: opts.projectRoot,
         sha: body.sha,
