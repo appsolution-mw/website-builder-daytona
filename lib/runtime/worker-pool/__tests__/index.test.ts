@@ -32,6 +32,30 @@ describe("worker-pool broker env", () => {
     });
   });
 
+  it("drops a stale OpenRouter base URL when the real Anthropic key is set", () => {
+    expect(collectBrokerEnv({
+      AGENT_RUNTIME: "claude-code",
+      ANTHROPIC_API_KEY: "sk-ant-real-key",
+      ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+      OPENROUTER_API_KEY: "sk-or-v1-stale",
+      CLAUDE_MODEL: "claude-sonnet-4-6",
+    })).toEqual({
+      AGENT_RUNTIME: "claude-code",
+      ANTHROPIC_API_KEY: "sk-ant-real-key",
+      OPENROUTER_API_KEY: "sk-or-v1-stale",
+      CLAUDE_MODEL: "claude-sonnet-4-6",
+    });
+  });
+
+  it("preserves a non-OpenRouter custom Anthropic base URL", () => {
+    const result = collectBrokerEnv({
+      AGENT_RUNTIME: "claude-code",
+      ANTHROPIC_API_KEY: "sk-ant-real-key",
+      ANTHROPIC_BASE_URL: "https://anthropic.example.com",
+    });
+    expect(result.ANTHROPIC_BASE_URL).toBe("https://anthropic.example.com");
+  });
+
   it("can collect broker env from an explicit env source", () => {
     expect(collectBrokerEnv({
       AGENT_RUNTIME: "openai-codex",

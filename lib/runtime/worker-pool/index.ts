@@ -143,6 +143,18 @@ export function collectBrokerEnv(runtimeEnv: Record<string, string> = collectRun
     const v = runtimeEnv[k];
     if (v) env[k] = v;
   }
+  // If the real Anthropic key is configured, drop any stale OpenRouter
+  // base URL that may still hang around in process.env (e.g. left over
+  // from a previous shell session where OPENROUTER_API_KEY was active).
+  // Without this, the Claude Agent SDK would send requests with the
+  // sk-ant-… key to openrouter.ai instead of api.anthropic.com.
+  if (
+    env.ANTHROPIC_API_KEY?.startsWith("sk-ant-") &&
+    env.ANTHROPIC_BASE_URL &&
+    /openrouter\.ai/i.test(env.ANTHROPIC_BASE_URL)
+  ) {
+    delete env.ANTHROPIC_BASE_URL;
+  }
   if (!env.ANTHROPIC_API_KEY && runtimeEnv.OPENROUTER_API_KEY) {
     env.ANTHROPIC_API_KEY = runtimeEnv.OPENROUTER_API_KEY;
   }
