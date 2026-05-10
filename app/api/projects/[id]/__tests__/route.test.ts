@@ -4,6 +4,11 @@ const projectFindFirstMock = vi.hoisted(() => vi.fn());
 const sessionFindFirstMock = vi.hoisted(() => vi.fn());
 const sessionFindManyMock = vi.hoisted(() => vi.fn());
 const commitFindManyMock = vi.hoisted(() => vi.fn());
+const getDailyQuotaStateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/usage/daily-quota", () => ({
+  getDailyQuotaState: getDailyQuotaStateMock,
+}));
 
 vi.mock("@/lib/runtime", () => ({
   createRuntime: vi.fn(),
@@ -43,6 +48,13 @@ import { GET } from "../route";
 describe("GET /api/projects/[id]", () => {
   beforeEach(() => {
     commitFindManyMock.mockResolvedValue([]);
+    getDailyQuotaStateMock.mockResolvedValue({
+      todaySpend: 0,
+      dailyCap: 0,
+      perTurnCap: 0,
+      resetsAt: "2026-05-12T00:00:00.000Z",
+      exceeded: false,
+    });
   });
 
   afterEach(() => {
