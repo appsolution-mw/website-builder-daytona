@@ -402,6 +402,7 @@ export async function revertToCommit(
 
   // 5. Restore files from the original commit and commit.
   try {
+    await runGit(input.projectRoot, ["rm", "-r", "--cached", "--ignore-unmatch", "."]);
     await runGit(input.projectRoot, ["checkout", input.sha, "--", "."]);
     const commitArgs = [
       "-c",
@@ -445,10 +446,10 @@ export async function revertToCommit(
 }
 
 function buildRevertBody(input: { sha: string; triggeredBy: string }): string {
-  const sanitisedTrigger = input.triggeredBy
-    .replace(/[\x00-\x1f\x7f]/g, " ")
-    .trim()
-    .slice(0, 200);
+  const sanitisedTrigger = byteTruncate(
+    input.triggeredBy.replace(/[\x00-\x1f\x7f]/g, " ").trim(),
+    200,
+  );
   return [
     `Reverted-from: ${input.sha}`,
     `Triggered-by: ${sanitisedTrigger}`,

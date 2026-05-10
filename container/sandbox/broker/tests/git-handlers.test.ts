@@ -520,4 +520,27 @@ describe("revertToCommit", () => {
     expect(body).toContain(`Reverted-from: ${a}`);
     expect(body).toContain("Triggered-by: user:abc123");
   });
+
+  it("removes files that were added after the target commit", async () => {
+    const root = await createRepository();
+    const a = await commitFile(root, "a.txt", "v1", "seed v1");
+    await commitFile(root, "b.txt", "added later", "add b");
+    // Sanity: b.txt exists at HEAD
+    expect(await readFile(join(root, "b.txt"), "utf8")).toBe("added later");
+
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: a,
+      triggeredBy: "user:u1",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // After revert, b.txt should NOT be tracked at HEAD anymore.
+    const tree = (await git(root, ["ls-tree", "-r", "--name-only", "HEAD"]))
+      .trim()
+      .split("\n");
+    expect(tree).not.toContain("b.txt");
+    expect(tree).toContain("a.txt");
+  });
 });
