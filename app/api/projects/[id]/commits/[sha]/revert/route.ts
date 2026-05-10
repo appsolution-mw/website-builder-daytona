@@ -72,19 +72,19 @@ export async function POST(
   const result = await brokerRevertToCommit(brokerProject, sha, triggeredBy);
 
   if (!result.ok) {
-    if (result.reason === "dirty_tree") {
-      return NextResponse.json({ reason: "dirty_tree" }, { status: 400 });
+    switch (result.reason) {
+      case "dirty_tree":
+        return NextResponse.json({ reason: "dirty_tree" }, { status: 400 });
+      case "unknown_sha":
+        return NextResponse.json({ reason: "unknown_sha" }, { status: 404 });
+      case "is_head":
+        return NextResponse.json({ reason: "is_head" }, { status: 409 });
+      case "commit_failed":
+        return NextResponse.json(
+          { reason: "commit_failed", detail: result.detail },
+          { status: 500 },
+        );
     }
-    if (result.reason === "unknown_sha") {
-      return NextResponse.json({ reason: "unknown_sha" }, { status: 404 });
-    }
-    if (result.reason === "is_head") {
-      return NextResponse.json({ reason: "is_head" }, { status: 409 });
-    }
-    return NextResponse.json(
-      { reason: "commit_failed", detail: result.detail },
-      { status: 500 },
-    );
   }
 
   await prisma.commit.create({
