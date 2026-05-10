@@ -456,6 +456,173 @@ function buildRevertBody(input: { sha: string; triggeredBy: string }): string {
   ].join("\n");
 }
 
+export interface CommitUserEditsRequest {
+  projectRoot: string;
+  authorName: string;
+  authorEmail: string;
+}
+
+export type CommitUserEditsResponse =
+  | {
+      ok: true;
+      sha: string;
+      shortSha: string;
+      title: string;
+      bodyMessage: string;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+      committedAt: string;
+    }
+  | { ok: false; reason: "no_changes" | "no_identity" }
+  | { ok: false; reason: "commit_failed"; detail: string };
+
+export async function commitUserEditsIfDirty(
+  input: CommitUserEditsRequest,
+): Promise<CommitUserEditsResponse> {
+  if (!input.authorName.trim() || !input.authorEmail.trim()) {
+    return { ok: false, reason: "no_identity" };
+  }
+
+  let status: GitStatusResponse;
+  try {
+    status = await getGitStatus({ projectRoot: input.projectRoot });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "commit_failed",
+      detail: sanitizeGitOutput(extractErrorMessage(error)),
+    };
+  }
+  if (!status.hasChanges) return { ok: false, reason: "no_changes" };
+
+  // Stage everything; if nothing actually staged (e.g. gitignored), bail.
+  try {
+    await runGit(input.projectRoot, ["add", "-A"]);
+    try {
+      await runGit(input.projectRoot, ["diff", "--cached", "--quiet"]);
+      // Exit 0 means index matches HEAD → nothing actually staged.
+      await runGit(input.projectRoot, ["reset"]);
+      return { ok: false, reason: "no_changes" };
+    } catch {
+      // Non-zero exit means there ARE staged changes — proceed.
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "commit_failed",
+      detail: sanitizeGitOutput(extractErrorMessage(error)),
+    };
+  }
+
+  // Read staged file list.
+  let stagedFiles: string[];
+  try {
+    const raw = await runGit(input.projectRoot, [
+      "diff",
+      "--cached",
+      "--name-only",
+    ]);
+    stagedFiles = raw.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "commit_failed",
+      detail: sanitizeGitOutput(extractErrorMessage(error)),
+    };
+  }
+
+  const title = composeUserEditTitle(stagedFiles);
+  const bodyMessage = await composeUserEditBody({
+    projectRoot: input.projectRoot,
+    authorEmail: input.authorEmail,
+  });
+
+  const authorStr = `${input.authorName} <${input.authorEmail}>`;
+  try {
+    await runGit(input.projectRoot, [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      `--author=${authorStr}`,
+      "-m",
+      title,
+      "-m",
+      bodyMessage,
+    ]);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "commit_failed",
+      detail: sanitizeGitOutput(extractErrorMessage(error)),
+    };
+  }
+
+  let sha: string;
+  let stat: { filesChanged: number; insertions: number; deletions: number };
+  try {
+    sha = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
+    stat = await readShortstat(input.projectRoot, sha);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "commit_failed",
+      detail: sanitizeGitOutput(extractErrorMessage(error)),
+    };
+  }
+
+  return {
+    ok: true,
+    sha,
+    shortSha: sha.slice(0, 7),
+    title,
+    bodyMessage,
+    filesChanged: stat.filesChanged,
+    insertions: stat.insertions,
+    deletions: stat.deletions,
+    committedAt: new Date().toISOString(),
+  };
+}
+
+function composeUserEditTitle(files: string[]): string {
+  if (files.length === 0) return "Edit files";
+  if (files.length === 1) return sanitizeCommitTitle(`Edit ${files[0]}`);
+  if (files.length === 2) return sanitizeCommitTitle(`Edit ${files[0]} and ${files[1]}`);
+  return sanitizeCommitTitle(`Edit ${files.length} files`);
+}
+
+async function composeUserEditBody(input: {
+  projectRoot: string;
+  authorEmail: string;
+}): Promise<string> {
+  let numstat = "";
+  try {
+    numstat = await runGit(input.projectRoot, [
+      "diff",
+      "--cached",
+      "--numstat",
+    ]);
+  } catch {
+    /* fall through with empty numstat */
+  }
+  const lines = numstat
+    .split("\n")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+    .map((line) => {
+      const [ins, del, ...rest] = line.split("\t");
+      const path = rest.join("\t");
+      const i = ins === "-" ? 0 : parseInt(ins ?? "", 10) || 0;
+      const d = del === "-" ? 0 : parseInt(del ?? "", 10) || 0;
+      return `${path} | +${i} -${d}`;
+    });
+
+  const sections = [lines.join("\n"), `Author: ${input.authorEmail}`].filter(
+    (s) => s.length > 0,
+  );
+  return byteTruncate(sections.join("\n\n"), COMMIT_BODY_MAX_BYTES);
+}
+
 export async function getCommitFiles(input: {
   projectRoot: string;
   sha: string;

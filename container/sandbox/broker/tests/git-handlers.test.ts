@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   commitAgentTurn,
   commitAndPushChanges,
+  commitUserEditsIfDirty,
   getCommitDiff,
   getCommitFiles,
   getGitStatus,
@@ -542,5 +543,151 @@ describe("revertToCommit", () => {
       .split("\n");
     expect(tree).not.toContain("b.txt");
     expect(tree).toContain("a.txt");
+  });
+});
+
+describe("commitUserEditsIfDirty", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-commit-user-edits-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    return root;
+  }
+
+  async function commitFile(
+    root: string,
+    relPath: string,
+    contents: string,
+  ): Promise<string> {
+    await writeFile(join(root, relPath), contents);
+    await git(root, ["add", relPath]);
+    await git(root, ["commit", "-m", `seed ${relPath}`]);
+    return (await git(root, ["rev-parse", "HEAD"])).trim();
+  }
+
+  it("returns no_identity when authorName is empty", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    await commitFile(repo, "a.txt", "v2");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "",
+      authorEmail: "u@example.com",
+    });
+    expect(res).toEqual({ ok: false, reason: "no_identity" });
+  });
+
+  it("returns no_identity when authorEmail is empty", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "",
+    });
+    expect(res).toEqual({ ok: false, reason: "no_identity" });
+  });
+
+  it("returns no_changes when working tree is clean", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res).toEqual({ ok: false, reason: "no_changes" });
+  });
+
+  it("commits a single dirty file as USER with the right title", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    await writeFile(`${repo}/a.txt`, "v2");
+
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.title).toBe("Edit a.txt");
+    expect(res.filesChanged).toBe(1);
+
+    const log = (await git(repo, ["log", "-1", "--format=%an <%ae>"])).trim();
+    expect(log).toBe("Alice <alice@example.com>");
+  });
+
+  it("composes title for two files with 'and'", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    await commitFile(repo, "b.txt", "v1");
+    await writeFile(`${repo}/a.txt`, "v2");
+    await writeFile(`${repo}/b.txt`, "v2");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.title).toBe("Edit a.txt and b.txt");
+  });
+
+  it("composes title for three+ files as 'Edit N files'", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1");
+    await commitFile(repo, "b.txt", "v1");
+    await commitFile(repo, "c.txt", "v1");
+    await writeFile(`${repo}/a.txt`, "v2");
+    await writeFile(`${repo}/b.txt`, "v2");
+    await writeFile(`${repo}/c.txt`, "v2");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.title).toBe("Edit 3 files");
+  });
+
+  it("body contains per-file shortstat and author trailer", async () => {
+    const repo = await createRepository();
+    await commitFile(repo, "a.txt", "v1\n");
+    await writeFile(`${repo}/a.txt`, "v1\nv2\n");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const body = await git(repo, ["log", "-1", "--format=%b"]);
+    expect(body).toContain("a.txt");
+    expect(body).toContain("Author: alice@example.com");
+  });
+
+  it("returns no_changes when only gitignored files are dirty", async () => {
+    const repo = await createRepository();
+    await writeFile(`${repo}/.gitignore`, "build/\n");
+    await commitFile(repo, ".gitignore", "build/\n");
+    await mkdir(`${repo}/build`, { recursive: true });
+    await writeFile(`${repo}/build/out.js`, "var x;");
+    const res = await commitUserEditsIfDirty({
+      projectRoot: repo,
+      authorName: "Alice",
+      authorEmail: "alice@example.com",
+    });
+    expect(res).toEqual({ ok: false, reason: "no_changes" });
   });
 });
