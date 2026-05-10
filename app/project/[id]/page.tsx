@@ -2322,6 +2322,12 @@ export default function ProjectWorkspace({
 
   async function onSubmit(e: FormEvent): Promise<void> {
     e.preventDefault();
+    // The user just sent a prompt — they expect to see their own message and
+    // the streaming reply at the bottom regardless of where they were
+    // scrolled. Force-stick to the bottom so the messages-effect scrolls
+    // both the optimistic user bubble and every subsequent agent chunk into
+    // view; if they manually scroll up later, onChatScroll re-disengages.
+    stickToBottomRef.current = true;
     const attachments = draftAttachmentsRef.current;
     const text = prompt.trim() || (attachments.length > 0 ? "Use the attached image as context." : "");
     const session = activeSessionRef.current;
