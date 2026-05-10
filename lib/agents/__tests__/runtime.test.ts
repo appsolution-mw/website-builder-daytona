@@ -21,12 +21,8 @@ describe("agent runtime mappings", () => {
     process.env.OPENHANDS_MODEL = originalOpenHandsModel;
   });
 
-  it("includes OpenHands as a selectable runtime", () => {
-    expect(AGENT_RUNTIME_OPTIONS).toContainEqual({
-      value: "openhands",
-      label: "OpenHands",
-      provider: "OpenHands SDK",
-    });
+  it("hides OpenHands from the runtime picker but still recognises it for legacy data", () => {
+    expect(AGENT_RUNTIME_OPTIONS.map((option) => option.value)).not.toContain("openhands");
     expect(isAgentRuntime("openhands")).toBe(true);
   });
 
