@@ -28,6 +28,7 @@ import {
   Loader2,
   MessageSquare,
   Monitor,
+  Paperclip,
   Plus,
   RefreshCw,
   Save,
@@ -52,6 +53,7 @@ import type {
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
+import { ReasoningEffortPicker, type ReasoningEffort } from "@/components/chat/ReasoningEffortPicker";
 import { PresetPicker, type PresetOption } from "@/components/library/PresetPicker";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
@@ -636,6 +638,8 @@ export default function ProjectWorkspace({
   const [prompt, setPrompt] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("medium");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const [queueState, setQueueState] = useState<ProjectRunQueueState>(IDLE_QUEUE_STATE);
@@ -2701,92 +2705,149 @@ export default function ProjectWorkspace({
               <Message key={(m.turnId ?? "err") + ":" + idx} m={m} />
             ))}
           </ul>
-          <form onSubmit={onSubmit} className="flex shrink-0 flex-col gap-2 border-t border-border bg-background/55 p-3">
+          <form onSubmit={onSubmit} className="shrink-0 border-t border-border bg-background/40 px-3 pb-3 pt-3">
             <label className="sr-only" htmlFor="agent-prompt">Prompt</label>
-            <Textarea
-              id="agent-prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onPaste={onPromptPaste}
-              placeholder={`Tell ${runtimeLabel(selectedRuntime)} what to change...`}
-              rows={3}
-              disabled={!activeSession}
-              className="min-h-28"
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                if (files.length > 0) void addImageFiles(files);
+                e.target.value = "";
+              }}
             />
-            {draftAttachments.length > 0 && (
-              <ul className="grid grid-cols-2 gap-2">
-                {draftAttachments.map((attachment) => (
-                  <li
-                    key={attachment.id}
-                    className="group relative overflow-hidden rounded-md border border-border bg-card"
+            <div
+              className={cn(
+                "flex flex-col gap-2 rounded-2xl border border-border bg-background/80 px-3 pb-2 pt-3 shadow-sm transition",
+                "focus-within:border-primary/50 focus-within:shadow-md focus-within:ring-1 focus-within:ring-primary/30",
+              )}
+            >
+              <Textarea
+                id="agent-prompt"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onPaste={onPromptPaste}
+                placeholder={`Tell ${runtimeLabel(selectedRuntime)} what to change...`}
+                rows={3}
+                disabled={!activeSession}
+                className="min-h-20 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+              />
+              {draftAttachments.length > 0 && (
+                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {draftAttachments.map((attachment) => (
+                    <li
+                      key={attachment.id}
+                      className="group relative overflow-hidden rounded-md border border-border bg-card"
+                    >
+                      <div
+                        role="img"
+                        aria-label={attachment.name}
+                        className="h-20 w-full bg-cover bg-center"
+                        style={{ backgroundImage: `url(${attachment.dataUrl})` }}
+                      />
+                      <div className="flex min-w-0 items-center gap-1.5 px-2 py-1">
+                        <ImagePlus className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+                        <span className="truncate text-xs text-muted-foreground" title={attachment.name}>
+                          {attachment.name}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="icon-xs"
+                        aria-label={`Remove ${attachment.name}`}
+                        className="absolute right-1 top-1 opacity-95"
+                        onClick={() => removeDraftAttachment(attachment.id)}
+                      >
+                        <X />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {modelsError && (
+                <div className="flex items-center gap-2 text-xs text-red-200">
+                  <span className="min-w-0 flex-1 truncate" title={modelsError}>
+                    Models unavailable: {modelsError}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    disabled={modelsLoading}
+                    onClick={retryModelsLoad}
+                    className="shrink-0"
                   >
-                    <div
-                      role="img"
-                      aria-label={attachment.name}
-                      className="h-20 w-full bg-cover bg-center"
-                      style={{ backgroundImage: `url(${attachment.dataUrl})` }}
+                    Retry
+                  </Button>
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Attach image"
+                    disabled={!activeSession || turnInFlight !== null}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <Paperclip />
+                  </Button>
+                </div>
+                <div className="flex min-w-0 items-center gap-1">
+                  {selectedRuntime === "openai-codex" && (
+                    <ReasoningEffortPicker
+                      value={reasoningEffort}
+                      disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                      onSelect={setReasoningEffort}
                     />
-                    <div className="flex min-w-0 items-center gap-1.5 px-2 py-1">
-                      <ImagePlus className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
-                      <span className="truncate text-xs text-muted-foreground" title={attachment.name}>
-                        {attachment.name}
-                      </span>
-                    </div>
+                  )}
+                  {showModelPicker && (
+                    <ModelPicker
+                      models={availableModels}
+                      selectedModelId={selectedModelId}
+                      loading={modelsLoading}
+                      disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                      onSelect={setSessionRuntimeModel}
+                      compact
+                    />
+                  )}
+                  {turnInFlight && (
                     <Button
                       type="button"
-                      variant="secondary"
-                      size="icon-xs"
-                      aria-label={`Remove ${attachment.name}`}
-                      className="absolute right-1 top-1 opacity-95"
-                      onClick={() => removeDraftAttachment(attachment.id)}
-                    >
-                      <X />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {attachmentError && (
-              <div className="text-xs text-red-200">{attachmentError}</div>
-            )}
-            {showModelPicker && (
-              <div className="flex min-w-0 items-center gap-2">
-                <ModelPicker
-                  models={availableModels}
-                  selectedModelId={selectedModelId}
-                  loading={modelsLoading}
-                  disabled={turnInFlight !== null || sessionLoading || !activeSession}
-                  onSelect={setSessionRuntimeModel}
-                />
-                {modelsError && (
-                  <>
-                    <span
-                      role="status"
-                      aria-live="polite"
-                      className="min-w-0 flex-1 truncate text-xs text-red-200"
-                      title={modelsError}
-                    >
-                      Models unavailable: {modelsError}
-                    </span>
-                    <Button
-                      type="button"
+                      onClick={onAbort}
                       variant="ghost"
-                      size="xs"
-                      disabled={modelsLoading}
-                      onClick={retryModelsLoad}
-                      className="shrink-0"
+                      size="icon-sm"
+                      title="Abort"
+                      className="text-red-200 hover:bg-destructive/10 hover:text-red-100"
                     >
-                      Retry
+                      <Square />
                     </Button>
-                  </>
-                )}
+                  )}
+                  <Button
+                    type="submit"
+                    disabled={
+                      (!prompt.trim() && draftAttachments.length === 0) ||
+                      !activeSession
+                    }
+                    size="icon-sm"
+                    aria-label={turnInFlight ? "Queue prompt" : "Send prompt"}
+                  >
+                    <Send />
+                  </Button>
+                </div>
               </div>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">
+            </div>
+            <div className="mt-1.5 flex items-center justify-between gap-2 px-1 text-[11px] text-muted-foreground">
+              <span aria-live="polite">
                 {turnInFlight
                   ? reviewingActive
-                    ? "Reviewing..."
+                    ? "Reviewing…"
                     : "Task running"
                   : wsOpen
                     ? draftAttachments.length > 0
@@ -2794,31 +2855,11 @@ export default function ProjectWorkspace({
                       : "Connected"
                     : "Waiting for websocket"}
               </span>
-              <div className="flex gap-2">
-                {turnInFlight && (
-                  <Button
-                    type="button"
-                    onClick={onAbort}
-                    variant="outline"
-                    size="sm"
-                    className="border-destructive/30 text-red-200 hover:bg-destructive/10 hover:text-red-100"
-                  >
-                    <Square />
-                    Abort
-                  </Button>
-                )}
-                <Button
-                  type="submit"
-                  disabled={
-                    (!prompt.trim() && draftAttachments.length === 0) ||
-                    !activeSession
-                  }
-                  size="sm"
-                >
-                  <Send />
-                  {turnInFlight ? "Queue" : "Send"}
-                </Button>
-              </div>
+              {attachmentError && (
+                <span className="truncate text-red-200" title={attachmentError}>
+                  {attachmentError}
+                </span>
+              )}
             </div>
           </form>
         </section>

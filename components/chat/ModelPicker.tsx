@@ -24,6 +24,12 @@ type ModelPickerProps = {
   loading: boolean;
   disabled: boolean;
   onSelect: (modelId: string) => void;
+  /**
+   * When true, render a borderless trigger that fits inside an enclosing
+   * input container (claude.ai / chatgpt-style). Defaults to false (the
+   * full bordered button used outside the chat composer).
+   */
+  compact?: boolean;
 };
 
 const MAX_VISIBLE_MODELS = 40;
@@ -40,6 +46,7 @@ export function ModelPicker({
   loading,
   disabled,
   onSelect,
+  compact = false,
 }: ModelPickerProps) {
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -84,28 +91,44 @@ export function ModelPicker({
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative min-w-0 flex-1 sm:max-w-sm">
+    <div
+      ref={rootRef}
+      className={cn(
+        "relative min-w-0",
+        compact ? "max-w-[14rem]" : "flex-1 sm:max-w-sm",
+      )}
+    >
       <Button
         type="button"
-        variant="outline"
-        size="sm"
+        variant={compact ? "ghost" : "outline"}
+        size={compact ? "xs" : "sm"}
         disabled={disabled || loading}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
         onClick={() => setOpen((value) => !value)}
-        className="h-9 w-full min-w-0 justify-between px-2.5"
+        className={cn(
+          "min-w-0 justify-between gap-1.5 text-muted-foreground hover:text-foreground",
+          compact ? "h-7 px-1.5" : "h-9 w-full px-2.5",
+        )}
         title={triggerLabel}
       >
         <span className="min-w-0 truncate text-left">{triggerLabel}</span>
         {loading ? (
           <Loader2 className="animate-spin" aria-hidden="true" />
         ) : (
-          <ChevronDown className="shrink-0" aria-hidden="true" />
+          <ChevronDown className="shrink-0 opacity-70" aria-hidden="true" />
         )}
       </Button>
       {open && (
-        <div className="absolute bottom-full left-0 right-0 z-50 mb-1 w-full min-w-0 max-w-full rounded-md border border-border bg-popover p-2 shadow-lg">
+        <div
+          className={cn(
+            "absolute bottom-full z-50 mb-1 min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg",
+            compact
+              ? "right-0 w-[20rem] max-w-[calc(100vw-2rem)]"
+              : "left-0 right-0 w-full max-w-full",
+          )}
+        >
           <div className="relative">
             <Search
               className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
