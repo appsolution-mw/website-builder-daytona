@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
+import { getDailyQuotaState } from "@/lib/usage/daily-quota";
 
 export async function GET(
   request: Request,
@@ -71,5 +72,7 @@ export async function GET(
     },
   );
 
-  return NextResponse.json({ usage, totals });
+  const dailyQuota = await getDailyQuotaState(prisma, currentUser.user.id);
+
+  return NextResponse.json({ usage, totals, dailyQuota });
 }
