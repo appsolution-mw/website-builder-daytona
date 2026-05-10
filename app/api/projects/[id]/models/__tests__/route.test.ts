@@ -366,6 +366,74 @@ describe("GET /api/projects/[id]/models", () => {
     });
   });
 
+  it("fetches Codex models from the OpenAI API and filters to coding families", async () => {
+    process.env.OPENAI_API_KEY = "sk-openai-test";
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+    const fetchMock = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(url)).toBe("https://api.openai.com/v1/models");
+      const headers = init?.headers as Record<string, string> | undefined;
+      expect(headers?.Authorization).toBe("Bearer sk-openai-test");
+      return new Response(
+        JSON.stringify({
+          data: [
+            { id: "gpt-5", object: "model" },
+            { id: "gpt-5.5-codex", object: "model" },
+            { id: "o3-mini", object: "model" },
+            { id: "tts-1", object: "model" },
+            { id: "whisper-1", object: "model" },
+            { id: "text-embedding-3-large", object: "model" },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openai-codex`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { models: { id: string }[] };
+    const ids = body.models.map((m) => m.id);
+    expect(ids).toContain("gpt-5");
+    expect(ids).toContain("gpt-5.5-codex");
+    expect(ids).toContain("o3-mini");
+    expect(ids).not.toContain("tts-1");
+    expect(ids).not.toContain("whisper-1");
+    expect(ids).not.toContain("text-embedding-3-large");
+    // Codex-suffixed variants come first.
+    expect(ids[0]).toBe("gpt-5.5-codex");
+  });
+
+  it("returns 502 when no OpenAI key is configured for runtime=openai-codex", async () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.CODEX_API_KEY;
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+
+    const res = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openai-codex`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/OPENAI_API_KEY/);
+  });
+
   it("rejects requests with no or unsupported runtime", async () => {
     await prisma.project.create({
       data: {

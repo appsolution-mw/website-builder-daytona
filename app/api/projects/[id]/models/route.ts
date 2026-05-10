@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { fetchAnthropicModels } from "@/lib/anthropic/models";
+import { fetchOpenAICodexModels } from "@/lib/openai/models";
 import { fetchOpenRouterModels, type OpenRouterModelOption } from "@/lib/openrouter/models";
 
 function normalizeConfiguredModelId(modelId: string): string {
@@ -93,6 +94,22 @@ export async function GET(
       return NextResponse.json({ models });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Anthropic models request failed";
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+  if (runtime === "openai-codex") {
+    const apiKey = (process.env.CODEX_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim()) ?? "";
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "OPENAI_API_KEY (or CODEX_API_KEY) is not configured" },
+        { status: 502 },
+      );
+    }
+    try {
+      const models = await fetchOpenAICodexModels(apiKey);
+      return NextResponse.json({ models });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "OpenAI models request failed";
       return NextResponse.json({ error: message }, { status: 502 });
     }
   }

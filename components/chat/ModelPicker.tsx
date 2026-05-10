@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Search } from "lucide-react";
 
+import type { AgentRuntime } from "@wbd/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,16 +19,23 @@ export type ModelOption = {
   inputModalities: string[];
 };
 
-type ModelPickerProps = {
+export type ModelPickerRuntime = {
+  runtime: AgentRuntime;
+  label: string;
   models: ModelOption[];
-  selectedModelId: string | null;
   loading: boolean;
+};
+
+type ModelPickerProps = {
+  runtimes: ModelPickerRuntime[];
+  activeRuntime: AgentRuntime;
+  selectedModelId: string | null;
   disabled: boolean;
   onSelect: (modelId: string) => void;
+  onRuntimeChange: (runtime: AgentRuntime) => void;
   /**
-   * When true, render a borderless trigger that fits inside an enclosing
-   * input container (claude.ai / chatgpt-style). Defaults to false (the
-   * full bordered button used outside the chat composer).
+   * Borderless trigger that fits inside an enclosing input container
+   * (claude.ai / chatgpt-style). Defaults to false.
    */
   compact?: boolean;
 };
@@ -41,11 +49,12 @@ function formatContextLength(contextLength: number): string {
 }
 
 export function ModelPicker({
-  models,
+  runtimes,
+  activeRuntime,
   selectedModelId,
-  loading,
   disabled,
   onSelect,
+  onRuntimeChange,
   compact = false,
 }: ModelPickerProps) {
   const listboxId = useId();
@@ -53,6 +62,21 @@ export function ModelPicker({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Reset the search query during render when the active runtime changes —
+  // canonical "deriving state from props" pattern, avoids the
+  // setState-in-effect lint and the extra render pass.
+  const [trackedRuntime, setTrackedRuntime] = useState(activeRuntime);
+  if (trackedRuntime !== activeRuntime) {
+    setTrackedRuntime(activeRuntime);
+    setQuery("");
+  }
+
+  const activeRuntimeData = useMemo(
+    () => runtimes.find((r) => r.runtime === activeRuntime),
+    [runtimes, activeRuntime],
+  );
+  const models = useMemo(() => activeRuntimeData?.models ?? [], [activeRuntimeData]);
+  const loading = activeRuntimeData?.loading ?? false;
 
   const selectedModel = useMemo(
     () => models.find((model) => model.id === selectedModelId),
@@ -125,7 +149,7 @@ export function ModelPicker({
           className={cn(
             "absolute bottom-full z-50 mb-1 min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg",
             compact
-              ? "right-0 w-[20rem] max-w-[calc(100vw-2rem)]"
+              ? "right-0 w-[22rem] max-w-[calc(100vw-2rem)]"
               : "left-0 right-0 w-full max-w-full",
           )}
         >
@@ -144,7 +168,7 @@ export function ModelPicker({
                   setOpen(false);
                 }
               }}
-              aria-label="Search OpenRouter models"
+              aria-label="Search models"
               placeholder="Search models"
               className="h-9 pl-8 text-xs"
             />
@@ -152,10 +176,15 @@ export function ModelPicker({
           <ul
             id={listboxId}
             role="listbox"
-            aria-label="OpenRouter models"
+            aria-label={`${activeRuntimeData?.label ?? "Models"} models`}
             className="mt-2 max-h-72 overflow-y-auto [scrollbar-gutter:stable]"
           >
-            {visibleModels.length > 0 ? (
+            {loading ? (
+              <li className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                Loading…
+              </li>
+            ) : visibleModels.length > 0 ? (
               visibleModels.map((model) => {
                 const selected = model.id === selectedModelId;
                 return (
@@ -184,9 +213,11 @@ export function ModelPicker({
                           {model.id}
                         </span>
                       </span>
-                      <Badge variant="outline" className="shrink-0">
-                        {formatContextLength(model.contextLength)}
-                      </Badge>
+                      {model.contextLength > 0 && (
+                        <Badge variant="outline" className="shrink-0">
+                          {formatContextLength(model.contextLength)}
+                        </Badge>
+                      )}
                     </button>
                   </li>
                 );
@@ -195,6 +226,35 @@ export function ModelPicker({
               <li className="px-2 py-3 text-sm text-muted-foreground">No models found</li>
             )}
           </ul>
+          {runtimes.length > 1 && (
+            <div
+              role="tablist"
+              aria-label="Switch runtime"
+              className="mt-2 flex shrink-0 gap-1 border-t border-border pt-2"
+            >
+              {runtimes.map((rt) => {
+                const active = rt.runtime === activeRuntime;
+                return (
+                  <button
+                    key={rt.runtime}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => onRuntimeChange(rt.runtime)}
+                    className={cn(
+                      "flex-1 rounded-md px-2 py-1 text-xs font-medium outline-none transition-colors",
+                      "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+                      active
+                        ? "bg-accent text-accent-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {rt.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

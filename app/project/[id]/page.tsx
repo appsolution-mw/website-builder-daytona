@@ -53,7 +53,7 @@ import type {
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { ChatSessionsSidebar } from "@/components/chat/ChatSessionsSidebar";
 import { DictationButton } from "@/components/chat/DictationButton";
-import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
+import { ModelPicker, type ModelOption, type ModelPickerRuntime } from "@/components/chat/ModelPicker";
 import {
   ReasoningEffortPicker,
   defaultReasoningForRuntime,
@@ -635,9 +635,10 @@ export default function ProjectWorkspace({
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [selectedRuntime, setSelectedRuntime] = useState<AgentRuntime>("claude-code");
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsByRuntime, setModelsByRuntime] = useState<Record<string, ModelOption[]>>({});
+  const [modelsLoadingByRuntime, setModelsLoadingByRuntime] = useState<Record<string, boolean>>({});
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const modelsLoading = modelsLoadingByRuntime[selectedRuntime] ?? false;
   const [libraryPresets, setLibraryPresets] = useState<PresetOption[]>([]);
   const [selectedLibraryPresetId, setSelectedLibraryPresetId] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(false);
@@ -735,7 +736,6 @@ export default function ProjectWorkspace({
   const turnInFlightRef = useRef<string | null>(null);
   const eventCursorRef = useRef<number | null>(null);
   const turnRuntimeRef = useRef<Map<string, { runtime: AgentRuntime; modelId: string | null }>>(new Map());
-  const modelsRequestStartedRef = useRef(false);
   const mountedRef = useRef(true);
   const previewFrameRef = useRef<HTMLDivElement | null>(null);
   const previewCaptureStartRef = useRef<CapturePoint | null>(null);
@@ -1185,22 +1185,30 @@ export default function ProjectWorkspace({
     }
   }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles, writeProjectFile]);
 
+  const modelsRequestedRef = useRef<Set<string>>(new Set());
   const loadModelsForRuntime = useCallback(async (runtime: AgentRuntime, retry = false): Promise<void> => {
     if (!supportsModelPicker(runtime)) return;
-    if (!retry && modelsRequestStartedRef.current) return;
+    if (!retry && modelsRequestedRef.current.has(runtime)) return;
 
-    modelsRequestStartedRef.current = true;
-    setModelsLoading(true);
+    modelsRequestedRef.current.add(runtime);
+    setModelsLoadingByRuntime((prev) => ({ ...prev, [runtime]: true }));
     setModelsError(null);
     try {
       const res = await fetch(`/api/projects/${id}/models?runtime=${encodeURIComponent(runtime)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { models: ModelOption[] };
-      if (mountedRef.current) setAvailableModels(data.models);
+      if (mountedRef.current) {
+        setModelsByRuntime((prev) => ({ ...prev, [runtime]: data.models }));
+      }
     } catch (err) {
-      if (mountedRef.current) setModelsError(err instanceof Error ? err.message : "models unavailable");
+      if (mountedRef.current) {
+        setModelsError(err instanceof Error ? err.message : "models unavailable");
+        modelsRequestedRef.current.delete(runtime);
+      }
     } finally {
-      if (mountedRef.current) setModelsLoading(false);
+      if (mountedRef.current) {
+        setModelsLoadingByRuntime((prev) => ({ ...prev, [runtime]: false }));
+      }
     }
   }, [id]);
 
@@ -1977,13 +1985,7 @@ export default function ProjectWorkspace({
   }, [project?.status, refreshRunEvents]);
 
   useEffect(() => {
-    if (!supportsModelPicker(selectedRuntime)) {
-      setAvailableModels([]);
-      modelsRequestStartedRef.current = false;
-      return;
-    }
-    setAvailableModels([]);
-    modelsRequestStartedRef.current = false;
+    if (!supportsModelPicker(selectedRuntime)) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void loadModelsForRuntime(selectedRuntime);
@@ -2118,7 +2120,6 @@ export default function ProjectWorkspace({
   }
 
   function retryModelsLoad() {
-    modelsRequestStartedRef.current = false;
     void loadModelsForRuntime(selectedRuntime, true);
   }
 
@@ -2486,6 +2487,15 @@ export default function ProjectWorkspace({
   const wsOpen = wsStatus === "open";
   const showModelPicker = supportsModelPicker(selectedRuntime);
   const selectedModelId = selectedModelForSession(activeSession, selectedRuntime);
+  const pickerRuntimes: ModelPickerRuntime[] =
+    project?.availableRuntimes
+      ?.filter((option) => supportsModelPicker(option.value))
+      .map((option) => ({
+        runtime: option.value,
+        label: option.label,
+        models: modelsByRuntime[option.value] ?? [],
+        loading: modelsLoadingByRuntime[option.value] ?? false,
+      })) ?? [];
 
   return (
     <main className="fixed inset-0 flex h-dvh flex-col overflow-hidden bg-background">
@@ -2852,11 +2862,12 @@ export default function ProjectWorkspace({
                 <div className="flex min-w-0 items-center gap-1">
                   {showModelPicker && (
                     <ModelPicker
-                      models={availableModels}
+                      runtimes={pickerRuntimes}
+                      activeRuntime={selectedRuntime}
                       selectedModelId={selectedModelId}
-                      loading={modelsLoading}
                       disabled={turnInFlight !== null || sessionLoading || !activeSession}
                       onSelect={setSessionRuntimeModel}
+                      onRuntimeChange={(runtime) => void setSessionDefaultRuntime(runtime)}
                       compact
                     />
                   )}
