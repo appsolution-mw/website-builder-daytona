@@ -448,7 +448,7 @@ async function persistCommitEvent(input: {
     sha: event.sha,
     shortSha: event.shortSha,
     authorKind: event.authorKind,
-    runtime: protocolRuntimeToDb(event.runtime),
+    runtime: event.runtime ? protocolRuntimeToDb(event.runtime) : null,
     modelId: event.modelId,
     title: event.title,
     bodyMessage: event.bodyMessage,
