@@ -4,6 +4,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -66,7 +67,9 @@ import { FileTree } from "@/components/workspace/FileTree";
 import { CodeEditor } from "@/components/workspace/CodeEditor";
 import { HistoryMode } from "@/components/workspace/HistoryMode";
 import { useCommitHistory } from "@/lib/workspace/use-commit-history";
+import { useRevertCommit } from "@/lib/workspace/use-revert-commit";
 import type { CommitView } from "@/lib/workspace/commit-types";
+import { RevertConfirmDialog } from "@/components/workspace/RevertConfirmDialog";
 import { XtermTerminal, type XtermTerminalStatus } from "@/components/workspace/XtermTerminal";
 import { ProjectAgentConfigPanel } from "@/components/agent-config/ProjectAgentConfigPanel";
 import { normalizeProjectAgentConfigResponse } from "@/components/agent-config/normalizers";
@@ -724,6 +727,30 @@ export default function ProjectWorkspace({
 
   const initialCommits: CommitView[] = project?.commits ?? [];
   const commitHistory = useCommitHistory(id, initialCommits);
+
+  const commitsByRunId = useMemo(() => {
+    const map = new Map<string, CommitView>();
+    for (const c of commitHistory.commits) {
+      if (c.agentRunId) map.set(c.agentRunId, c);
+    }
+    return map;
+  }, [commitHistory.commits]);
+
+  const headCommitSha = commitHistory.commits[0]?.sha ?? null;
+  const isProjectIdle = queueState.state === "IDLE";
+
+  const revert = useRevertCommit(id);
+  const handleRevertClick = useCallback(
+    (commit: CommitView) => revert.open(commit),
+    [revert],
+  );
+
+  useEffect(() => {
+    if (revert.state.status === "success") {
+      const timer = setTimeout(() => revert.cancel(), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [revert.state.status, revert]);
 
   const pendingRef = useRef<
     Map<string, { resolve: (msg: ProxyToBrowser) => void; reject: (err: Error) => void; timer: number }>
@@ -1625,11 +1652,12 @@ export default function ProjectWorkspace({
         filesChanged: ev.filesChanged,
         insertions: ev.insertions,
         deletions: ev.deletions,
-        runtime: protocolRuntimeToDb(ev.runtime),
+        runtime: ev.runtime ? protocolRuntimeToDb(ev.runtime) : null,
         modelId: ev.modelId,
         authorKind: ev.authorKind,
         sessionId: null,
         agentRunId: ev.turnId,
+        revertedFromSha: ev.revertedFromSha ?? null,
         createdAt: ev.committedAt,
       });
       // Force-reload the preview iframe whenever the agent commits real
@@ -2743,9 +2771,21 @@ export default function ProjectWorkspace({
                 Ask for a change and watch files update in the editor.
               </li>
             )}
-            {messages.map((m, idx) => (
-              <Message key={(m.turnId ?? "err") + ":" + idx} m={m} />
-            ))}
+            {messages.map((m, idx) => {
+              const linkedCommit =
+                m.kind === "agent" && m.turnId ? commitsByRunId.get(m.turnId) : undefined;
+              const isHeadCommit = linkedCommit ? linkedCommit.sha === headCommitSha : false;
+              return (
+                <Message
+                  key={(m.turnId ?? "err") + ":" + idx}
+                  m={m}
+                  commit={linkedCommit}
+                  isHeadCommit={isHeadCommit}
+                  isProjectIdle={isProjectIdle}
+                  onRevertCommit={handleRevertClick}
+                />
+              );
+            })}
           </ul>
           <form onSubmit={onSubmit} className="shrink-0 border-t border-border bg-background/40 px-3 pb-3 pt-3">
             <label className="sr-only" htmlFor="agent-prompt">Prompt</label>
@@ -3089,6 +3129,9 @@ export default function ProjectWorkspace({
               loadMore={commitHistory.loadMore}
               hasMore={commitHistory.hasMore}
               loading={commitHistory.loading}
+              headCommitSha={headCommitSha}
+              isProjectIdle={isProjectIdle}
+              onRevertClick={handleRevertClick}
             />
           }
           terminal={
@@ -3397,6 +3440,11 @@ export default function ProjectWorkspace({
           }
         />
       </div>
+      <RevertConfirmDialog
+        state={revert.state}
+        onCancel={revert.cancel}
+        onConfirm={revert.confirm}
+      />
     </main>
   );
 }
