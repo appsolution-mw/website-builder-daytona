@@ -17,7 +17,7 @@ vi.mock("../src/agent-provider-factory", () => ({
   createAgentProvider: createAgentProviderMock,
 }));
 
-import { executeAgentRun } from "../src/agent-run-executor";
+import { executeAgentRun, CostCapExceededError } from "../src/agent-run-executor";
 
 describe("executeAgentRun", () => {
   it("calls the selected provider with durable run metadata", async () => {
@@ -157,6 +157,115 @@ describe("executeAgentRun", () => {
       }),
     ).resolves.toBeUndefined();
     expect(flushUserEdits).toHaveBeenCalled();
+    expect(runTurnMock).toHaveBeenCalled();
+  });
+
+  it("aborts the run when per-turn cost cap is exceeded", async () => {
+    const events: BrokerToHost[] = [];
+    createAgentProviderMock.mockReturnValue({
+      runtime: "openai-codex",
+      runTurn: async (opts) => {
+        await opts.onEvent({
+          type: "agent.usage",
+          turnId: "run-1",
+          label: "turn",
+          durationMs: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0.4,
+          exitCode: 0,
+        });
+        await opts.onEvent({
+          type: "agent.usage",
+          turnId: "run-1",
+          label: "turn",
+          durationMs: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0.4,
+          exitCode: 0,
+        });
+        await opts.onEvent({
+          type: "agent.usage",
+          turnId: "run-1",
+          label: "turn",
+          durationMs: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0.4,
+          exitCode: 0,
+        });
+        // Should not be reached — third event should have thrown.
+        events.push({
+          type: "agent.chunk",
+          turnId: "run-1",
+          delta: "should-not-arrive",
+        });
+      },
+    } satisfies AgentProvider);
+
+    await expect(
+      executeAgentRun({
+        projectId: "project-1",
+        sessionId: "session-1",
+        providerSessionId: "provider-session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        prompt: "go",
+        runtime: "openai-codex",
+        resumeSession: false,
+        projectRoot: "/workspace/project",
+        signal: new AbortController().signal,
+        persistEvent: async (ev) => {
+          events.push(ev);
+        },
+        broadcastEvent: (ev) => {
+          events.push(ev);
+        },
+        perTurnCapUsd: 1.0,
+      }),
+    ).rejects.toBeInstanceOf(CostCapExceededError);
+
+    const errs = events.filter(
+      (e) => e.type === "agent.error" && e.turnId === "run-1",
+    );
+    expect(errs.length).toBeGreaterThanOrEqual(1);
+    expect((errs[0] as Extract<BrokerToHost, { type: "agent.error" }>).message)
+      .toContain("Cost cap reached");
+  });
+
+  it("does NOT abort when per-turn cap is 0 (disabled)", async () => {
+    createAgentProviderMock.mockReturnValue({
+      runtime: "openai-codex",
+      runTurn: runTurnMock.mockImplementation(async (opts) => {
+        await opts.onEvent({
+          type: "agent.usage",
+          turnId: "run-1",
+          label: "turn",
+          durationMs: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 999,
+          exitCode: 0,
+        });
+      }),
+    } satisfies AgentProvider);
+
+    await executeAgentRun({
+      projectId: "project-1",
+      sessionId: "session-1",
+      providerSessionId: "provider-session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      prompt: "go",
+      runtime: "openai-codex",
+      resumeSession: false,
+      projectRoot: "/workspace/project",
+      signal: new AbortController().signal,
+      persistEvent: async () => undefined,
+      broadcastEvent: () => undefined,
+      perTurnCapUsd: 0,
+    });
     expect(runTurnMock).toHaveBeenCalled();
   });
 

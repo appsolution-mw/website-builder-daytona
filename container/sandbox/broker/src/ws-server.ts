@@ -741,6 +741,7 @@ async function handleInternalHttpRequest(
       broadcastEvent: opts.broadcastEvent,
       projectRoot: opts.projectRoot,
       flushUserEdits: opts.flushUserEdits,
+      perTurnCapUsd: opts.perTurnCapUsd,
       ...(opts.__testSpawn ? { __testSpawn: opts.__testSpawn } : {}),
     });
     return;
@@ -756,6 +757,7 @@ async function executeInternalRun(input: {
   broadcastEvent: (event: BrokerToHost) => void;
   projectRoot: string;
   flushUserEdits: () => Promise<void>;
+  perTurnCapUsd?: number;
   __testSpawn?: SpawnFn;
 }): Promise<void> {
   const ctl = new AbortController();
@@ -786,6 +788,7 @@ async function executeInternalRun(input: {
       persistEvent,
       broadcastEvent: input.broadcastEvent,
       flushUserEdits: input.flushUserEdits,
+      perTurnCapUsd: input.perTurnCapUsd,
       ...(input.__testSpawn ? { __testSpawn: input.__testSpawn } : {}),
     });
   } catch (error) {

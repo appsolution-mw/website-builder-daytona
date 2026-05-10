@@ -6,6 +6,13 @@ import type { SpawnFn } from "./spawn-types";
 
 export type PersistRunEvent = (event: BrokerToHost) => Promise<void>;
 
+export class CostCapExceededError extends Error {
+  constructor(public readonly observed: number, public readonly cap: number) {
+    super(`Cost cap reached: $${observed.toFixed(2)} (cap $${cap.toFixed(2)})`);
+    this.name = "CostCapExceededError";
+  }
+}
+
 export async function executeAgentRun(input: {
   projectId: string;
   sessionId: string;
@@ -23,6 +30,8 @@ export async function executeAgentRun(input: {
    *  as USER before the agent run starts. Best-effort; failures are logged but
    *  do not abort the run. */
   flushUserEdits?: () => Promise<void>;
+  /** Phase 1.4e: per-turn USD cost cap. 0 / undefined = disabled. */
+  perTurnCapUsd?: number;
   projectRoot: string;
   signal: AbortSignal;
   persistEvent: PersistRunEvent;
@@ -84,6 +93,9 @@ export async function executeAgentRun(input: {
   };
   input.signal.addEventListener("abort", onAbort);
 
+  let runningCostUsd = 0;
+  const capUsd = input.perTurnCapUsd ?? 0;
+
   try {
     await provider.runTurn({
       projectId: input.projectId,
@@ -101,6 +113,19 @@ export async function executeAgentRun(input: {
       onEvent: async (event) => {
         await input.persistEvent(event);
         input.broadcastEvent(event);
+        if (capUsd > 0 && event.type === "agent.usage") {
+          runningCostUsd += event.costUsd ?? 0;
+          if (runningCostUsd > capUsd) {
+            const errEvt: BrokerToHost = {
+              type: "agent.error",
+              turnId: input.runId,
+              message: `Cost cap reached: $${runningCostUsd.toFixed(2)} (cap $${capUsd.toFixed(2)})`,
+            };
+            await input.persistEvent(errEvt);
+            input.broadcastEvent(errEvt);
+            throw new CostCapExceededError(runningCostUsd, capUsd);
+          }
+        }
       },
       signal: input.signal,
       run: {
