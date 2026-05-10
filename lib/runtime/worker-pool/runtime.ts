@@ -61,6 +61,12 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       const { worker, sandboxId, brokerToken, agentRunnerHmacSecret, ws } = reservation;
       const agent = args.agentClientFor(worker);
       let sandboxCreatedOnWorker = false;
+      const ownerProject = await prisma.project.findUnique({
+        where: { id: spawn.projectId },
+        select: { owner: { select: { name: true, email: true } } },
+      });
+      const ownerName = (ownerProject?.owner.name ?? "").trim();
+      const ownerEmail = (ownerProject?.owner.email ?? "").trim();
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
@@ -68,6 +74,11 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
         // the in-container agent-runner sibling and by the agent-runner to
         // verify them. Generated fresh per sandbox alongside BROKER_TOKEN.
         AGENT_RUNNER_HMAC_SECRET: agentRunnerHmacSecret,
+        // Owner identity forwarded to the broker so it can attribute USER
+        // commits made via the worker-agent's git surface. Empty values are
+        // omitted; the broker treats missing values as "no USER identity".
+        ...(ownerName ? { BROKER_USER_NAME: ownerName } : {}),
+        ...(ownerEmail ? { BROKER_USER_EMAIL: ownerEmail } : {}),
         ...args.brokerEnv?.(),
         ...sourceEnv(spawn.source),
       };
