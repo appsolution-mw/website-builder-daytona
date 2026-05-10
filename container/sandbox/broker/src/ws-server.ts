@@ -29,6 +29,7 @@ import {
   getCommitDiff,
   getCommitFiles,
   getGitStatus,
+  revertToCommit,
   GitCommandError,
 } from "./git-handlers";
 
@@ -559,6 +560,44 @@ async function handleInternalHttpRequest(
     return;
   }
 
+  const gitRevertMatch = /^\/internal\/projects\/([^/]+)\/git\/revert$/.exec(url.pathname);
+  if (gitRevertMatch) {
+    const body = await readJsonBody(req);
+    if (!isGitRevertBody(body)) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    try {
+      const result = await revertToCommit({
+        projectRoot: opts.projectRoot,
+        sha: body.sha,
+        triggeredBy: body.triggeredBy,
+      });
+      if (result.ok) {
+        opts.broadcastEvent({
+          type: "git.commit",
+          turnId: null,
+          sha: result.sha,
+          shortSha: result.shortSha,
+          title: result.title,
+          bodyMessage: result.bodyMessage,
+          filesChanged: result.filesChanged,
+          insertions: result.insertions,
+          deletions: result.deletions,
+          runtime: null,
+          modelId: null,
+          authorKind: "ROLLBACK",
+          revertedFromSha: result.revertedFromSha,
+          committedAt: result.committedAt,
+        });
+      }
+      writeJson(res, 200, result);
+    } catch (error) {
+      writeGitError(res, error);
+    }
+    return;
+  }
+
   const executeMatch = /^\/internal\/projects\/([^/]+)\/runs\/([^/]+)\/execute$/.exec(url.pathname);
   if (executeMatch) {
     const projectId = decodeURIComponent(executeMatch[1]);
@@ -738,6 +777,18 @@ function isGitCommitDiffBody(value: unknown): value is { sha: string; path: stri
     body.sha.length > 0 &&
     typeof body.path === "string" &&
     body.path.length > 0
+  );
+}
+
+function isGitRevertBody(value: unknown): value is { sha: string; triggeredBy: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    typeof body.sha === "string" &&
+    /^[a-f0-9]{40}$/.test(body.sha) &&
+    typeof body.triggeredBy === "string" &&
+    body.triggeredBy.length > 0 &&
+    body.triggeredBy.length <= 200
   );
 }
 

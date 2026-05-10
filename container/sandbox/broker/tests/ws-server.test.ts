@@ -1060,6 +1060,117 @@ describe("broker ws server", () => {
     client.close();
   });
 
+  describe("POST /git/revert", () => {
+    it("returns 400 on bad body", async () => {
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({ port: 0, enableFsTracker: false });
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/revert`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer broker-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("reverts and broadcasts a git.commit event with authorKind=ROLLBACK", async () => {
+      const { mkdtemp, writeFile } = await import("node:fs/promises");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const execFileAsync = promisify(execFile);
+      const root = await mkdtemp(join(tmpdir(), "wbd-ws-revert-"));
+      const git = async (args: string[], cwd = root): Promise<string> => {
+        const { stdout } = await execFileAsync("git", args, { cwd });
+        return stdout.trim();
+      };
+
+      // Seed two commits — first will be the revert target, second is HEAD.
+      await git(["init", "-q", "-b", "main"]);
+      await git(["config", "user.name", "Test User"]);
+      await git(["config", "user.email", "test@example.com"]);
+      await writeFile(join(root, "a.txt"), "first\n");
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "first commit"]);
+      const firstSha = await git(["rev-parse", "HEAD"]);
+      await writeFile(join(root, "a.txt"), "second\n");
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "second commit"]);
+
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({ port: 0, projectRoot: root, enableFsTracker: false });
+
+      // Connect a WS client and capture broadcast events.
+      const client = new WebSocket(`ws://localhost:${handle.port}`);
+      await new Promise<void>((resolve, reject) => {
+        client.once("open", () => resolve());
+        client.once("error", reject);
+      });
+      const events: unknown[] = [];
+      client.on("message", (data) => events.push(JSON.parse(data.toString())));
+
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/revert`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer broker-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ sha: firstSha, triggeredBy: "user:u1" }),
+        },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { ok: true; revertedFromSha: string };
+      expect(body.ok).toBe(true);
+      expect(body.revertedFromSha).toBe(firstSha);
+
+      const start = Date.now();
+      while (Date.now() - start < 2000) {
+        if (
+          events.some(
+            (e) =>
+              typeof e === "object" &&
+              e !== null &&
+              (e as { type?: string }).type === "git.commit" &&
+              (e as { authorKind?: string }).authorKind === "ROLLBACK",
+          )
+        ) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      const broadcast = events.find(
+        (e) =>
+          typeof e === "object" &&
+          e !== null &&
+          (e as { type?: string }).type === "git.commit" &&
+          (e as { authorKind?: string }).authorKind === "ROLLBACK",
+      ) as
+        | {
+            type: "git.commit";
+            turnId: string | null;
+            authorKind: "ROLLBACK";
+            revertedFromSha: string;
+            runtime: string | null;
+          }
+        | undefined;
+      expect(broadcast).toBeDefined();
+      expect(broadcast?.turnId).toBeNull();
+      expect(broadcast?.runtime).toBeNull();
+      expect(broadcast?.revertedFromSha).toBe(firstSha);
+
+      client.close();
+    });
+  });
+
   it("rejects internal queue drain without a valid bearer token", async () => {
     process.env.BROKER_TOKEN = "broker-secret";
     handle = await startBroker({ port: 0, enableFsTracker: false });
