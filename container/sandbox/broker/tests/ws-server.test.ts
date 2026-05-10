@@ -1256,4 +1256,108 @@ describe("broker ws server", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(canceled).toEqual([{ projectId: "p1", runId: "run-1" }]);
   });
+
+  describe("GET /git/user-commits/pull", () => {
+    it("returns 401 without bearer", async () => {
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({ port: 0, enableFsTracker: false });
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/pull`,
+      );
+      expect(res.status).toBe(401);
+    });
+
+    it("long-polls and returns empty events on timeout when queue is idle", async () => {
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({ port: 0, enableFsTracker: false });
+      const start = Date.now();
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/pull?timeout=500`,
+        { headers: { authorization: "Bearer broker-token" } },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json() as { events: unknown[] };
+      expect(body).toEqual({ events: [] });
+      expect(Date.now() - start).toBeGreaterThanOrEqual(450);
+    });
+  });
+
+  describe("POST /git/user-commits/ack", () => {
+    it("returns 400 without sha", async () => {
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({ port: 0, enableFsTracker: false });
+      const res = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/ack`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer broker-token",
+          },
+          body: JSON.stringify({}),
+        },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("acks a queued payload so next pull returns []", async () => {
+      const { mkdtemp, writeFile } = await import("node:fs/promises");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const execFileAsync = promisify(execFile);
+      const root = await mkdtemp(join(tmpdir(), "wbd-user-edit-"));
+      const git = async (args: string[]): Promise<string> => {
+        const { stdout } = await execFileAsync("git", args, { cwd: root });
+        return stdout.trim();
+      };
+      await git(["init", "-q", "-b", "main"]);
+      await git(["config", "user.name", "Seed"]);
+      await git(["config", "user.email", "seed@example.com"]);
+      await writeFile(join(root, "a.txt"), "v1\n");
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", "initial"]);
+
+      process.env.BROKER_TOKEN = "broker-token";
+      handle = await startBroker({
+        port: 0,
+        projectRoot: root,
+        enableFsTracker: true,
+        userIdentity: { name: "Alice", email: "alice@example.com" },
+        userEditDebounceMs: 50,
+      });
+
+      // Trigger a user edit via direct FS write — fs-tracker debouncer fires.
+      await writeFile(join(root, "a.txt"), "v2\n");
+      // Wait for the debounce to fire and commit to land.
+      const pullUrl = `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/pull?timeout=2000`;
+      const res = await fetch(pullUrl, {
+        headers: { authorization: "Bearer broker-token" },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { events: Array<{ sha: string }> };
+      expect(body.events.length).toBe(1);
+      const sha = body.events[0]!.sha;
+
+      const ackRes = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/ack`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer broker-token",
+          },
+          body: JSON.stringify({ sha }),
+        },
+      );
+      expect(ackRes.status).toBe(204);
+
+      const after = await fetch(
+        `http://127.0.0.1:${handle.port}/internal/projects/project-1/git/user-commits/pull?timeout=200`,
+        { headers: { authorization: "Bearer broker-token" } },
+      );
+      expect((await after.json() as { events: unknown[] }).events).toEqual([]);
+    });
+  });
 });

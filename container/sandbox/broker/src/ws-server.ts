@@ -26,16 +26,29 @@ import {
 } from "./terminal-runner";
 import {
   commitAndPushChanges,
+  commitUserEditsIfDirty,
   getCommitDiff,
   getCommitFiles,
   getGitStatus,
   revertToCommit,
   GitCommandError,
 } from "./git-handlers";
+import { createUserEditDebouncer } from "./user-edit-watcher";
+import {
+  createUserCommitQueue,
+  type UserCommitPayload,
+  type UserCommitQueue,
+} from "./user-commit-queue";
 
 export interface BrokerHandle {
   port: number;
   close: () => Promise<void>;
+  /**
+   * Phase 1.4a-C: force any pending user-edit debounce to fire NOW. Used by
+   * Tasks 7 (pre-revert) and 8 (pre-run) to flush in-flight external edits
+   * before an agent run or rollback overwrites them.
+   */
+  flushUserEdits: () => Promise<void>;
 }
 
 export interface StartBrokerOptions {
@@ -53,6 +66,17 @@ export interface StartBrokerOptions {
   __testPtySpawn?: PtySpawnFn;
   onDrainProjectQueue?: (projectId: string) => Promise<void> | void;
   onCancelProjectRun?: (projectId: string, runId: string) => Promise<void> | void;
+  /**
+   * Test-time override for the committer identity used by the user-edit
+   * watcher. In production the identity is read from BROKER_USER_NAME /
+   * BROKER_USER_EMAIL env vars. Pass `null` to force "no identity".
+   */
+  userIdentity?: { name: string; email: string } | null;
+  /**
+   * Test-time override for the user-edit debouncer delay. Production uses
+   * 5_000 ms.
+   */
+  userEditDebounceMs?: number;
 }
 
 interface ExecuteRunCommand {
@@ -94,12 +118,65 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
     }
   };
 
+  const isAgentActive = () => activeRuns.size > 0;
+  const isLocked = isAgentActive;
+
+  // Phase 1.4a-C: user-edit watcher + commit queue. The watcher debounces
+  // external (non-agent) fs writes and runs commitUserEditsIfDirty when the
+  // window expires; on success the resulting commit is enqueued for the
+  // worker-agent forwarder (Task 10) and broadcast to subscribed hosts.
+  const userIdentity =
+    opts.userIdentity === undefined ? readUserIdentityFromEnv() : opts.userIdentity;
+  const userQueue = createUserCommitQueue();
+  const userDebouncer = createUserEditDebouncer({
+    delayMs: opts.userEditDebounceMs ?? 5_000,
+    isAgentActive,
+    onTimer: async () => {
+      if (!userIdentity) return;
+      const result = await commitUserEditsIfDirty({
+        projectRoot,
+        authorName: userIdentity.name,
+        authorEmail: userIdentity.email,
+      });
+      if (!result.ok) return;
+      const payload: UserCommitPayload = {
+        sha: result.sha,
+        shortSha: result.shortSha,
+        title: result.title,
+        bodyMessage: result.bodyMessage,
+        filesChanged: result.filesChanged,
+        insertions: result.insertions,
+        deletions: result.deletions,
+        userEmail: userIdentity.email,
+        committedAt: result.committedAt,
+      };
+      userQueue.enqueue(payload);
+      broadcast({
+        type: "git.commit",
+        turnId: null,
+        sha: result.sha,
+        shortSha: result.shortSha,
+        title: result.title,
+        bodyMessage: result.bodyMessage,
+        filesChanged: result.filesChanged,
+        insertions: result.insertions,
+        deletions: result.deletions,
+        runtime: null,
+        modelId: null,
+        authorKind: "USER",
+        committedAt: result.committedAt,
+      });
+    },
+  });
+
   server.on("request", (req, res) => {
     void handleInternalHttpRequest(req, res, {
       ...opts,
       activeRuns,
       broadcastEvent: broadcast,
       projectRoot,
+      userQueue,
+      flushUserEdits: () => userDebouncer.flush(),
     }).catch(() => {
       if (!res.writableEnded) {
         writeJson(res, 500, { error: "internal" });
@@ -117,9 +194,6 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   if (!address || typeof address === "string") {
     throw new Error("ws server did not bind to a numeric port");
   }
-
-  const isAgentActive = () => activeRuns.size > 0;
-  const isLocked = isAgentActive;
 
   let tracker: FsTracker | undefined;
   if (enableFsTracker) {
@@ -139,6 +213,8 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
           });
         }
         broadcast(event);
+        // Phase 1.4a-C: external (non-agent) writes trigger user-edit debounce.
+        if (e.source === "external") userDebouncer.notify();
       },
     });
   }
@@ -425,6 +501,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
   return {
     port: address.port,
     close: async () => {
+      userDebouncer.dispose();
       await new Promise<void>((resolve, reject) => {
         for (const client of wss.clients) {
           client.terminate();
@@ -436,6 +513,7 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       });
       if (tracker) await tracker.close();
     },
+    flushUserEdits: () => userDebouncer.flush(),
   };
 }
 
@@ -446,6 +524,8 @@ async function handleInternalHttpRequest(
     activeRuns: Map<string, ActiveRunState>;
     broadcastEvent: (event: BrokerToHost) => void;
     projectRoot: string;
+    userQueue: UserCommitQueue;
+    flushUserEdits: () => Promise<void>;
   },
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -459,6 +539,26 @@ async function handleInternalHttpRequest(
     writeJson(res, 426, { error: "upgrade-required" });
     return;
   }
+
+  // Phase 1.4a-C: user-commit long-poll endpoint (GET) MUST short-circuit the
+  // POST-only gate below. Bearer auth is applied here explicitly.
+  const userCommitsPullMatch =
+    /^\/internal\/projects\/([^/]+)\/git\/user-commits\/pull$/.exec(url.pathname);
+  if (userCommitsPullMatch && req.method === "GET") {
+    const pullAuth = verifyBrokerBearer(req.headers.authorization);
+    if (!pullAuth.ok) {
+      writeJson(res, pullAuth.statusCode, { error: pullAuth.error });
+      return;
+    }
+    const rawTimeout = parseInt(url.searchParams.get("timeout") ?? "30000", 10);
+    const timeoutMs = Number.isFinite(rawTimeout)
+      ? Math.max(0, Math.min(60_000, rawTimeout))
+      : 30_000;
+    const events = await opts.userQueue.pullPending({ timeoutMs });
+    writeJson(res, 200, { events });
+    return;
+  }
+
   if (req.method !== "POST") {
     writeJson(res, 405, { error: "method-not-allowed" });
     return;
@@ -595,6 +695,21 @@ async function handleInternalHttpRequest(
     } catch (error) {
       writeGitError(res, error);
     }
+    return;
+  }
+
+  // Phase 1.4a-C: user-commit ack endpoint (POST).
+  const userCommitsAckMatch =
+    /^\/internal\/projects\/([^/]+)\/git\/user-commits\/ack$/.exec(url.pathname);
+  if (userCommitsAckMatch) {
+    const body = await readJsonBody(req);
+    if (!isUserCommitAckBody(body)) {
+      writeJson(res, 400, { error: "bad-request" });
+      return;
+    }
+    opts.userQueue.ack(body.sha);
+    res.writeHead(204);
+    res.end();
     return;
   }
 
@@ -790,6 +905,19 @@ function isGitRevertBody(value: unknown): value is { sha: string; triggeredBy: s
     body.triggeredBy.length > 0 &&
     body.triggeredBy.length <= 200
   );
+}
+
+function isUserCommitAckBody(value: unknown): value is { sha: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return typeof body.sha === "string" && /^[a-f0-9]{40}$/.test(body.sha);
+}
+
+function readUserIdentityFromEnv(): { name: string; email: string } | null {
+  const name = (process.env.BROKER_USER_NAME ?? "").trim();
+  const email = (process.env.BROKER_USER_EMAIL ?? "").trim();
+  if (!name || !email) return null;
+  return { name, email };
 }
 
 function isAgentRuntime(value: unknown): value is AgentRuntime {
