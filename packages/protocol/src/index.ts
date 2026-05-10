@@ -184,7 +184,7 @@ export type BrokerToHost =
       deletions: number;
       runtime: AgentRuntime | null;     // null for revert
       modelId: string | null;
-      authorKind: "AGENT" | "ROLLBACK"; // "USER" reserved for 1.4a-C
+      authorKind: "AGENT" | "ROLLBACK" | "USER";
       revertedFromSha?: string;         // present only when authorKind = "ROLLBACK"
       committedAt: string;
     }
@@ -201,4 +201,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.16.0" as const;
+export const PROTOCOL_VERSION = "1.17.0" as const;
