@@ -645,11 +645,11 @@ export default function ProjectWorkspace({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState<boolean>(false);
+  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState<boolean>(true);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem("wbd:chatSidebarCollapsed");
-    if (stored === "1") setChatSidebarCollapsed(true);
+    if (stored === "0") setChatSidebarCollapsed(false);
   }, []);
   const toggleChatSidebar = () => {
     setChatSidebarCollapsed((prev) => {
