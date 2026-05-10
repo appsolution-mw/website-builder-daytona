@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2, Mic, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -46,21 +46,22 @@ export function DictationButton({ disabled, onTranscript, onError }: DictationBu
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const [supported, setSupported] = useState(true);
-
-  useEffect(() => {
-    // Resolve mic availability after hydration so the button renders the
-    // same on the server (assume supported) and the client (real check).
-    // getUserMedia is only exposed in secure contexts — https or localhost.
-    // LAN IP over plain http does NOT qualify and the API is undefined.
-    const isSecure =
-      typeof window !== "undefined" &&
-      (window.isSecureContext ||
+  // getUserMedia is only exposed in secure contexts (https or localhost);
+  // LAN IPs over plain http have `navigator.mediaDevices` undefined.
+  // useSyncExternalStore returns the server-snapshot during SSR and the
+  // real client-side answer right after hydration without setState-in-effect.
+  const supported = useSyncExternalStore(
+    () => () => {},
+    () => {
+      const isSecure =
+        window.isSecureContext ||
         window.location.hostname === "localhost" ||
-        window.location.hostname === "127.0.0.1");
-    const hasApi = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
-    setSupported(isSecure && hasApi);
-  }, []);
+        window.location.hostname === "127.0.0.1";
+      const hasApi = Boolean(navigator.mediaDevices?.getUserMedia);
+      return isSecure && hasApi;
+    },
+    () => true,
+  );
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
