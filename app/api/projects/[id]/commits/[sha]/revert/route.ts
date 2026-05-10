@@ -45,7 +45,7 @@ export async function POST(
 
   const headCommit = await prisma.commit.findFirst({
     where: { projectId },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     select: { sha: true },
   });
   if (headCommit?.sha === sha) {
