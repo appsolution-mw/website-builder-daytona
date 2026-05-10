@@ -14,7 +14,7 @@ describe("brokerJsonRpc", () => {
     vi.restoreAllMocks();
   });
 
-  it("converts a wss broker URL to https + sets bearer + preview token headers", async () => {
+  it("converts a wss broker URL to https + sets bearer header and preserves query params", async () => {
     const captured: { url: string; init: RequestInit | undefined }[] = [];
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       captured.push({ url: String(url), init });
@@ -25,17 +25,16 @@ describe("brokerJsonRpc", () => {
     }) as typeof globalThis.fetch;
 
     await brokerJsonRpc(
-      { brokerUrl: "wss://abc.daytona.app?x-daytona-preview-token=daytona-token", brokerPreviewToken: "daytona-token" },
+      { brokerUrl: "wss://broker.example?token=broker-token", brokerPreviewToken: "broker-token" },
       "/git/commit-files",
       { sha: "a".repeat(40) },
     );
 
     expect(captured.length).toBe(1);
-    expect(captured[0]!.url.startsWith("https://abc.daytona.app/internal/projects/host/git/commit-files")).toBe(true);
-    expect(captured[0]!.url).toContain("x-daytona-preview-token=daytona-token");
+    expect(captured[0]!.url.startsWith("https://broker.example/internal/projects/host/git/commit-files")).toBe(true);
+    expect(captured[0]!.url).toContain("token=broker-token");
     const headers = captured[0]!.init?.headers as Record<string, string>;
-    expect(headers.authorization).toBe("Bearer daytona-token");
-    expect(headers["x-daytona-preview-token"]).toBe("daytona-token");
+    expect(headers.authorization).toBe("Bearer broker-token");
     expect(captured[0]!.init?.method).toBe("POST");
   });
 

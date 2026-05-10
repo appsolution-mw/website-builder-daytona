@@ -20,7 +20,6 @@
   },
   "dependencies": {
     "@better-auth/prisma-adapter": "^1.6.9",
-    "@daytona/sdk": "^0.168.0",
     "@monaco-editor/react": "^4.6.0",
     "@prisma/adapter-pg": "^7.7.0",
     "@prisma/client": "^7.7.0",

@@ -232,7 +232,7 @@ describe("WorkerPoolRuntime", () => {
   it("encodes project dotenv content into the worker-agent sandbox env", async () => {
     const handles = createFakeAgentClient();
     const r = createWorkerPoolRuntime(RUNTIME_ARGS(handles));
-    const projectEnvContent = "PUBLIC_NAME=Daytona\nPRIVATE_TOKEN=s3cr3t\n";
+    const projectEnvContent = "PUBLIC_NAME=Workspace\nPRIVATE_TOKEN=s3cr3t\n";
     const spawnArgs = {
       projectId: await project(),
       source: { type: "template" as const },

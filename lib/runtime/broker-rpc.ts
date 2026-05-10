@@ -2,16 +2,10 @@
  * Direct host→broker JSON-RPC over the broker's internal HTTP surface.
  *
  * The broker's `/internal/*` routes are POST-only and authenticated with a
- * bearer token (`BROKER_TOKEN`). For the worker-pool runtime, that token is
- * the same value stored on `Project.brokerPreviewToken` (see
- * `lib/runtime/worker-pool/runtime.ts` — `brokerPreviewToken: brokerToken`).
- * For the Daytona runtime, `brokerPreviewToken` is the Daytona preview-proxy
- * token; the proxy validates it via the `x-daytona-preview-token` header.
- *
- * To stay compatible with both, we send the same secret as both `Authorization`
- * and `x-daytona-preview-token`. The broker rejects the request with a
- * non-Bearer credential gracefully if the token doesn't match the broker's
- * expected `BROKER_TOKEN`; the host caller must then surface that.
+ * bearer token (`BROKER_TOKEN`). The token is the same value stored on
+ * `Project.brokerPreviewToken` (see `lib/runtime/worker-pool/runtime.ts` —
+ * `brokerPreviewToken: brokerToken`). The broker validates it via the
+ * `Authorization: Bearer …` header.
  */
 
 const PROJECT_SCOPE = "host"; // single internal projectId namespace for the broker route regex
@@ -46,7 +40,6 @@ export async function brokerJsonRpc<T>(
   };
   if (token) {
     headers.authorization = `Bearer ${token}`;
-    headers["x-daytona-preview-token"] = token;
   }
 
   const ctrl = new AbortController();
@@ -89,7 +82,7 @@ function buildBrokerHttpUrl(brokerUrl: string, path: string): string {
   const protocol = url.protocol === "wss:" ? "https:" : "http:";
   const httpUrl = new URL(`${protocol}//${url.host}`);
   httpUrl.pathname = `/internal/projects/${encodeURIComponent(PROJECT_SCOPE)}${path}`;
-  // Preserve any query params from brokerUrl (e.g. daytona preview token).
+  // Preserve any query params from brokerUrl (e.g. preview token).
   for (const [key, value] of url.searchParams) {
     httpUrl.searchParams.set(key, value);
   }

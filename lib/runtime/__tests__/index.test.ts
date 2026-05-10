@@ -3,7 +3,6 @@ import { createRuntime } from "../index";
 
 describe("createRuntime factory", () => {
   const originalRuntimeMode = process.env.RUNTIME_MODE;
-  const originalDaytonaMode = process.env.DAYTONA_MODE;
   const originalSandboxImage = process.env.SANDBOX_IMAGE;
   const originalWorkerAgentImage = process.env.WORKER_AGENT_IMAGE;
   const originalHmac = process.env.WORKER_AGENT_HMAC_SECRET;
@@ -16,8 +15,6 @@ describe("createRuntime factory", () => {
   afterEach(() => {
     if (originalRuntimeMode === undefined) delete process.env.RUNTIME_MODE;
     else process.env.RUNTIME_MODE = originalRuntimeMode;
-    if (originalDaytonaMode === undefined) delete process.env.DAYTONA_MODE;
-    else process.env.DAYTONA_MODE = originalDaytonaMode;
     if (originalSandboxImage === undefined) delete process.env.SANDBOX_IMAGE;
     else process.env.SANDBOX_IMAGE = originalSandboxImage;
     if (originalWorkerAgentImage === undefined) delete process.env.WORKER_AGENT_IMAGE;
@@ -35,19 +32,6 @@ describe("createRuntime factory", () => {
     if (originalAppBaseUrl === undefined) delete process.env.APP_BASE_URL;
     else process.env.APP_BASE_URL = originalAppBaseUrl;
     vi.resetModules();
-  });
-
-  it("uses DAYTONA_MODE=fake when RUNTIME_MODE is unset", () => {
-    delete process.env.RUNTIME_MODE;
-    process.env.DAYTONA_MODE = "fake";
-    const r = createRuntime();
-    expect(typeof r.spawnProjectSandbox).toBe("function");
-  });
-
-  it("uses RUNTIME_MODE=daytona-fake when explicit", () => {
-    process.env.RUNTIME_MODE = "daytona-fake";
-    delete process.env.DAYTONA_MODE;
-    expect(createRuntime()).toBeDefined();
   });
 
   it("returns WorkerPoolRuntime for worker-pool-local", () => {
@@ -98,11 +82,9 @@ describe("createRuntime factory", () => {
     );
   });
 
-  it("throws for legacy hetzner-fake/hetzner-cloud with rename hint", () => {
-    process.env.RUNTIME_MODE = "hetzner-fake";
-    expect(() => createRuntime()).toThrow(/renamed/);
-    process.env.RUNTIME_MODE = "hetzner-cloud";
-    expect(() => createRuntime()).toThrow(/renamed/);
+  it("throws when RUNTIME_MODE is unset", () => {
+    delete process.env.RUNTIME_MODE;
+    expect(() => createRuntime()).toThrow(/RUNTIME_MODE is not set/);
   });
 
   it("throws for unknown mode", () => {

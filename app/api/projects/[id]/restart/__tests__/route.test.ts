@@ -4,7 +4,6 @@ import { RuntimeError } from "@/lib/runtime/errors";
 const destroyProjectSandboxMock = vi.hoisted(() => vi.fn());
 const spawnProjectSandboxMock = vi.hoisted(() => vi.fn());
 const createRuntimeMock = vi.hoisted(() => vi.fn());
-const createDaytonaRuntimeMock = vi.hoisted(() => vi.fn());
 const projectFindFirstMock = vi.hoisted(() => vi.fn());
 const projectUpdateMock = vi.hoisted(() => vi.fn());
 const projectEnvironmentFindUniqueMock = vi.hoisted(() => vi.fn());
@@ -21,7 +20,6 @@ vi.mock("@/lib/auth/current-user", () => ({
 
 vi.mock("@/lib/runtime", () => ({
   createRuntime: createRuntimeMock,
-  createDaytonaRuntime: createDaytonaRuntimeMock,
 }));
 
 vi.mock("@/lib/db/client", () => ({
@@ -309,47 +307,6 @@ describe("POST /api/projects/[id]/restart", () => {
       projectId: "project-openhands",
       openhandsFiles,
     }));
-  });
-
-  it("uses the fake Daytona runtime when restarting a fake sandbox", async () => {
-    const runtime = {
-      destroyProjectSandbox: destroyProjectSandboxMock,
-      spawnProjectSandbox: spawnProjectSandboxMock,
-    };
-    createDaytonaRuntimeMock.mockReturnValue(runtime);
-    projectFindFirstMock.mockResolvedValue({
-      id: "project-fake",
-      status: "RUNNING",
-      sandboxId: "fake-project-fake-4000",
-      sourceType: "TEMPLATE",
-      githubOwner: null,
-      githubRepo: null,
-      githubBaseBranch: null,
-      githubInstallation: null,
-    });
-    projectEnvironmentFindUniqueMock.mockResolvedValue(null);
-    spawnProjectSandboxMock.mockResolvedValue({
-      sandboxId: "fake-project-fake-4001",
-      brokerUrl: "ws://localhost:4001",
-      brokerPreviewToken: "",
-      previewUrl: "http://localhost:3001",
-    });
-    projectUpdateMock.mockResolvedValue({
-      id: "project-fake",
-      status: "RUNNING",
-      sandboxId: "fake-project-fake-4001",
-    });
-
-    const res = await POST(new Request("http://localhost/api/projects/project-fake/restart", {
-      method: "POST",
-    }), {
-      params: Promise.resolve({ id: "project-fake" }),
-    });
-
-    expect(res.status).toBe(200);
-    expect(createDaytonaRuntimeMock).toHaveBeenCalledWith("fake");
-    expect(createRuntimeMock).not.toHaveBeenCalled();
-    expect(destroyProjectSandboxMock).toHaveBeenCalledWith("fake-project-fake-4000");
   });
 
   it("rejects restart while the project is provisioning", async () => {

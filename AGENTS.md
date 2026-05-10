@@ -217,8 +217,8 @@ Legacy monolithic files MUST be treated as archives.
 ## Runtime, Broker, Worker, And Database
 
 - Keep runtime-specific code behind the existing runtime/provider boundaries.
-- Do not break existing `daytona-*`, `worker-pool-*`, `claude-code`,
-  `openai-codex`, `vercel-ai`, or `openhands` paths while changing one path.
+- Do not break existing `worker-pool-*`, `claude-code`, `openai-codex`, or
+  `openhands` paths while changing one path.
 - Keep broker protocol changes synchronized with `packages/protocol`.
 - Keep worker-agent HTTP contracts and HMAC behavior compatible with host
   routes.

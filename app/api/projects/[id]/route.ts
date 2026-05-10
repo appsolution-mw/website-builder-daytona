@@ -2,14 +2,11 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
-import { createRuntime, createDaytonaRuntime } from "@/lib/runtime";
+import { createRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
-import { getEffectiveAgentConfig } from "@/lib/agent-config/db";
-import { materializeOpenHandsFiles } from "@/lib/agent-config/materialize";
 import { serializeCommit } from "@/lib/workspace/commit-serializer";
 
-const FAKE_PREVIEW_HEALTH_TIMEOUT_MS = 500;
 const DEFAULT_SESSION_TITLE = "Main chat";
 
 async function ensureProjectSession(projectId: string) {
@@ -54,31 +51,6 @@ async function listProjectSessions(projectId: string) {
   });
 }
 
-async function projectEnvContent(projectId: string): Promise<string | undefined> {
-  const row = await prisma.projectEnvironment.findUnique({
-    where: { projectId },
-    select: { content: true },
-  });
-  return row?.content || undefined;
-}
-
-async function isFakePreviewReachable(previewUrl: string | null): Promise<boolean> {
-  if (!previewUrl) return false;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FAKE_PREVIEW_HEALTH_TIMEOUT_MS);
-  try {
-    const res = await fetch(previewUrl, {
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    return res.ok;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -87,37 +59,11 @@ export async function GET(
   if (!currentUser.ok) return currentUser.response;
 
   const { id } = await params;
-  let project = await prisma.project.findFirst({
+  const project = await prisma.project.findFirst({
     where: { id, ownerId: currentUser.user.id },
   });
   if (!project) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
-  }
-
-  if (
-    project.status === "RUNNING" &&
-    project.sandboxId?.startsWith("fake-") &&
-    !(await isFakePreviewReachable(project.previewUrl))
-  ) {
-    // Branch only reached for fake-* sandboxes — use fake runtime unconditionally
-    // so a RUNTIME_MODE change between provision and re-spawn can't mismatch.
-    const runtime = createDaytonaRuntime("fake");
-    const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
-    const info = await runtime.spawnProjectSandbox({
-      projectId: project.id,
-      source: { type: "template" },
-      projectEnvContent: await projectEnvContent(project.id),
-      openhandsFiles,
-    });
-    project = await prisma.project.update({
-      where: { id: project.id },
-      data: {
-        sandboxId: info.sandboxId,
-        brokerUrl: info.brokerUrl,
-        brokerPreviewToken: info.brokerPreviewToken,
-        previewUrl: info.previewUrl,
-      },
-    });
   }
 
   const chatSession = await ensureProjectSession(project.id);
@@ -158,11 +104,7 @@ export async function DELETE(
 
   if (project.sandboxId) {
     try {
-      // Pick runtime by stored sandbox-id shape so a mode change between
-      // provision and destroy can't leak resources or no-op a real destroy.
-      const runtime = project.sandboxId.startsWith("fake-")
-        ? createDaytonaRuntime("fake")
-        : createRuntime();
+      const runtime = createRuntime();
       await runtime.destroyProjectSandbox(project.sandboxId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -3,9 +3,8 @@
  * project's container" request into a running container reachable via WSS.
  *
  * Implementations:
- *   - DaytonaCloudRuntime  — uses Daytona Cloud API (existing, kept for backward compat)
- *   - DaytonaFakeRuntime   — in-process broker for local dev (existing)
- *   - HetznerRuntime       — multi-cloud Docker runtime (built progressively in H.1b–d)
+ *   - LocalWorkerPoolRuntime   — WorkerPoolRuntime against a locally running worker-agent
+ *   - HetznerWorkerPoolRuntime — WorkerPoolRuntime against managed Hetzner workers
  */
 export interface Runtime {
   spawnProjectSandbox(args: SpawnArgs): Promise<SandboxInfo>;
@@ -65,7 +64,7 @@ export type SandboxStatus =
   | "error";
 
 /* -------------------------------------------------------------------------- */
-/* Worker pool primitives — used by HetznerRuntime, not by Daytona runtimes.  */
+/* Worker pool primitives — used by HetznerRuntime.                           */
 /* -------------------------------------------------------------------------- */
 
 /**

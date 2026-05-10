@@ -147,8 +147,9 @@ export async function startProxy(opts: StartProxyOptions): Promise<ProxyHandle> 
       brokerOpened = true;
       clearTimeout(brokerConnectTimer);
       // Keepalive for the broker leg too (ws-proxy acts as WS client here).
-      // Daytona's HTTPS reverse proxy idle-closes WSS connections after a
-      // short silence; pings prevent that during long Claude turns.
+      // Intermediate HTTPS reverse proxies (e.g. Caddy) idle-close WSS
+      // connections after a short silence; pings prevent that during long
+      // Claude turns.
       let brokerAlive = true;
       brokerSocket.on("pong", () => {
         brokerAlive = true;

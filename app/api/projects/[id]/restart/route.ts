@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
-import { createDaytonaRuntime, createRuntime, type Runtime } from "@/lib/runtime";
+import { createRuntime } from "@/lib/runtime";
 import { isRuntimeError } from "@/lib/runtime/errors";
 import type { ProjectSource } from "@/lib/runtime/types";
 import { createInstallationAccessToken } from "@/lib/github/app";
@@ -22,13 +22,6 @@ type RestartProject = {
   githubBaseBranch: string | null;
   githubInstallation: { installationId: bigint } | null;
 };
-
-function runtimeForSandbox(sandboxId: string | null): Runtime {
-  if (sandboxId?.startsWith("fake-")) {
-    return createDaytonaRuntime("fake");
-  }
-  return createRuntime();
-}
 
 function noWorkerCapacityMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -93,7 +86,7 @@ export async function POST(
     where: { projectId: project.id },
     select: { content: true },
   });
-  const runtime = runtimeForSandbox(project.sandboxId);
+  const runtime = createRuntime();
   const openhandsFiles = materializeOpenHandsFiles(await getEffectiveAgentConfig(project.id));
 
   // Mark broker as not-ready immediately so the UI overlays the workspace
