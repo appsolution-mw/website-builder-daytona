@@ -2818,14 +2818,6 @@ export default function ProjectWorkspace({
                   </Button>
                 </div>
                 <div className="flex min-w-0 items-center gap-1">
-                  {reasoningEffort !== null && reasoningOptionsForRuntime(selectedRuntime).length > 0 && (
-                    <ReasoningEffortPicker
-                      runtime={selectedRuntime}
-                      value={reasoningEffort}
-                      disabled={turnInFlight !== null || sessionLoading || !activeSession}
-                      onSelect={setReasoningEffort}
-                    />
-                  )}
                   {showModelPicker && (
                     <ModelPicker
                       models={availableModels}
@@ -2834,6 +2826,14 @@ export default function ProjectWorkspace({
                       disabled={turnInFlight !== null || sessionLoading || !activeSession}
                       onSelect={setSessionRuntimeModel}
                       compact
+                    />
+                  )}
+                  {reasoningEffort !== null && reasoningOptionsForRuntime(selectedRuntime).length > 0 && (
+                    <ReasoningEffortPicker
+                      runtime={selectedRuntime}
+                      value={reasoningEffort}
+                      disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                      onSelect={setReasoningEffort}
                     />
                   )}
                   {turnInFlight && (
