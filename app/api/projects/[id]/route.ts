@@ -6,6 +6,7 @@ import { createRuntime } from "@/lib/runtime";
 import { AGENT_RUNTIME_OPTIONS, dbRuntimeToProtocol } from "@/lib/agents/runtime";
 import { serializeSession, sessionSelect } from "@/lib/agents/session-runtime-state";
 import { serializeCommit } from "@/lib/workspace/commit-serializer";
+import { getDailyQuotaState } from "@/lib/usage/daily-quota";
 
 const DEFAULT_SESSION_TITLE = "Main chat";
 
@@ -73,6 +74,7 @@ export async function GET(
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 20,
   });
+  const dailyQuota = await getDailyQuotaState(prisma, currentUser.user.id);
 
   return NextResponse.json({
     project: {
@@ -83,6 +85,7 @@ export async function GET(
       chatSession: serializeSession(chatSession),
       chatSessions: chatSessions.map(serializeSession),
       commits: recentCommits.map(serializeCommit),
+      dailyQuota,
     },
   });
 }
