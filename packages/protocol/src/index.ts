@@ -174,7 +174,7 @@ export type BrokerToHost =
     }
   | {
       type: "git.commit";
-      turnId: string;
+      turnId: string | null;            // null for revert (no agent run)
       sha: string;
       shortSha: string;
       title: string;
@@ -182,9 +182,10 @@ export type BrokerToHost =
       filesChanged: number;
       insertions: number;
       deletions: number;
-      runtime: AgentRuntime;
+      runtime: AgentRuntime | null;     // null for revert
       modelId: string | null;
-      authorKind: "AGENT";
+      authorKind: "AGENT" | "ROLLBACK"; // "USER" reserved for 1.4a-C
+      revertedFromSha?: string;         // present only when authorKind = "ROLLBACK"
       committedAt: string;
     }
   | {
@@ -200,4 +201,4 @@ export type ProxyToBrowser = BrokerToHost;
 // Messages the browser sends to the ws-proxy (currently identical to HostToBroker)
 export type BrowserToProxy = HostToBroker;
 
-export const PROTOCOL_VERSION = "1.15.0" as const;
+export const PROTOCOL_VERSION = "1.16.0" as const;
