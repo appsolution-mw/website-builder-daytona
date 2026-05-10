@@ -46,7 +46,21 @@ export function DictationButton({ disabled, onTranscript, onError }: DictationBu
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
-  const supported = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+  const [supported, setSupported] = useState(true);
+
+  useEffect(() => {
+    // Resolve mic availability after hydration so the button renders the
+    // same on the server (assume supported) and the client (real check).
+    // getUserMedia is only exposed in secure contexts — https or localhost.
+    // LAN IP over plain http does NOT qualify and the API is undefined.
+    const isSecure =
+      typeof window !== "undefined" &&
+      (window.isSecureContext ||
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1");
+    const hasApi = typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+    setSupported(isSecure && hasApi);
+  }, []);
 
   useEffect(() => () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -126,14 +140,19 @@ export function DictationButton({ disabled, onTranscript, onError }: DictationBu
   }
 
   function onClick(): void {
+    if (!supported) {
+      onError?.(
+        "Voice input requires HTTPS or localhost — browsers block microphone access on plain-http LAN IPs.",
+      );
+      return;
+    }
     if (state === "idle") void startRecording();
     else if (state === "recording") stopRecording();
   }
 
-  if (!supported) return null;
-
-  const title =
-    state === "recording" ? "Stop recording"
+  const title = !supported
+    ? "Voice input needs HTTPS or localhost"
+    : state === "recording" ? "Stop recording"
       : state === "transcribing" ? "Transcribing…"
         : "Dictate via voice";
 
@@ -150,6 +169,7 @@ export function DictationButton({ disabled, onTranscript, onError }: DictationBu
       className={cn(
         "text-muted-foreground hover:text-foreground",
         state === "recording" && "text-red-300 hover:text-red-200",
+        !supported && "opacity-60",
       )}
     >
       {state === "transcribing" ? (
