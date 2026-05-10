@@ -1623,6 +1623,12 @@ export default function ProjectWorkspace({
         agentRunId: ev.turnId,
         createdAt: ev.committedAt,
       });
+      // Force-reload the preview iframe whenever the agent commits real
+      // file changes. Pure HMR through the broker proxy can lag behind
+      // (30–60s in practice); a remount drops any stale module state and
+      // shows the post-turn output immediately. Turns with no file changes
+      // emit `git.commit.skipped` instead, so the preview is left alone.
+      setPreviewReloadKey((key) => key + 1);
       return;
     }
 
