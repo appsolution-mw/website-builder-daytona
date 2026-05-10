@@ -318,6 +318,143 @@ function extractErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const ROLLBACK_AUTHOR = AGENT_AUTHOR; // single bot identity per spec §2 Decision 8
+
+export interface RevertToCommitRequest {
+  projectRoot: string;
+  sha: string;            // 40-char hex
+  triggeredBy: string;    // e.g. "user:<userId>"
+}
+
+export type RevertToCommitResponse =
+  | {
+      ok: true;
+      sha: string;            // new HEAD sha (the revert commit itself)
+      shortSha: string;
+      title: string;
+      bodyMessage: string;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+      revertedFromSha: string;
+      committedAt: string;
+    }
+  | { ok: false; reason: "unknown_sha" | "is_head" | "dirty_tree" }
+  | { ok: false; reason: "commit_failed"; detail: string };
+
+export async function revertToCommit(
+  input: RevertToCommitRequest,
+): Promise<RevertToCommitResponse> {
+  if (!/^[a-f0-9]{40}$/.test(input.sha)) {
+    return { ok: false, reason: "unknown_sha" };
+  }
+
+  // 1. Verify the sha is a known commit object.
+  try {
+    await runGit(input.projectRoot, ["rev-parse", "--verify", `${input.sha}^{commit}`]);
+  } catch {
+    return { ok: false, reason: "unknown_sha" };
+  }
+
+  // 2. Refuse no-op revert.
+  let head: string;
+  try {
+    head = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+  if (head === input.sha) {
+    return { ok: false, reason: "is_head" };
+  }
+
+  // 3. Refuse if the working tree is dirty.
+  let status: GitStatusResponse;
+  try {
+    status = await getGitStatus({ projectRoot: input.projectRoot });
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+  if (status.hasChanges) {
+    return { ok: false, reason: "dirty_tree" };
+  }
+
+  // 4. Read the original commit's first-line title for the revert title.
+  let originalTitle: string;
+  try {
+    originalTitle = (
+      await runGit(input.projectRoot, ["log", "-1", "--format=%s", input.sha])
+    ).trim();
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+  const shortSha = input.sha.slice(0, 7);
+  const title = sanitizeCommitTitle(
+    `Revert to ${shortSha} — ${originalTitle}`,
+    `Revert to ${shortSha}`,
+  );
+  const bodyMessage = buildRevertBody({
+    sha: input.sha,
+    triggeredBy: input.triggeredBy,
+  });
+
+  // 5. Restore files from the original commit and commit.
+  try {
+    await runGit(input.projectRoot, ["checkout", input.sha, "--", "."]);
+    const commitArgs = [
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      `--author=${ROLLBACK_AUTHOR}`,
+      "-m",
+      title,
+      "-m",
+      bodyMessage,
+    ];
+    await runGit(input.projectRoot, commitArgs);
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+
+  // 6. Read back the new HEAD and shortstat.
+  let newSha: string;
+  let stat: { filesChanged: number; insertions: number; deletions: number };
+  try {
+    newSha = (await runGit(input.projectRoot, ["rev-parse", "HEAD"])).trim();
+    stat = await readShortstat(input.projectRoot, newSha);
+  } catch (error) {
+    const detail = sanitizeGitOutput(extractErrorMessage(error));
+    return { ok: false, reason: "commit_failed", detail };
+  }
+
+  return {
+    ok: true,
+    sha: newSha,
+    shortSha: newSha.slice(0, 7),
+    title,
+    bodyMessage,
+    filesChanged: stat.filesChanged,
+    insertions: stat.insertions,
+    deletions: stat.deletions,
+    revertedFromSha: input.sha,
+    committedAt: new Date().toISOString(),
+  };
+}
+
+function buildRevertBody(input: { sha: string; triggeredBy: string }): string {
+  const sanitisedTrigger = input.triggeredBy
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .trim()
+    .slice(0, 200);
+  return [
+    `Reverted-from: ${input.sha}`,
+    `Triggered-by: ${sanitisedTrigger}`,
+  ].join("\n");
+}
+
 export async function getCommitFiles(input: {
   projectRoot: string;
   sha: string;

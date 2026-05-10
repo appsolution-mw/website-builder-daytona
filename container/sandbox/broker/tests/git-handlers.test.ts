@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import {
   getCommitDiff,
   getCommitFiles,
   getGitStatus,
+  revertToCommit,
   sanitizeCommitTitle,
   sanitizeGitOutput,
 } from "../src/git-handlers";
@@ -403,5 +404,120 @@ describe("getCommitDiff", () => {
     await expect(
       getCommitDiff({ projectRoot: root, sha: "0".repeat(40), path: "../etc/passwd" }),
     ).rejects.toThrow();
+  });
+});
+
+describe("revertToCommit", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    tempDirs.length = 0;
+  });
+
+  async function createRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), "wbd-revert-to-commit-"));
+    tempDirs.push(root);
+    await git(root, ["init", "-q", "-b", "main"]);
+    await git(root, ["config", "user.name", "Test User"]);
+    await git(root, ["config", "user.email", "test@example.com"]);
+    return root;
+  }
+
+  async function commitFile(
+    root: string,
+    relPath: string,
+    contents: string,
+    message: string,
+  ): Promise<string> {
+    await writeFile(join(root, relPath), contents);
+    await git(root, ["add", relPath]);
+    await git(root, ["commit", "-m", message]);
+    return (await git(root, ["rev-parse", "HEAD"])).trim();
+  }
+
+  async function emptyCommit(root: string, message: string): Promise<string> {
+    await git(root, ["commit", "--allow-empty", "-m", message]);
+    return (await git(root, ["rev-parse", "HEAD"])).trim();
+  }
+
+  it("rejects an unknown sha", async () => {
+    const root = await createRepository();
+    await emptyCommit(root, "seed");
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: "0".repeat(40),
+      triggeredBy: "user:u1",
+    });
+    expect(res).toEqual({ ok: false, reason: "unknown_sha" });
+  });
+
+  it("rejects when sha equals HEAD", async () => {
+    const root = await createRepository();
+    const head = await emptyCommit(root, "seed");
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: head,
+      triggeredBy: "user:u1",
+    });
+    expect(res).toEqual({ ok: false, reason: "is_head" });
+  });
+
+  it("rejects when working tree is dirty", async () => {
+    const root = await createRepository();
+    const a = await commitFile(root, "seed.txt", "seed\n", "seed");
+    await commitFile(root, "second.txt", "second\n", "second");
+    await writeFile(join(root, "dirty.txt"), "x");
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: a,
+      triggeredBy: "user:u1",
+    });
+    expect(res).toEqual({ ok: false, reason: "dirty_tree" });
+  });
+
+  it("creates a revert commit that restores the historical state", async () => {
+    const root = await createRepository();
+    const a = await commitFile(root, "a.txt", "v1", "seed v1");
+    await commitFile(root, "a.txt", "v2", "seed v2");
+
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: a,
+      triggeredBy: "user:u1",
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.revertedFromSha).toBe(a);
+    expect(res.shortSha).toHaveLength(7);
+    expect(res.filesChanged).toBe(1);
+    expect(res.deletions).toBeGreaterThan(0);
+
+    const headContent = await readFile(join(root, "a.txt"), "utf8");
+    expect(headContent).toBe("v1");
+
+    const logRaw = await git(root, ["log", "--format=%s"]);
+    const log = logRaw.split("\n").filter((line) => line.length > 0);
+    expect(log[0]).toContain("Revert to");
+    expect(log[0]).toContain("seed v1");
+  });
+
+  it("captures revertedFromSha and triggeredBy in the body", async () => {
+    const root = await createRepository();
+    const a = await commitFile(root, "a.txt", "v1", "seed v1");
+    await commitFile(root, "a.txt", "v2", "seed v2");
+
+    const res = await revertToCommit({
+      projectRoot: root,
+      sha: a,
+      triggeredBy: "user:abc123",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    const body = await git(root, ["log", "-1", "--format=%b"]);
+    expect(body).toContain(`Reverted-from: ${a}`);
+    expect(body).toContain("Triggered-by: user:abc123");
   });
 });
