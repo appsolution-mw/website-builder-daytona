@@ -105,7 +105,7 @@ export function ModelPicker({
         )}
       </Button>
       {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 w-full min-w-0 max-w-full rounded-md border border-border bg-popover p-2 shadow-lg">
+        <div className="absolute bottom-full left-0 right-0 z-50 mb-1 w-full min-w-0 max-w-full rounded-md border border-border bg-popover p-2 shadow-lg">
           <div className="relative">
             <Search
               className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
