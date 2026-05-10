@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Loader2, Search } from "lucide-react";
 
 import type { AgentRuntime } from "@wbd/protocol";
@@ -59,9 +60,15 @@ export function ModelPicker({
 }: ModelPickerProps) {
   const listboxId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Trigger rect drives a fixed-position portal in compact mode so the
+  // dropdown is never clipped by ancestor overflow:hidden (chat section,
+  // sidebar etc.). Recomputed on open + viewport changes.
+  const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   // Reset the search query during render when the active runtime changes —
   // canonical "deriving state from props" pattern, avoids the
   // setState-in-effect lint and the extra render pass.
@@ -102,7 +109,9 @@ export function ModelPicker({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return;
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
       setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -114,6 +123,157 @@ export function ModelPicker({
     searchRef.current?.focus();
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !compact) return;
+    const update = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setTriggerRect(rect);
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, compact]);
+
+  function renderPanelContent() {
+    return (
+      <>
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setOpen(false);
+              }
+            }}
+            aria-label="Search models"
+            placeholder="Search models"
+            className="h-9 pl-8 text-xs"
+          />
+        </div>
+        <ul
+          id={listboxId}
+          role="listbox"
+          aria-label={`${activeRuntimeData?.label ?? "Models"} models`}
+          className="mt-2 max-h-72 overflow-y-auto [scrollbar-gutter:stable]"
+        >
+          {loading ? (
+            <li className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              Loading…
+            </li>
+          ) : visibleModels.length > 0 ? (
+            visibleModels.map((model) => {
+              const selected = model.id === selectedModelId;
+              return (
+                <li key={model.id} role="presentation">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      onSelect(model.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    className={cn(
+                      "flex min-h-12 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+                      selected && "bg-accent text-accent-foreground",
+                    )}
+                  >
+                    <Check
+                      className={cn("size-4 shrink-0 opacity-0", selected && "opacity-100")}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{model.label}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                        {model.id}
+                      </span>
+                    </span>
+                    {model.contextLength > 0 && (
+                      <Badge variant="outline" className="shrink-0">
+                        {formatContextLength(model.contextLength)}
+                      </Badge>
+                    )}
+                  </button>
+                </li>
+              );
+            })
+          ) : (
+            <li className="px-2 py-3 text-sm text-muted-foreground">No models found</li>
+          )}
+        </ul>
+        {runtimes.length > 1 && (
+          <div
+            role="tablist"
+            aria-label="Switch runtime"
+            className="mt-2 flex shrink-0 gap-1 border-t border-border pt-2"
+          >
+            {runtimes.map((rt) => {
+              const active = rt.runtime === activeRuntime;
+              return (
+                <button
+                  key={rt.runtime}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => onRuntimeChange(rt.runtime)}
+                  className={cn(
+                    "flex-1 rounded-md px-2 py-1 text-xs font-medium outline-none transition-colors",
+                    "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
+                    active
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {rt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderPanel() {
+    if (!compact) {
+      return (
+        <div
+          ref={panelRef}
+          className="absolute bottom-full left-0 right-0 z-50 mb-1 min-w-0 w-full max-w-full rounded-md border border-border bg-popover p-2 shadow-lg"
+        >
+          {renderPanelContent()}
+        </div>
+      );
+    }
+    if (typeof document === "undefined" || !triggerRect) return null;
+    return createPortal(
+      <div
+        ref={panelRef}
+        className="fixed z-[100] min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg w-[22rem] max-w-[calc(100vw-1rem)]"
+        style={{
+          bottom: window.innerHeight - triggerRect.top + 4,
+          right: window.innerWidth - triggerRect.right,
+        }}
+      >
+        {renderPanelContent()}
+      </div>,
+      document.body,
+    );
+  }
+
   return (
     <div
       ref={rootRef}
@@ -123,6 +283,7 @@ export function ModelPicker({
       )}
     >
       <Button
+        ref={triggerRef}
         type="button"
         variant={compact ? "ghost" : "outline"}
         size={compact ? "xs" : "sm"}
@@ -144,119 +305,7 @@ export function ModelPicker({
           <ChevronDown className="shrink-0 opacity-70" aria-hidden="true" />
         )}
       </Button>
-      {open && (
-        <div
-          className={cn(
-            "absolute bottom-full z-50 mb-1 min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg",
-            compact
-              ? "right-0 w-[22rem] max-w-[calc(100vw-2rem)]"
-              : "left-0 right-0 w-full max-w-full",
-          )}
-        >
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <Input
-              ref={searchRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setOpen(false);
-                }
-              }}
-              aria-label="Search models"
-              placeholder="Search models"
-              className="h-9 pl-8 text-xs"
-            />
-          </div>
-          <ul
-            id={listboxId}
-            role="listbox"
-            aria-label={`${activeRuntimeData?.label ?? "Models"} models`}
-            className="mt-2 max-h-72 overflow-y-auto [scrollbar-gutter:stable]"
-          >
-            {loading ? (
-              <li className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                Loading…
-              </li>
-            ) : visibleModels.length > 0 ? (
-              visibleModels.map((model) => {
-                const selected = model.id === selectedModelId;
-                return (
-                  <li key={model.id} role="presentation">
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      onClick={() => {
-                        onSelect(model.id);
-                        setOpen(false);
-                        setQuery("");
-                      }}
-                      className={cn(
-                        "flex min-h-12 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
-                        selected && "bg-accent text-accent-foreground",
-                      )}
-                    >
-                      <Check
-                        className={cn("size-4 shrink-0 opacity-0", selected && "opacity-100")}
-                        aria-hidden="true"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{model.label}</span>
-                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                          {model.id}
-                        </span>
-                      </span>
-                      {model.contextLength > 0 && (
-                        <Badge variant="outline" className="shrink-0">
-                          {formatContextLength(model.contextLength)}
-                        </Badge>
-                      )}
-                    </button>
-                  </li>
-                );
-              })
-            ) : (
-              <li className="px-2 py-3 text-sm text-muted-foreground">No models found</li>
-            )}
-          </ul>
-          {runtimes.length > 1 && (
-            <div
-              role="tablist"
-              aria-label="Switch runtime"
-              className="mt-2 flex shrink-0 gap-1 border-t border-border pt-2"
-            >
-              {runtimes.map((rt) => {
-                const active = rt.runtime === activeRuntime;
-                return (
-                  <button
-                    key={rt.runtime}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => onRuntimeChange(rt.runtime)}
-                    className={cn(
-                      "flex-1 rounded-md px-2 py-1 text-xs font-medium outline-none transition-colors",
-                      "hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60",
-                      active
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground",
-                    )}
-                  >
-                    {rt.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      {open && renderPanel()}
     </div>
   );
 }
