@@ -4,6 +4,7 @@ import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { DockerClient, SandboxSpec } from "./docker.js";
 import { verify } from "./hmac.js";
 import { watchBrokerReadiness } from "./broker-ready.js";
+import { runUserCommitForwarder } from "./user-commit-forwarder.js";
 import type {
   BrokerCommandResponse,
   CancelProjectRunRequest,
@@ -36,6 +37,7 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
   const app = Fastify({ logger: false });
   const startedAt = Date.now();
   const brokerTokens = new Map<string, string>();
+  const userCommitCancels = new Map<string, () => void>();
   const brokerHost = args.brokerHost ?? "127.0.0.1";
 
   // Override the default JSON parser to allow empty bodies (DELETE/GET requests
@@ -125,6 +127,16 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
           hostUrl: args.hostUrl,
           hmacSecret: args.hmacSecret,
         });
+        // Phase 1.4a-C: forward USER commits from broker queue to host.
+        const cancel = runUserCommitForwarder({
+          sandboxId: created.sandboxId,
+          brokerHost,
+          brokerPort: created.brokerPort,
+          brokerToken: body.brokerToken,
+          hostUrl: args.hostUrl,
+          hmacSecret: args.hmacSecret,
+        });
+        userCommitCancels.set(created.sandboxId, cancel);
       }
       const res: CreateSandboxResponse = {
         sandboxId: created.sandboxId,
@@ -148,6 +160,11 @@ export async function buildServer(args: BuildServerArgs): Promise<FastifyInstanc
   });
 
   app.delete<{ Params: { id: string } }>("/sandboxes/:id", async (req, reply) => {
+    const cancel = userCommitCancels.get(req.params.id);
+    if (cancel) {
+      cancel();
+      userCommitCancels.delete(req.params.id);
+    }
     await args.docker.destroySandbox(req.params.id);
     brokerTokens.delete(req.params.id);
     return reply.code(204).send();
