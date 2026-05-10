@@ -32,39 +32,15 @@ describe("worker-pool broker env", () => {
     });
   });
 
-  it("passes OpenRouter Vercel AI SDK settings into sandboxes", () => {
-    expect(collectBrokerEnv({
-      AGENT_RUNTIME: "vercel-ai",
-      OPENAI_API_KEY: "sk-test",
-      CODEX_API_KEY: "codex-test",
-      CODEX_MODEL: "gpt-5.5",
-      CODEX_SANDBOX_MODE: "danger-full-access",
-      CODEX_REVIEWER_SANDBOX_MODE: "danger-full-access",
-      OPENROUTER_API_KEY: "sk-or-v1-test",
-      VERCEL_AI_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
-      VERCEL_AI_REVIEWER_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
-    })).toMatchObject({
-      AGENT_RUNTIME: "vercel-ai",
-      OPENAI_API_KEY: "sk-test",
-      CODEX_API_KEY: "codex-test",
-      CODEX_MODEL: "gpt-5.5",
-      CODEX_SANDBOX_MODE: "danger-full-access",
-      CODEX_REVIEWER_SANDBOX_MODE: "danger-full-access",
-      OPENROUTER_API_KEY: "sk-or-v1-test",
-      VERCEL_AI_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
-      VERCEL_AI_REVIEWER_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
-    });
-  });
-
   it("can collect broker env from an explicit env source", () => {
     expect(collectBrokerEnv({
-      AGENT_RUNTIME: "vercel-ai",
+      AGENT_RUNTIME: "openai-codex",
       OPENAI_API_KEY: "sk-file",
-      VERCEL_AI_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
+      CODEX_MODEL: "gpt-5.4",
     })).toMatchObject({
-      AGENT_RUNTIME: "vercel-ai",
+      AGENT_RUNTIME: "openai-codex",
       OPENAI_API_KEY: "sk-file",
-      VERCEL_AI_MODEL: "openrouter:anthropic/claude-sonnet-4.6",
+      CODEX_MODEL: "gpt-5.4",
     });
   });
 

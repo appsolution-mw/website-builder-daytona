@@ -517,7 +517,6 @@ function isWorkerAgentRuntime(value: unknown): value is ExecuteProjectRunRequest
   return (
     value === "claude-code" ||
     value === "openai-codex" ||
-    value === "vercel-ai" ||
     value === "openhands"
   );
 }

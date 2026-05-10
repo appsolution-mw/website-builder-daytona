@@ -4,7 +4,6 @@ import { agentRuntimeFromEnv } from "./agent-provider";
 import { runClaudeSdkTurn } from "./claude-sdk-bridge";
 import { runCodexReviewPass, runCodexTurn } from "./codex-runner";
 import { runOpenHandsReviewPass, runOpenHandsTurn } from "./openhands-runner";
-import { runVercelAiReviewPass, runVercelAiTurn } from "./vercel-ai-runner";
 import type { SpawnFn } from "./spawn-types";
 
 export interface CreateAgentProviderOptions {
@@ -22,14 +21,6 @@ export function createAgentProvider(opts: CreateAgentProviderOptions = {}): Agen
       runtime,
       runTurn: (turn) => runCodexTurn(turn),
       runReview: (review) => runCodexReviewPass(review),
-    };
-  }
-
-  if (runtime === "vercel-ai") {
-    return {
-      runtime,
-      runTurn: (turn) => runVercelAiTurn(turn),
-      runReview: (review) => runVercelAiReviewPass(review),
     };
   }
 

@@ -152,10 +152,10 @@ export async function startBroker(opts: StartBrokerOptions): Promise<BrokerHandl
       }
     };
 
-    // Keepalive: ping every 25s. Prevents intermediate proxies (Daytona's
-    // HTTPS reverse proxy) from idle-closing the WSS during long Claude turns
-    // where NDJSON events can pause for minutes. Browsers auto-reply to ping
-    // frames; for the ws→ws leg, the ws-proxy replies via `ws` lib defaults.
+    // Keepalive: ping every 25s. Prevents intermediate proxies (e.g. Caddy)
+    // from idle-closing the WSS during long Claude turns where NDJSON events
+    // can pause for minutes. Browsers auto-reply to ping frames; for the
+    // ws→ws leg, the ws-proxy replies via `ws` lib defaults.
     let isAlive = true;
     socket.on("pong", () => {
       isAlive = true;
@@ -745,7 +745,6 @@ function isAgentRuntime(value: unknown): value is AgentRuntime {
   return (
     value === "claude-code" ||
     value === "openai-codex" ||
-    value === "vercel-ai" ||
     value === "openhands"
   );
 }

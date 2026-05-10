@@ -9,7 +9,7 @@ export type PromptImageAttachment = {
   dataBase64: string;
 };
 
-export type AgentRuntime = "claude-code" | "openai-codex" | "vercel-ai" | "openhands";
+export type AgentRuntime = "claude-code" | "openai-codex" | "openhands";
 
 export type AgentUsageLabel = "coder" | "reviewer" | "turn";
 

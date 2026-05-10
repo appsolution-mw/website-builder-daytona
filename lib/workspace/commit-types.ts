@@ -7,7 +7,7 @@ export type CommitView = {
   filesChanged: number;
   insertions: number;
   deletions: number;
-  runtime: "CLAUDE_CODE" | "OPENAI_CODEX" | "VERCEL_AI" | "OPENHANDS" | null;
+  runtime: "CLAUDE_CODE" | "OPENAI_CODEX" | "OPENHANDS" | null;
   modelId: string | null;
   authorKind: "AGENT" | "USER";
   sessionId: string | null;

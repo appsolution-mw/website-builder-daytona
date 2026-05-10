@@ -62,7 +62,6 @@ export type PushProjectGitChangesResponse =
 export type WorkerAgentRuntime =
   | "claude-code"
   | "openai-codex"
-  | "vercel-ai"
   | "openhands";
 
 export interface ExecuteProjectRunRequest {

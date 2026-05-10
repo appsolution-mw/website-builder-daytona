@@ -142,13 +142,6 @@ export async function POST(
   if (!payload) {
     return NextResponse.json({ error: "invalid run payload" }, { status: 400 });
   }
-  if (payload.runtime === "vercel-ai" && payload.attachments.length > 0) {
-    return NextResponse.json(
-      { error: "image attachments are not supported for the vercel-ai runtime" },
-      { status: 400 },
-    );
-  }
-
   const session = await prisma.session.findFirst({
     where: { id: payload.sessionId, projectId: project.id },
     select: { id: true },

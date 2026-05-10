@@ -63,7 +63,6 @@ export async function executeAgentRun(input: {
       // Pass through unchanged; do NOT pre-write to disk here.
       attachmentsForRunner = input.attachments;
     }
-    // vercel-ai: ignore — host already rejects vercel-ai + attachments combos.
   }
 
   let aborted = input.signal.aborted;

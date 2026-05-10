@@ -633,7 +633,6 @@ enum MessageRole {
 enum AgentRuntime {
   CLAUDE_CODE
   OPENAI_CODEX
-  VERCEL_AI
   OPENHANDS
 }
 

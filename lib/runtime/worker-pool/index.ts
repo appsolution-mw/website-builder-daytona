@@ -135,8 +135,6 @@ export function collectBrokerEnv(runtimeEnv: Record<string, string> = collectRun
     "OPENHANDS_ENABLE_PUBLIC_SKILLS",
     "LLM_API_KEY",
     "LLM_BASE_URL",
-    "VERCEL_AI_MODEL",
-    "VERCEL_AI_REVIEWER_MODEL",
     "GITHUB_CLONE_TOKEN",
     "GITHUB_REPO_OWNER",
     "GITHUB_REPO_NAME",

@@ -577,7 +577,7 @@ function runtimeStateForSession(session: ChatSession | null, runtime: AgentRunti
 }
 
 function supportsOpenRouterModelPicker(runtime: AgentRuntime): boolean {
-  return runtime === "openhands" || runtime === "vercel-ai";
+  return runtime === "openhands";
 }
 
 function selectedModelForSession(session: ChatSession | null, runtime: AgentRuntime): string | null {
