@@ -100,6 +100,66 @@ describe("executeAgentRun", () => {
     expect(order.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("flushes user-edit commits before invoking the provider", async () => {
+    const calls: string[] = [];
+    createAgentProviderMock.mockReturnValue({
+      runtime: "openai-codex",
+      runTurn: async () => {
+        calls.push("run");
+      },
+    } satisfies AgentProvider);
+    const flushUserEdits = vi.fn().mockImplementation(async () => {
+      calls.push("flush");
+    });
+
+    await executeAgentRun({
+      projectId: "project-1",
+      sessionId: "session-1",
+      providerSessionId: "provider-session-1",
+      runId: "run-1",
+      attemptId: "attempt-1",
+      prompt: "Build it",
+      runtime: "openai-codex",
+      resumeSession: false,
+      projectRoot: "/workspace/project",
+      signal: new AbortController().signal,
+      persistEvent: async () => undefined,
+      broadcastEvent: () => undefined,
+      flushUserEdits,
+    });
+
+    expect(calls).toEqual(["flush", "run"]);
+    expect(flushUserEdits).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues the run if flushUserEdits throws", async () => {
+    createAgentProviderMock.mockReturnValue({
+      runtime: "openai-codex",
+      runTurn: runTurnMock,
+    } satisfies AgentProvider);
+    const flushUserEdits = vi.fn().mockRejectedValue(new Error("flush boom"));
+
+    await expect(
+      executeAgentRun({
+        projectId: "project-1",
+        sessionId: "session-1",
+        providerSessionId: "provider-session-1",
+        runId: "run-1",
+        attemptId: "attempt-1",
+        prompt: "Build it",
+        runtime: "openai-codex",
+        resumeSession: false,
+        projectRoot: "/workspace/project",
+        signal: new AbortController().signal,
+        persistEvent: async () => undefined,
+        broadcastEvent: () => undefined,
+        flushUserEdits,
+      }),
+    ).resolves.toBeUndefined();
+    expect(flushUserEdits).toHaveBeenCalled();
+    expect(runTurnMock).toHaveBeenCalled();
+  });
+
   describe("with image attachments", () => {
     let projectRoot: string;
     const attachment: PromptImageAttachment = {

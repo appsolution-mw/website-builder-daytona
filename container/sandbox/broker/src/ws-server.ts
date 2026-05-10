@@ -734,6 +734,7 @@ async function handleInternalHttpRequest(
       activeRuns: opts.activeRuns,
       broadcastEvent: opts.broadcastEvent,
       projectRoot: opts.projectRoot,
+      flushUserEdits: opts.flushUserEdits,
       ...(opts.__testSpawn ? { __testSpawn: opts.__testSpawn } : {}),
     });
     return;
@@ -748,6 +749,7 @@ async function executeInternalRun(input: {
   activeRuns: Map<string, ActiveRunState>;
   broadcastEvent: (event: BrokerToHost) => void;
   projectRoot: string;
+  flushUserEdits: () => Promise<void>;
   __testSpawn?: SpawnFn;
 }): Promise<void> {
   const ctl = new AbortController();
@@ -777,6 +779,7 @@ async function executeInternalRun(input: {
       signal: ctl.signal,
       persistEvent,
       broadcastEvent: input.broadcastEvent,
+      flushUserEdits: input.flushUserEdits,
       ...(input.__testSpawn ? { __testSpawn: input.__testSpawn } : {}),
     });
   } catch (error) {

@@ -19,12 +19,25 @@ export async function executeAgentRun(input: {
   attachments?: PromptImageAttachment[];
   /** Optional last-N replay context (Task 14). Only forwarded for claude-code. */
   replayContext?: Array<{ role: "user" | "assistant"; text: string }>;
+  /** Optional pre-run flush — used by Phase 1.4a-C to commit dirty user edits
+   *  as USER before the agent run starts. Best-effort; failures are logged but
+   *  do not abort the run. */
+  flushUserEdits?: () => Promise<void>;
   projectRoot: string;
   signal: AbortSignal;
   persistEvent: PersistRunEvent;
   broadcastEvent: (event: BrokerToHost) => void;
   __testSpawn?: SpawnFn;
 }): Promise<void> {
+  if (input.flushUserEdits) {
+    try {
+      await input.flushUserEdits();
+    } catch (err) {
+      console.error("[agent-run-executor] flushUserEdits failed:", err);
+      // Continue regardless — flush is best-effort.
+    }
+  }
+
   const provider = createAgentProvider({
     runtime: input.runtime,
     ...(input.__testSpawn ? { __testSpawn: input.__testSpawn } : {}),
