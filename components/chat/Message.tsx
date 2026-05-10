@@ -6,6 +6,8 @@ import remarkGfm from "remark-gfm";
 
 import { summariseAgentLabel } from "@/lib/agents/labels";
 import { runtimeLabel } from "@/lib/agents/runtime";
+import type { CommitView } from "@/lib/workspace/commit-types";
+import { AgentTurnCommitChip } from "./AgentTurnCommitChip";
 
 export type ChatImageAttachmentView = {
   id: string;
@@ -62,7 +64,19 @@ function ActivityStatus({ tools }: { tools: string[] }) {
   );
 }
 
-export function Message({ m }: { m: ChatMessageView }) {
+export function Message({
+  m,
+  commit,
+  isHeadCommit,
+  isProjectIdle,
+  onRevertCommit,
+}: {
+  m: ChatMessageView;
+  commit?: CommitView;
+  isHeadCommit?: boolean;
+  isProjectIdle?: boolean;
+  onRevertCommit?: (commit: CommitView) => void;
+}) {
   if (m.kind === "user") {
     return (
       <li className="self-end max-w-[88%] rounded-lg bg-primary px-3 py-2 text-primary-foreground shadow-sm">
@@ -136,6 +150,14 @@ export function Message({ m }: { m: ChatMessageView }) {
         {m.streaming && <ActivityStatus tools={m.tools} />}
       </div>
       {m.footer && <div className="mt-2 text-xs text-muted-foreground">{m.footer}</div>}
+      {commit && onRevertCommit && (
+        <AgentTurnCommitChip
+          commit={commit}
+          isHead={Boolean(isHeadCommit)}
+          isProjectIdle={Boolean(isProjectIdle)}
+          onRevertClick={onRevertCommit}
+        />
+      )}
     </li>
   );
 }
