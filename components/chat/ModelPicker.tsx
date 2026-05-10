@@ -259,13 +259,23 @@ export function ModelPicker({
       );
     }
     if (typeof document === "undefined" || !triggerRect) return null;
+    // Right-anchor the panel under the trigger but clamp to the viewport so a
+    // wide model list / a trigger close to the left edge doesn't push the
+    // dropdown off-screen. Falls back to a left-aligned panel that fills the
+    // viewport on small screens.
+    const SIDE_MARGIN = 8;
+    const PREFERRED_WIDTH = 22 * 16;
+    const width = Math.min(PREFERRED_WIDTH, window.innerWidth - SIDE_MARGIN * 2);
+    const idealLeft = triggerRect.right - width;
+    const left = Math.max(SIDE_MARGIN, idealLeft);
     return createPortal(
       <div
         ref={panelRef}
-        className="fixed z-[100] min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg w-[22rem] max-w-[calc(100vw-1rem)]"
+        className="fixed z-[100] min-w-0 rounded-md border border-border bg-popover p-2 shadow-lg"
         style={{
           bottom: window.innerHeight - triggerRect.top + 4,
-          right: window.innerWidth - triggerRect.right,
+          left,
+          width,
         }}
       >
         {renderPanelContent()}
