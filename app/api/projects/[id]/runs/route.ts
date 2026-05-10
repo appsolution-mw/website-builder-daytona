@@ -18,6 +18,7 @@ import {
   createSessionLibrarySnapshot,
   resolveWorkflowPreset,
 } from "@/lib/library/service";
+import { getDailyQuotaState } from "@/lib/usage/daily-quota";
 import { requireAccessibleProject } from "@/lib/workspaces/access";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -148,6 +149,19 @@ export async function POST(
   });
   if (!session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
+  }
+
+  const quota = await getDailyQuotaState(prisma, currentUser.user.id);
+  if (quota.exceeded) {
+    return NextResponse.json(
+      {
+        reason: "daily_quota_exceeded",
+        todaySpend: quota.todaySpend,
+        dailyCap: quota.dailyCap,
+        resetsAt: quota.resetsAt,
+      },
+      { status: 429 },
+    );
   }
 
   const runtime = protocolRuntimeToDb(payload.runtime);

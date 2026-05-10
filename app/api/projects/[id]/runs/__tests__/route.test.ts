@@ -12,6 +12,7 @@ const agentRunFindManyMock = vi.hoisted(() => vi.fn());
 const agentRunFindFirstMock = vi.hoisted(() => vi.fn());
 const projectQueueStateFindUniqueMock = vi.hoisted(() => vi.fn());
 const sessionRuntimeStateUpsertMock = vi.hoisted(() => vi.fn());
+const getDailyQuotaStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/auth/current-user", () => ({
   requireCurrentUserFromRequest: requireCurrentUserFromRequestMock,
@@ -50,6 +51,10 @@ vi.mock("@/lib/db/client", () => ({
   },
 }));
 
+vi.mock("@/lib/usage/daily-quota", () => ({
+  getDailyQuotaState: getDailyQuotaStateMock,
+}));
+
 import { GET, POST } from "../route";
 import { POST as retryPOST } from "../[runId]/retry/route";
 import { POST as skipPOST } from "../[runId]/skip/route";
@@ -78,6 +83,13 @@ function postRequest(body: unknown): Request {
 describe("/api/projects/[id]/runs", () => {
   beforeEach(() => {
     requestProjectQueueDrainMock.mockResolvedValue(undefined);
+    getDailyQuotaStateMock.mockResolvedValue({
+      todaySpend: 0,
+      dailyCap: 0,
+      perTurnCap: 0,
+      resetsAt: "2026-05-12T00:00:00.000Z",
+      exceeded: false,
+    });
   });
 
   afterEach(() => {
@@ -197,6 +209,68 @@ describe("/api/projects/[id]/runs", () => {
 
     expect(res.status).toBe(404);
     expect(enqueueAgentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 429 daily_quota_exceeded when user is over the daily cap", async () => {
+    requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
+    requireAccessibleProjectMock.mockResolvedValue(PROJECT);
+    sessionFindFirstMock.mockResolvedValue({ id: "session-1" });
+    getDailyQuotaStateMock.mockResolvedValue({
+      todaySpend: 1.5,
+      dailyCap: 1.0,
+      perTurnCap: 1.0,
+      resetsAt: "2026-05-12T00:00:00.000Z",
+      exceeded: true,
+    });
+
+    const res = await POST(postRequest({
+      sessionId: "session-1",
+      prompt: "go",
+      runtime: "claude-code",
+      providerSessionId: PROVIDER_SESSION_ID,
+    }), context());
+
+    expect(res.status).toBe(429);
+    const body = await res.json();
+    expect(body).toEqual({
+      reason: "daily_quota_exceeded",
+      todaySpend: 1.5,
+      dailyCap: 1.0,
+      resetsAt: "2026-05-12T00:00:00.000Z",
+    });
+    expect(enqueueAgentRunMock).not.toHaveBeenCalled();
+    expect(getDailyQuotaStateMock).toHaveBeenCalledWith(
+      expect.anything(),
+      USER.id,
+    );
+  });
+
+  it("allows the run when the daily cap is not exceeded", async () => {
+    requireCurrentUserFromRequestMock.mockResolvedValue({ ok: true, user: USER });
+    requireAccessibleProjectMock.mockResolvedValue(PROJECT);
+    sessionFindFirstMock.mockResolvedValue({ id: "session-1" });
+    getDailyQuotaStateMock.mockResolvedValue({
+      todaySpend: 0.3,
+      dailyCap: 5.0,
+      perTurnCap: 1.0,
+      resetsAt: "2026-05-12T00:00:00.000Z",
+      exceeded: false,
+    });
+    enqueueAgentRunMock.mockResolvedValue({
+      runId: "run-1",
+      messageId: "message-1",
+      queueSequence: 1,
+    });
+
+    const res = await POST(postRequest({
+      sessionId: "session-1",
+      prompt: "go",
+      runtime: "claude-code",
+      providerSessionId: PROVIDER_SESSION_ID,
+    }), context());
+
+    expect(res.status).toBe(201);
+    expect(enqueueAgentRunMock).toHaveBeenCalledOnce();
   });
 
   it("lists queued, active, and blocked runs with serialized runtime and queue state", async () => {
