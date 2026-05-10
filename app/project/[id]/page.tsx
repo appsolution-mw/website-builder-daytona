@@ -576,8 +576,8 @@ function runtimeStateForSession(session: ChatSession | null, runtime: AgentRunti
   return session?.runtimeStates.find((state) => state.runtime === runtime);
 }
 
-function supportsOpenRouterModelPicker(runtime: AgentRuntime): boolean {
-  return runtime === "openhands";
+function supportsModelPicker(runtime: AgentRuntime): boolean {
+  return runtime === "openhands" || runtime === "claude-code";
 }
 
 function selectedModelForSession(session: ChatSession | null, runtime: AgentRuntime): string | null {
@@ -627,7 +627,7 @@ export default function ProjectWorkspace({
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [selectedRuntime, setSelectedRuntime] = useState<AgentRuntime>("claude-code");
-  const [openRouterModels, setOpenRouterModels] = useState<ModelOption[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [libraryPresets, setLibraryPresets] = useState<PresetOption[]>([]);
@@ -1160,23 +1160,24 @@ export default function ProjectWorkspace({
     }
   }, [applyDevIndicatorRuntime, sendRequest, syncDevtoolsProjectFiles, writeProjectFile]);
 
-  const loadOpenRouterModels = useCallback(async (retry = false): Promise<void> => {
-    if (!retry && (openRouterModels.length > 0 || modelsRequestStartedRef.current)) return;
+  const loadModelsForRuntime = useCallback(async (runtime: AgentRuntime, retry = false): Promise<void> => {
+    if (!supportsModelPicker(runtime)) return;
+    if (!retry && modelsRequestStartedRef.current) return;
 
     modelsRequestStartedRef.current = true;
     setModelsLoading(true);
     setModelsError(null);
     try {
-      const res = await fetch(`/api/projects/${id}/models`);
+      const res = await fetch(`/api/projects/${id}/models?runtime=${encodeURIComponent(runtime)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { models: ModelOption[] };
-      if (mountedRef.current) setOpenRouterModels(data.models);
+      if (mountedRef.current) setAvailableModels(data.models);
     } catch (err) {
       if (mountedRef.current) setModelsError(err instanceof Error ? err.message : "models unavailable");
     } finally {
       if (mountedRef.current) setModelsLoading(false);
     }
-  }, [id, openRouterModels.length]);
+  }, [id]);
 
   const refreshChatSessions = useCallback(async () => {
     const res = await fetch(`/api/projects/${id}/sessions`);
@@ -1945,15 +1946,21 @@ export default function ProjectWorkspace({
   }, [project?.status, refreshRunEvents]);
 
   useEffect(() => {
-    if (!supportsOpenRouterModelPicker(selectedRuntime)) return;
+    if (!supportsModelPicker(selectedRuntime)) {
+      setAvailableModels([]);
+      modelsRequestStartedRef.current = false;
+      return;
+    }
+    setAvailableModels([]);
+    modelsRequestStartedRef.current = false;
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void loadOpenRouterModels();
+      if (!cancelled) void loadModelsForRuntime(selectedRuntime);
     });
     return () => {
       cancelled = true;
     };
-  }, [loadOpenRouterModels, selectedRuntime]);
+  }, [loadModelsForRuntime, selectedRuntime]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -2068,16 +2075,16 @@ export default function ProjectWorkspace({
   function setSessionRuntimeModel(modelId: string) {
     const session = activeSessionRef.current;
     const runtime = selectedRuntimeRef.current;
-    if (!session || !supportsOpenRouterModelPicker(runtime)) return;
+    if (!session || !supportsModelPicker(runtime)) return;
 
     const runtimeState = runtimeStateForSession(session, runtime);
     const providerSessionId = runtimeState?.providerSessionId ?? randomId();
     void syncRuntimeState(runtime, providerSessionId, modelId);
   }
 
-  function retryOpenRouterModels() {
+  function retryModelsLoad() {
     modelsRequestStartedRef.current = false;
-    void loadOpenRouterModels(true);
+    void loadModelsForRuntime(selectedRuntime, true);
   }
 
   async function unblockQueue(action: "retry" | "skip"): Promise<void> {
@@ -2436,7 +2443,7 @@ export default function ProjectWorkspace({
   const envSaveEnabled = envDirty || envSyncPending;
   const editorReadOnly = turnInFlight !== null;
   const wsOpen = wsStatus === "open";
-  const showModelPicker = supportsOpenRouterModelPicker(selectedRuntime);
+  const showModelPicker = supportsModelPicker(selectedRuntime);
   const selectedModelId = selectedModelForSession(activeSession, selectedRuntime);
 
   return (
@@ -2632,39 +2639,6 @@ export default function ProjectWorkspace({
                 );
               })}
             </div>
-            {showModelPicker && (
-              <div className="flex min-w-0 items-center gap-2">
-                <ModelPicker
-                  models={openRouterModels}
-                  selectedModelId={selectedModelId}
-                  loading={modelsLoading}
-                  disabled={turnInFlight !== null || sessionLoading || !activeSession}
-                  onSelect={setSessionRuntimeModel}
-                />
-                {modelsError && (
-                  <>
-                    <span
-                      role="status"
-                      aria-live="polite"
-                      className="min-w-0 flex-1 truncate text-xs text-red-200"
-                      title={modelsError}
-                    >
-                      Models unavailable: {modelsError}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      disabled={modelsLoading}
-                      onClick={retryOpenRouterModels}
-                      className="shrink-0"
-                    >
-                      Retry
-                    </Button>
-                  </>
-                )}
-              </div>
-            )}
             {selectedRuntime === "openhands" && libraryPresets.length > 0 ? (
               <PresetPicker
                 presets={libraryPresets}
@@ -2774,6 +2748,39 @@ export default function ProjectWorkspace({
             )}
             {attachmentError && (
               <div className="text-xs text-red-200">{attachmentError}</div>
+            )}
+            {showModelPicker && (
+              <div className="flex min-w-0 items-center gap-2">
+                <ModelPicker
+                  models={availableModels}
+                  selectedModelId={selectedModelId}
+                  loading={modelsLoading}
+                  disabled={turnInFlight !== null || sessionLoading || !activeSession}
+                  onSelect={setSessionRuntimeModel}
+                />
+                {modelsError && (
+                  <>
+                    <span
+                      role="status"
+                      aria-live="polite"
+                      className="min-w-0 flex-1 truncate text-xs text-red-200"
+                      title={modelsError}
+                    >
+                      Models unavailable: {modelsError}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      disabled={modelsLoading}
+                      onClick={retryModelsLoad}
+                      className="shrink-0"
+                    >
+                      Retry
+                    </Button>
+                  </>
+                )}
+              </div>
             )}
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">

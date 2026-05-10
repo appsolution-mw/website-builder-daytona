@@ -111,7 +111,7 @@ describe("GET /api/projects/[id]/models", () => {
     ));
     vi.stubGlobal("fetch", fetchMock);
 
-    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openhands`), {
       params: Promise.resolve({ id: PROJECT_ID }),
     });
 
@@ -143,7 +143,7 @@ describe("GET /api/projects/[id]/models", () => {
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }))));
 
-    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openhands`), {
       params: Promise.resolve({ id: PROJECT_ID }),
     });
 
@@ -191,7 +191,7 @@ describe("GET /api/projects/[id]/models", () => {
       { status: 200 },
     )));
 
-    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openhands`), {
       params: Promise.resolve({ id: PROJECT_ID }),
     });
 
@@ -222,7 +222,7 @@ describe("GET /api/projects/[id]/models", () => {
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("bad gateway", { status: 502 })));
 
-    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openhands`), {
       params: Promise.resolve({ id: PROJECT_ID }),
     });
 
@@ -252,7 +252,7 @@ describe("GET /api/projects/[id]/models", () => {
     });
     vi.stubGlobal("fetch", vi.fn(async () => new Response("bad gateway", { status: 502 })));
 
-    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models`), {
+    const res = await GET(new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=openhands`), {
       params: Promise.resolve({ id: PROJECT_ID }),
     });
 
@@ -260,5 +260,47 @@ describe("GET /api/projects/[id]/models", () => {
     await expect(res.json()).resolves.toEqual({
       error: "OpenRouter models request failed: HTTP 502",
     });
+  });
+
+  it("returns the curated Claude model list for runtime=claude-code", async () => {
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+
+    const res = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=claude-code`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { models: { id: string }[] };
+    expect(body.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
+    expect(body.models.length).toBeGreaterThan(1);
+  });
+
+  it("rejects requests with no or unsupported runtime", async () => {
+    await prisma.project.create({
+      data: {
+        id: PROJECT_ID,
+        ownerId: DEV_USER_ID,
+        name: "Models Route Project",
+      },
+    });
+
+    const noRuntime = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+    expect(noRuntime.status).toBe(400);
+
+    const bogus = await GET(
+      new Request(`http://localhost/api/projects/${PROJECT_ID}/models?runtime=mystery`),
+      { params: Promise.resolve({ id: PROJECT_ID }) },
+    );
+    expect(bogus.status).toBe(400);
   });
 });

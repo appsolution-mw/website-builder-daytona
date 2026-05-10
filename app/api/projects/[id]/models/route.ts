@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/client";
 import { requireCurrentUserFromRequest } from "@/lib/auth/current-user";
 import { fetchOpenRouterModels, type OpenRouterModelOption } from "@/lib/openrouter/models";
+import { CLAUDE_CODE_MODELS } from "@/lib/agents/claude-models";
 
 function normalizeConfiguredModelId(modelId: string): string {
   return modelId.startsWith("openrouter/") ? `openrouter:${modelId.slice("openrouter/".length)}` : modelId;
@@ -46,6 +47,21 @@ function mergeModels(
   });
 }
 
+async function openHandsModels(): Promise<NextResponse> {
+  const configuredModels = configuredOpenHandsModels();
+  try {
+    const openRouterModels = await fetchOpenRouterModels();
+    return NextResponse.json({ models: mergeModels(configuredModels, openRouterModels) });
+  } catch (error) {
+    if (configuredModels.length > 0) {
+      return NextResponse.json({ models: configuredModels });
+    }
+
+    const message = error instanceof Error ? error.message : "OpenRouter models request failed";
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -62,16 +78,13 @@ export async function GET(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  const configuredModels = configuredOpenHandsModels();
-  try {
-    const openRouterModels = await fetchOpenRouterModels();
-    return NextResponse.json({ models: mergeModels(configuredModels, openRouterModels) });
-  } catch (error) {
-    if (configuredModels.length > 0) {
-      return NextResponse.json({ models: configuredModels });
-    }
+  const runtime = new URL(request.url).searchParams.get("runtime");
 
-    const message = error instanceof Error ? error.message : "OpenRouter models request failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+  if (runtime === "claude-code") {
+    return NextResponse.json({ models: CLAUDE_CODE_MODELS });
   }
+  if (runtime === "openhands") {
+    return openHandsModels();
+  }
+  return NextResponse.json({ error: `unsupported runtime: ${runtime ?? "(none)"}` }, { status: 400 });
 }
