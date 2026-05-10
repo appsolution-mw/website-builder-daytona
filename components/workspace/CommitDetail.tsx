@@ -4,7 +4,19 @@ import { dbRuntimeToProtocol, runtimeLabel } from "@/lib/agents/runtime";
 import type { CommitFileEntry, CommitView } from "@/lib/workspace/commit-types";
 import { CommitFileDiff } from "./CommitFileDiff";
 
-export function CommitDetail({ projectId, commit }: { projectId: string; commit: CommitView | null }) {
+export function CommitDetail({
+  projectId,
+  commit,
+  isHead = false,
+  isProjectIdle = true,
+  onRevertClick,
+}: {
+  projectId: string;
+  commit: CommitView | null;
+  isHead?: boolean;
+  isProjectIdle?: boolean;
+  onRevertClick?: (commit: CommitView) => void;
+}) {
   const [files, setFiles] = useState<CommitFileEntry[]>([]);
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,22 +47,46 @@ export function CommitDetail({ projectId, commit }: { projectId: string; commit:
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a commit to inspect.</div>;
   }
 
+  const isRollback = commit.authorKind === "ROLLBACK";
+  const showRevert = !isHead && !isRollback && Boolean(onRevertClick);
+
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4">
-      <div className="mb-4 border-b border-border pb-3">
-        <h2 className="text-base font-semibold">{commit.title}</h2>
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">{commit.shortSha}</span>
-          <span>·</span>
-          <span>launchnode-agent</span>
-          <span>·</span>
-          <span>{new Date(commit.createdAt).toLocaleString()}</span>
-          {commit.runtime && (<><span>·</span><span>{runtimeLabel(dbRuntimeToProtocol(commit.runtime))}{commit.modelId ? ` · ${commit.modelId}` : ""}</span></>)}
+      <div className="mb-4 flex items-start gap-3 border-b border-border pb-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold">
+            {isRollback ? "↶ " : ""}{commit.title}
+          </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-mono">{commit.shortSha}</span>
+            <span>·</span>
+            <span>launchnode-agent</span>
+            <span>·</span>
+            <span>{new Date(commit.createdAt).toLocaleString()}</span>
+            {commit.runtime && (<><span>·</span><span>{runtimeLabel(dbRuntimeToProtocol(commit.runtime))}{commit.modelId ? ` · ${commit.modelId}` : ""}</span></>)}
+            {isRollback && commit.revertedFromSha && (
+              <>
+                <span>·</span>
+                <span>reverted from <span className="font-mono">{commit.revertedFromSha.slice(0, 7)}</span></span>
+              </>
+            )}
+          </div>
+          {commit.bodyMessage && (
+            <pre className="mt-3 whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-mono text-xs text-muted-foreground">
+              {commit.bodyMessage}
+            </pre>
+          )}
         </div>
-        {commit.bodyMessage && (
-          <pre className="mt-3 whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-mono text-xs text-muted-foreground">
-            {commit.bodyMessage}
-          </pre>
+        {showRevert && (
+          <button
+            type="button"
+            disabled={!isProjectIdle}
+            onClick={() => onRevertClick?.(commit)}
+            title={isProjectIdle ? "Revert to this commit" : "Active run — abort or wait"}
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            ↶ Revert
+          </button>
         )}
       </div>
 
