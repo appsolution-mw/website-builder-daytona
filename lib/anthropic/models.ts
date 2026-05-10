@@ -41,7 +41,7 @@ export function normalizeAnthropicModels(
     if (supports1MContext(model.id)) {
       models.push({
         id: `${model.id}[1m]`,
-        label: `${model.display_name} (1M context)`,
+        label: `${model.display_name} (1M)`,
         contextLength: ONE_M_CONTEXT,
         promptPrice: null,
         completionPrice: null,
@@ -52,7 +52,7 @@ export function normalizeAnthropicModels(
 
     models.push({
       id: model.id,
-      label: model.display_name,
+      label: `${model.display_name} (200k)`,
       contextLength: DEFAULT_CONTEXT,
       promptPrice: null,
       completionPrice: null,
