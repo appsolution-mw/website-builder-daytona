@@ -22,7 +22,6 @@ import {
   ExternalLink,
   GitPullRequest,
   Globe2,
-  History,
   ImagePlus,
   KeyRound,
   Loader2,
@@ -52,6 +51,7 @@ import type {
   ProxyToBrowser,
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
+import { ChatSessionsSidebar } from "@/components/chat/ChatSessionsSidebar";
 import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
 import {
   ReasoningEffortPicker,
@@ -645,6 +645,21 @@ export default function ProjectWorkspace({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState<boolean>(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("wbd:chatSidebarCollapsed");
+    if (stored === "1") setChatSidebarCollapsed(true);
+  }, []);
+  const toggleChatSidebar = () => {
+    setChatSidebarCollapsed((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("wbd:chatSidebarCollapsed", next ? "1" : "0");
+      }
+      return next;
+    });
+  };
   const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
   const [queueState, setQueueState] = useState<ProjectRunQueueState>(IDLE_QUEUE_STATE);
@@ -2574,7 +2589,7 @@ export default function ProjectWorkspace({
       <div ref={workspaceRef} className="flex min-h-0 flex-1 overflow-hidden">
         <section
           className={cn(
-            "relative flex min-h-0 min-w-[280px] flex-col overflow-hidden border-r border-border bg-card max-md:min-w-0 max-md:flex-[0_0_42%]",
+            "relative flex min-h-0 min-w-[280px] overflow-hidden border-r border-border bg-card max-md:min-w-0 max-md:flex-[0_0_42%]",
             draggingImages && "ring-2 ring-inset ring-primary",
           )}
           style={{ flexBasis: `${chatWidthPct}%` }}
@@ -2587,6 +2602,21 @@ export default function ProjectWorkspace({
               Drop images to attach
             </div>
           )}
+          <ChatSessionsSidebar
+            sessions={chatSessions.map((s) => ({
+              id: s.id,
+              title: s.title,
+              messageCount: s._count.messages,
+            }))}
+            activeSessionId={activeSession?.id ?? null}
+            collapsed={chatSidebarCollapsed}
+            loading={turnInFlight !== null || sessionLoading}
+            newDisabled={turnInFlight !== null}
+            onToggleCollapse={toggleChatSidebar}
+            onSelect={(id) => void loadChatSession(id)}
+            onNew={createChatSession}
+          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-12 shrink-0 items-center justify-between border-b border-border px-3">
             <div className="flex items-center gap-2">
               <MessageSquare className="size-4 text-primary" aria-hidden="true" />
@@ -2612,26 +2642,6 @@ export default function ProjectWorkspace({
                 <Plus />
               </Button>
             </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-background/45 px-3 py-2">
-            <History className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            {chatSessions.map((s) => (
-              <Button
-                key={s.id}
-                type="button"
-                variant={activeSession?.id === s.id ? "secondary" : "ghost"}
-                size="sm"
-                disabled={turnInFlight !== null || sessionLoading}
-                onClick={() => void loadChatSession(s.id)}
-                className="max-w-44 shrink-0 justify-start"
-                title={s.title}
-              >
-                <span className="truncate">{s.title}</span>
-                {s._count.messages > 0 && (
-                  <span className="ml-1 text-xs text-muted-foreground">{s._count.messages}</span>
-                )}
-              </Button>
-            ))}
           </div>
           <div className="flex shrink-0 flex-col gap-2 border-b border-border bg-background/45 px-3 py-2">
             <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
@@ -2881,6 +2891,7 @@ export default function ProjectWorkspace({
               )}
             </div>
           </form>
+          </div>
         </section>
 
         <div
