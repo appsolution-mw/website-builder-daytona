@@ -9,9 +9,10 @@ export type CommitView = {
   deletions: number;
   runtime: "CLAUDE_CODE" | "OPENAI_CODEX" | "OPENHANDS" | null;
   modelId: string | null;
-  authorKind: "AGENT" | "USER";
+  authorKind: "AGENT" | "USER" | "ROLLBACK";
   sessionId: string | null;
   agentRunId: string | null;
+  revertedFromSha: string | null;
   createdAt: string;
 };
 
