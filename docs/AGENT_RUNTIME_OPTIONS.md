@@ -23,7 +23,7 @@ persisted events through the `ws-proxy`, but they do not own provider execution.
 Closing the browser does not cancel a running task. Failed and cancelled runs
 block the project queue until a user retries or skips the run.
 
-Der Broker im Daytona-Container führt den jeweiligen Runtime-Prozess aus und
+Der Broker im Sandbox-Container führt den jeweiligen Runtime-Prozess aus und
 übersetzt Provider-Events in die bestehenden `agent.*` Events.
 
 Wichtige Dateien:
@@ -31,7 +31,7 @@ Wichtige Dateien:
 - `container/broker/src/ws-server.ts`: WebSocket-Protokoll und Turn-Lifecycle
 - `container/broker/src/claude-runner.ts`: bestehender Claude-Code-Runner
 - `container/broker/src/ndjson-parser.ts`: Claude-Code-Stream-Adapter
-- `lib/runtime/daytona/cloud.ts`: Container-Env und Bootstrapping
+- `lib/runtime/worker-pool/`: Worker-Pool-Runtime und Container-Env
 - `packages/protocol/src/index.ts`: geteiltes Browser/Broker-Protokoll
 
 ## Durable Project Queue
@@ -47,13 +47,11 @@ session can resume provider context.
 
 ## Sandbox Runtime Modes
 
-`RUNTIME_MODE` selects where project sandboxes run. The Daytona modes remain
-available; the managed worker-pool modes use the host scheduler, worker-agent,
-and `Worker` / `WorkerSandbox` database records.
+`RUNTIME_MODE` selects where project sandboxes run. The worker-pool modes use
+the host scheduler, worker-agent, and `Worker` / `WorkerSandbox` database
+records.
 
 ```env
-RUNTIME_MODE=daytona-cloud
-RUNTIME_MODE=daytona-fake
 RUNTIME_MODE=worker-pool-local
 RUNTIME_MODE=worker-pool-hetzner
 ```
@@ -180,8 +178,8 @@ Hinweise:
 - Die vorhandene `claudeSessionId` wird vorerst als generische Session-ID fuer
   den Broker-Cache weiterverwendet. Das vermeidet eine Prisma-/UI-Migration.
 - `danger-full-access` vermeidet Codex' innere `bwrap`-Sandbox. Das ist fuer
-  Daytona-/Worker-Container der robuste Default, weil die aeussere Projekt-
-  isolation bereits durch den Container kommt. Auf Hosts mit funktionierenden
+  Worker-Container der robuste Default, weil die aeussere Projektisolation
+  bereits durch den Container kommt. Auf Hosts mit funktionierenden
   unprivileged user namespaces kann `CODEX_SANDBOX_MODE=workspace-write` oder
   `CODEX_REVIEWER_SANDBOX_MODE=read-only` gesetzt werden.
 - Codex-Thread-Resume ist aktuell pro laufendem Broker-Prozess gecached. Eine
@@ -249,16 +247,6 @@ Hinweise:
 
 ## Recherchierte Optionen
 
-### Vercel AI SDK
-
-Sehr gut fuer TypeScript/Next.js-Streaming, Provider-Abstraktion, Tool Calling
-und Agent-Loops (`stopWhen`, `prepareStep`, Agent-Abstraktion). Als Ersatz fuer
-Claude Code reicht es allein nicht aus: Filesystem-, Shell-, Patch-, Skill- und
-Sandbox-Faehigkeiten muessten als eigene Tools oder ueber MCP gebaut werden.
-
-Empfehlung: spaeter als UI-/Orchestrierungsschicht pruefen, nicht als erster
-Coding-Agent-Ersatz im Container.
-
 ### OpenAI Codex SDK
 
 Beste erste Alternative fuer dieses Projekt. Der SDK ist TypeScript-first,
@@ -287,7 +275,7 @@ umschaltbaren Coding-Runtimes im Container sind sie groesser als noetig.
 
 ## Naechster sinnvoller Schritt
 
-Wenn `openai-codex` im Daytona-Container stabil laeuft, sollte die Session-
+Wenn `openai-codex` im Worker-Container stabil laeuft, sollte die Session-
 Kopplung entclaudifiziert werden:
 
 1. `claudeSessionId` im Protocol zusaetzlich als `agentSessionId` akzeptieren.
