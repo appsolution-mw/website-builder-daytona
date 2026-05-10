@@ -52,6 +52,7 @@ import type {
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { ChatSessionsSidebar } from "@/components/chat/ChatSessionsSidebar";
+import { DictationButton } from "@/components/chat/DictationButton";
 import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
 import {
   ReasoningEffortPicker,
@@ -2838,6 +2839,15 @@ export default function ProjectWorkspace({
                   >
                     <Paperclip />
                   </Button>
+                  <DictationButton
+                    disabled={!activeSession || turnInFlight !== null}
+                    onTranscript={(text) =>
+                      setPrompt((prev) =>
+                        prev.trim().length > 0 ? `${prev.trimEnd()} ${text}` : text,
+                      )
+                    }
+                    onError={(message) => setAttachmentError(`Voice input: ${message}`)}
+                  />
                 </div>
                 <div className="flex min-w-0 items-center gap-1">
                   {showModelPicker && (
