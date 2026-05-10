@@ -67,6 +67,7 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
       });
       const ownerName = (ownerProject?.owner.name ?? "").trim();
       const ownerEmail = (ownerProject?.owner.email ?? "").trim();
+      const perTurnCapUsd = (process.env.DEFAULT_PER_TURN_USD_CAP ?? "").trim();
       const env: Record<string, string> = {
         PROJECT_ID: spawn.projectId,
         BROKER_TOKEN: brokerToken,
@@ -79,6 +80,9 @@ export function createWorkerPoolRuntime(args: CreateWorkerPoolRuntimeArgs): Runt
         // omitted; the broker treats missing values as "no USER identity".
         ...(ownerName ? { BROKER_USER_NAME: ownerName } : {}),
         ...(ownerEmail ? { BROKER_USER_EMAIL: ownerEmail } : {}),
+        // Phase 1.4e: per-turn USD cap enforced by the broker's
+        // agent.usage observer. Empty/unset disables the cap.
+        ...(perTurnCapUsd ? { BROKER_PER_TURN_USD_CAP: perTurnCapUsd } : {}),
         ...args.brokerEnv?.(),
         ...sourceEnv(spawn.source),
       };
