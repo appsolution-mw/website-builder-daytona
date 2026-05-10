@@ -53,7 +53,12 @@ import type {
 } from "@wbd/protocol";
 import { Message, type ChatImageAttachmentView, type ChatMessageView } from "@/components/chat/Message";
 import { ModelPicker, type ModelOption } from "@/components/chat/ModelPicker";
-import { ReasoningEffortPicker, type ReasoningEffort } from "@/components/chat/ReasoningEffortPicker";
+import {
+  ReasoningEffortPicker,
+  defaultReasoningForRuntime,
+  reasoningOptionsForRuntime,
+  type ReasoningEffort,
+} from "@/components/chat/ReasoningEffortPicker";
 import { PresetPicker, type PresetOption } from "@/components/library/PresetPicker";
 import { RightPane, type RightPaneTab } from "@/components/workspace/RightPane";
 import { FileTree } from "@/components/workspace/FileTree";
@@ -638,7 +643,7 @@ export default function ProjectWorkspace({
   const [prompt, setPrompt] = useState("");
   const [draftAttachments, setDraftAttachments] = useState<DraftImageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("medium");
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [draggingImages, setDraggingImages] = useState(false);
   const [turnInFlight, setTurnInFlight] = useState<string | null>(null);
@@ -1967,6 +1972,10 @@ export default function ProjectWorkspace({
   }, [loadModelsForRuntime, selectedRuntime]);
 
   useEffect(() => {
+    setReasoningEffort(defaultReasoningForRuntime(selectedRuntime));
+  }, [selectedRuntime]);
+
+  useEffect(() => {
     queueMicrotask(() => {
       if (mountedRef.current) setSelectedLibraryPresetId(activeOpenHandsLibraryPresetId);
     });
@@ -2730,6 +2739,15 @@ export default function ProjectWorkspace({
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onPaste={onPromptPaste}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+                  if (e.nativeEvent.isComposing) return;
+                  if (!activeSession) return;
+                  if (!prompt.trim() && draftAttachments.length === 0) return;
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }}
                 placeholder={`Tell ${runtimeLabel(selectedRuntime)} what to change...`}
                 rows={3}
                 disabled={!activeSession}
@@ -2800,8 +2818,9 @@ export default function ProjectWorkspace({
                   </Button>
                 </div>
                 <div className="flex min-w-0 items-center gap-1">
-                  {selectedRuntime === "openai-codex" && (
+                  {reasoningEffort !== null && reasoningOptionsForRuntime(selectedRuntime).length > 0 && (
                     <ReasoningEffortPicker
+                      runtime={selectedRuntime}
                       value={reasoningEffort}
                       disabled={turnInFlight !== null || sessionLoading || !activeSession}
                       onSelect={setReasoningEffort}
