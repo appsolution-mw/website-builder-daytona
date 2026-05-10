@@ -70,6 +70,7 @@ import { useCommitHistory } from "@/lib/workspace/use-commit-history";
 import { useRevertCommit } from "@/lib/workspace/use-revert-commit";
 import type { CommitView } from "@/lib/workspace/commit-types";
 import { RevertConfirmDialog } from "@/components/workspace/RevertConfirmDialog";
+import { DailyCostBadge } from "@/components/workspace/DailyCostBadge";
 import { XtermTerminal, type XtermTerminalStatus } from "@/components/workspace/XtermTerminal";
 import { ProjectAgentConfigPanel } from "@/components/agent-config/ProjectAgentConfigPanel";
 import { normalizeProjectAgentConfigResponse } from "@/components/agent-config/normalizers";
@@ -174,6 +175,15 @@ type Project = {
   chatSession: ChatSession;
   chatSessions: ChatSession[];
   commits: CommitView[];
+  dailyQuota?: DailyQuotaState;
+};
+
+type DailyQuotaState = {
+  todaySpend: number;
+  dailyCap: number;
+  perTurnCap: number;
+  resetsAt: string;
+  exceeded: boolean;
 };
 
 type DeviceView = "desktop" | "tablet" | "mobile";
@@ -727,6 +737,19 @@ export default function ProjectWorkspace({
 
   const initialCommits: CommitView[] = project?.commits ?? [];
   const commitHistory = useCommitHistory(id, initialCommits);
+
+  const [dailyQuota, setDailyQuota] = useState<DailyQuotaState>(
+    project?.dailyQuota ?? {
+      todaySpend: 0,
+      dailyCap: 0,
+      perTurnCap: 0,
+      resetsAt: new Date().toISOString(),
+      exceeded: false,
+    },
+  );
+  useEffect(() => {
+    if (project?.dailyQuota) setDailyQuota(project.dailyQuota);
+  }, [project?.dailyQuota]);
 
   const commitsByRunId = useMemo(() => {
     const map = new Map<string, CommitView>();
@@ -1604,6 +1627,13 @@ export default function ProjectWorkspace({
       turnRuntimeRef.current.delete(ev.turnId);
       setTurnInFlight(null);
       setReviewingActive(false);
+      // Phase 1.4e: refresh daily quota — cost only changes when a run ends.
+      fetch(`/api/projects/${id}/usage`, { cache: "no-store" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body) => {
+          if (body?.dailyQuota) setDailyQuota(body.dailyQuota as DailyQuotaState);
+        })
+        .catch(() => { /* ignore */ });
       return;
     }
     if (ev.type === "agent.error") {
@@ -2632,6 +2662,11 @@ export default function ProjectWorkspace({
           >
             <Settings2 />
           </Button>
+          <DailyCostBadge
+            todaySpend={dailyQuota.todaySpend}
+            dailyCap={dailyQuota.dailyCap}
+            resetsAt={dailyQuota.resetsAt}
+          />
           <Badge variant={turnInFlight ? "warning" : "outline"} className="hidden sm:inline-flex">
             {queueState.state === "BLOCKED" ? "blocked" : turnInFlight ? "agent busy" : "ready"}
           </Badge>
@@ -2936,10 +2971,16 @@ export default function ProjectWorkspace({
                     type="submit"
                     disabled={
                       (!prompt.trim() && draftAttachments.length === 0) ||
-                      !activeSession
+                      !activeSession ||
+                      dailyQuota.exceeded
                     }
                     size="icon-sm"
                     aria-label={turnInFlight ? "Queue prompt" : "Send prompt"}
+                    title={
+                      dailyQuota.exceeded
+                        ? `Daily $${dailyQuota.dailyCap.toFixed(2)} quota reached. Resets ${new Date(dailyQuota.resetsAt).toLocaleString()}.`
+                        : undefined
+                    }
                   >
                     <Send />
                   </Button>
