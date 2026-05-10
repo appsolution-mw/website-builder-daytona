@@ -3,8 +3,28 @@ import type { BrokerToHost } from "../src";
 import { PROTOCOL_VERSION } from "../src";
 
 describe("git events", () => {
-  it("PROTOCOL_VERSION is bumped to 1.15.0", () => {
-    expect(PROTOCOL_VERSION).toBe("1.15.0");
+  it("PROTOCOL_VERSION is bumped to 1.16.0", () => {
+    expect(PROTOCOL_VERSION).toBe("1.16.0");
+  });
+
+  it("BrokerToHost accepts git.commit ROLLBACK shape", () => {
+    const evt: BrokerToHost = {
+      type: "git.commit",
+      turnId: null,
+      sha: "0".repeat(40),
+      shortSha: "0000000",
+      title: "Revert to 1234567 — old",
+      bodyMessage: "Reverted-from: …",
+      filesChanged: 1,
+      insertions: 0,
+      deletions: 3,
+      runtime: null,
+      modelId: null,
+      authorKind: "ROLLBACK",
+      revertedFromSha: "1".repeat(40),
+      committedAt: new Date().toISOString(),
+    };
+    expect(evt.type).toBe("git.commit");
   });
 
   it("BrokerToHost accepts git.commit shape", () => {
