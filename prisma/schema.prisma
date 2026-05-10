@@ -205,6 +205,7 @@ model Commit {
   insertions    Int
   deletions     Int
   revertedFromSha String?        // 40-char hex; only set when authorKind=ROLLBACK
+  userEmail     String?          // populated only when authorKind = USER
   createdAt     DateTime         @default(now())
 
   @@index([projectId, createdAt])
