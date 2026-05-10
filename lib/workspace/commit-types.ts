@@ -13,6 +13,7 @@ export type CommitView = {
   sessionId: string | null;
   agentRunId: string | null;
   revertedFromSha: string | null;
+  userEmail: string | null;
   createdAt: string;
 };
 

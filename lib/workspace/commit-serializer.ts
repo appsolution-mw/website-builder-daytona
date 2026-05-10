@@ -15,6 +15,7 @@ export type SerializedCommit = {
   sessionId: string | null;
   agentRunId: string | null;
   revertedFromSha: string | null;
+  userEmail: string | null;
   createdAt: string;
 };
 
@@ -34,6 +35,7 @@ export function serializeCommit(commit: Commit): SerializedCommit {
     sessionId: commit.sessionId,
     agentRunId: commit.agentRunId,
     revertedFromSha: commit.revertedFromSha,
+    userEmail: commit.userEmail,
     createdAt: commit.createdAt.toISOString(),
   };
 }
