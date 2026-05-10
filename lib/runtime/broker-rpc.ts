@@ -103,3 +103,32 @@ export async function brokerGetCommitDiff(
 ): Promise<{ diff: string }> {
   return brokerJsonRpc(project, "/git/commit-diff", { sha, path });
 }
+
+export type BrokerRevertResult =
+  | {
+      ok: true;
+      sha: string;
+      shortSha: string;
+      title: string;
+      bodyMessage: string;
+      filesChanged: number;
+      insertions: number;
+      deletions: number;
+      revertedFromSha: string;
+      committedAt: string;
+    }
+  | { ok: false; reason: "unknown_sha" | "is_head" | "dirty_tree" }
+  | { ok: false; reason: "commit_failed"; detail: string };
+
+export async function brokerRevertToCommit(
+  project: BrokerRpcProject,
+  sha: string,
+  triggeredBy: string,
+): Promise<BrokerRevertResult> {
+  return brokerJsonRpc<BrokerRevertResult>(
+    project,
+    "/git/revert",
+    { sha, triggeredBy },
+    { timeoutMs: 60_000 },
+  );
+}
