@@ -77,6 +77,12 @@ export interface StartBrokerOptions {
    * 5_000 ms.
    */
   userEditDebounceMs?: number;
+  /**
+   * Phase 1.4e: per-turn USD cost cap. 0 / undefined = disabled.
+   * Production reads from process.env.BROKER_PER_TURN_USD_CAP via the
+   * index entrypoint.
+   */
+  perTurnCapUsd?: number;
 }
 
 interface ExecuteRunCommand {
