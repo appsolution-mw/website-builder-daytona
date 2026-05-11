@@ -316,27 +316,6 @@ function isPreviewConsoleMessage(data: unknown): data is {
   );
 }
 
-function formatDoneFooter(d: {
-  durationMs: number;
-  tokensIn: number;
-  tokensOut: number;
-  costUsd: number;
-  exitCode: number;
-  usage?: {
-    cacheCreationInputTokens: number;
-    cacheReadInputTokens: number;
-    totalTokens: number;
-  };
-}): string {
-  if (d.exitCode === -1) return "aborted by user";
-  const secs = (d.durationMs / 1000).toFixed(1);
-  const cost = d.costUsd.toFixed(3);
-  const cacheCreated = d.usage?.cacheCreationInputTokens ?? 0;
-  const cacheRead = d.usage?.cacheReadInputTokens ?? 0;
-  const total = d.usage?.totalTokens ?? d.tokensIn + d.tokensOut;
-  return `${secs}s · ${total} total (${d.tokensIn} input / ${cacheCreated} cache write / ${cacheRead} cache read / ${d.tokensOut} output) · $${cost}`;
-}
-
 function summariseTool(tool: string, input: unknown): string {
   void input;
   if (tool === "Read" || tool === "Grep" || tool === "Glob" || tool === "LS") return "Working on it";
@@ -1612,14 +1591,20 @@ export default function ProjectWorkspace({
       return;
     }
     if (ev.type === "agent.done") {
+      // Phase 1.4f follow-up: per-turn cost/token footer suppressed.
+      // The daily-cost badge in the workspace header (Phase 1.4e) covers
+      // the user-facing cost surface; the per-turn breakdown was
+      // unreliable when OpenRouter strips usage from Anthropic-compat
+      // responses and is now redundant.
+      // git.commit.skipped events still set the footer with "no code
+      // changes" — that path stays.
       updateMessages((msgs) => {
-        const footer = formatDoneFooter(ev);
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i];
           if (m.kind !== "agent") continue;
           if (m.turnId !== ev.turnId) break;
           const next = msgs.slice();
-          next[i] = { ...m, streaming: false, footer };
+          next[i] = { ...m, streaming: false };
           return next;
         }
         return msgs;
