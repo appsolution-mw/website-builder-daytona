@@ -152,4 +152,38 @@ describe("mapSdkMessage", () => {
     );
     expect(out.events[0]).toMatchObject({ subtype: "error_max_structured_output_retries", exitCode: 4 });
   });
+
+  it("assistant with message.id captures capturedMessageId", () => {
+    const out = mapSdkMessage(
+      { type: "assistant", message: { id: "gen-abc123", content: [{ type: "text", text: "hi" }] } } as SdkMessageFake,
+      ctx,
+    );
+    expect(out.events).toEqual([]);
+    expect(out.capturedMessageId).toBe("gen-abc123");
+  });
+
+  it("assistant with message.id AND tool_use captures both id and tool_use event", () => {
+    const out = mapSdkMessage(
+      {
+        type: "assistant",
+        message: {
+          id: "gen-xyz789",
+          content: [{ type: "tool_use", name: "Read", input: { path: "a" } }],
+        },
+      } as SdkMessageFake,
+      ctx,
+    );
+    expect(out.events).toEqual([
+      { type: "agent.tool_use", turnId: "T1", tool: "Read", input: { path: "a" } },
+    ]);
+    expect(out.capturedMessageId).toBe("gen-xyz789");
+  });
+
+  it("assistant without message.id leaves capturedMessageId undefined", () => {
+    const out = mapSdkMessage(
+      { type: "assistant", message: { content: [{ type: "text", text: "hi" }] } } as SdkMessageFake,
+      ctx,
+    );
+    expect(out.capturedMessageId).toBeUndefined();
+  });
 });

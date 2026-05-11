@@ -9,6 +9,7 @@ export interface MapContext {
 export interface MapResult {
   events: BrokerToHost[];
   captured?: { providerSessionId?: string; modelId?: string };
+  capturedMessageId?: string;
 }
 
 const RESULT_EXIT: Record<string, number> = {
@@ -83,8 +84,14 @@ export function mapSdkMessage(msg: unknown, ctx: MapContext): MapResult {
 
   if (type === "assistant") {
     const message = (msg as { message?: unknown }).message;
+    const capturedMessageId =
+      isRecord(message) && typeof (message as { id?: unknown }).id === "string"
+        ? (message as { id: string }).id
+        : undefined;
     const content = isRecord(message) ? (message as { content?: unknown }).content : undefined;
-    if (!Array.isArray(content)) return { events: [] };
+    if (!Array.isArray(content)) {
+      return { events: [], ...(capturedMessageId ? { capturedMessageId } : {}) };
+    }
     const events: BrokerToHost[] = [];
     for (const block of content) {
       if (isRecord(block) && (block as { type?: unknown }).type === "tool_use") {
@@ -98,7 +105,7 @@ export function mapSdkMessage(msg: unknown, ctx: MapContext): MapResult {
         });
       }
     }
-    return { events };
+    return { events, ...(capturedMessageId ? { capturedMessageId } : {}) };
   }
 
   if (type === "result") {
