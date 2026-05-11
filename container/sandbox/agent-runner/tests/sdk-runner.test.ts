@@ -291,6 +291,147 @@ describe("runTurn (unit, injected query)", () => {
     expect(sessions.length).toBe(1);
     expect(sessions[0]).toMatchObject({ resumed: true });
   });
+
+  it("patches agent.done with OpenRouter cost when ANTHROPIC_BASE_URL is openrouter.ai", async () => {
+    const original = {
+      base: process.env.ANTHROPIC_BASE_URL,
+      key: process.env.OPENROUTER_API_KEY,
+    };
+    process.env.ANTHROPIC_BASE_URL = "https://openrouter.ai/api";
+    process.env.OPENROUTER_API_KEY = "sk-or-v1-test";
+
+    try {
+      const messages = [
+        { type: "system", subtype: "init", session_id: "sdk-sess-1", model: "claude" },
+        {
+          type: "assistant",
+          message: {
+            id: "gen-a",
+            content: [{ type: "tool_use", name: "Read", input: { path: "x" } }],
+          },
+        },
+        { type: "assistant", message: { id: "gen-b", content: [{ type: "text", text: "ok" }] } },
+        {
+          type: "result",
+          subtype: "success",
+          duration_ms: 100,
+          total_cost_usd: 0,
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      ];
+
+      const fetchFn = vi
+        .fn()
+        .mockImplementation(async (url: string) => {
+          if (typeof url === "string" && url.includes("id=gen-a")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  id: "gen-a",
+                  total_cost: 0.01,
+                  native_tokens_prompt: 100,
+                  native_tokens_completion: 50,
+                },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            );
+          }
+          if (typeof url === "string" && url.includes("id=gen-b")) {
+            return new Response(
+              JSON.stringify({
+                data: {
+                  id: "gen-b",
+                  total_cost: 0.02,
+                  native_tokens_prompt: 200,
+                  native_tokens_completion: 75,
+                },
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            );
+          }
+          throw new Error(`unexpected url: ${url}`);
+        });
+
+      const events: BrokerToHost[] = [];
+      const abort = new AbortController();
+      await runTurn(makeReq(), {
+        workspaceDir: "/workspace",
+        abort,
+        runtime: "claude-code",
+        emit: (ev) => {
+          events.push(ev);
+        },
+        buildHooks: () => ({}),
+        query: fakeQueryFactory(messages) as never,
+        __testFetch: fetchFn as unknown as typeof globalThis.fetch,
+      });
+
+      const done = events.find(
+        (e): e is Extract<BrokerToHost, { type: "agent.done" }> => e.type === "agent.done",
+      );
+      expect(done).toBeDefined();
+      expect(done?.costUsd).toBeCloseTo(0.03, 6);
+      expect(done?.tokensIn).toBe(300);
+      expect(done?.tokensOut).toBe(125);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    } finally {
+      if (original.base === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = original.base;
+      if (original.key === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = original.key;
+    }
+  });
+
+  it("does NOT patch agent.done when ANTHROPIC_BASE_URL is anthropic.com", async () => {
+    const original = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+    try {
+      const messages = [
+        { type: "system", subtype: "init", session_id: "sdk-sess-1", model: "claude" },
+        {
+          type: "assistant",
+          message: {
+            id: "msg_abc",
+            content: [{ type: "tool_use", name: "Read", input: {} }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          duration_ms: 50,
+          total_cost_usd: 0.012,
+          usage: { input_tokens: 5, output_tokens: 10 },
+        },
+      ];
+
+      const fetchFn = vi.fn();
+
+      const events: BrokerToHost[] = [];
+      const abort = new AbortController();
+      await runTurn(makeReq(), {
+        workspaceDir: "/workspace",
+        abort,
+        runtime: "claude-code",
+        emit: (ev) => {
+          events.push(ev);
+        },
+        buildHooks: () => ({}),
+        query: fakeQueryFactory(messages) as never,
+        __testFetch: fetchFn as unknown as typeof globalThis.fetch,
+      });
+
+      expect(fetchFn).not.toHaveBeenCalled();
+      const done = events.find(
+        (e): e is Extract<BrokerToHost, { type: "agent.done" }> => e.type === "agent.done",
+      );
+      expect(done?.costUsd).toBe(0.012);
+      expect(done?.tokensIn).toBe(5);
+      expect(done?.tokensOut).toBe(10);
+    } finally {
+      if (original === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = original;
+    }
+  });
 });
 
 describe("/claude-sdk/turn HTTP route", () => {

@@ -2,6 +2,7 @@ import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import type { BrokerToHost, AgentRuntime } from "@wbd/protocol";
 import { mapSdkMessage } from "./sdk-event-mapper.js";
 import { buildReplayPrompt, detectResumeOutcome } from "./resume-detector.js";
+import { fetchOpenRouterCosts } from "./openrouter-cost.js";
 import type { TurnRequest } from "./types.js";
 
 /**
@@ -32,6 +33,11 @@ export interface RunTurnDeps {
    * Defaults to the real Claude Agent SDK `query` export.
    */
   query?: typeof query;
+  /**
+   * Test seam: allow injecting a fake fetch for OpenRouter cost lookups.
+   * Defaults to `globalThis.fetch` in production.
+   */
+  __testFetch?: typeof globalThis.fetch;
 }
 
 /**
@@ -133,9 +139,14 @@ async function streamOnce(
   let agentSessionEmitted = false;
   let failedResume = false;
 
+  const openrouterMode = /openrouter\.ai/i.test(process.env.ANTHROPIC_BASE_URL ?? "");
+  const responseIds: string[] = [];
+
   try {
     for await (const msg of iterator) {
       const out = mapSdkMessage(msg, { turnId: req.turnId, runtime: deps.runtime });
+
+      if (out.capturedMessageId) responseIds.push(out.capturedMessageId);
 
       if (!agentSessionEmitted && out.captured?.providerSessionId) {
         agentSessionEmitted = true;
@@ -173,7 +184,14 @@ async function streamOnce(
       }
 
       if (!failedResume) {
-        for (const ev of out.events) await deps.emit(ev);
+        for (const ev of out.events) {
+          const finalEv = await maybePatchAgentDone(ev, {
+            openrouterMode,
+            responseIds,
+            fetchFn: deps.__testFetch,
+          });
+          await deps.emit(finalEv);
+        }
       }
     }
   } catch (err) {
@@ -230,5 +248,43 @@ function buildSdkOptionsBase(req: TurnRequest, deps: RunTurnDeps): Options {
     // Cancellation flows through iterator.interrupt() in onAbort below — a
     // single graceful path. Do NOT also pass abortController here; double
     // cancellation races two paths.
+  };
+}
+
+/**
+ * When running against OpenRouter (`ANTHROPIC_BASE_URL` matches openrouter.ai)
+ * and we collected one or more assistant message ids during the turn, fetch
+ * the aggregate generation cost from OpenRouter and patch the outgoing
+ * `agent.done` event before it reaches the host.
+ *
+ * All other events pass through untouched. If openrouter-mode is not active,
+ * if no ids were collected, if the API key is missing, or if every per-id
+ * lookup failed, the original `agent.done` is returned unchanged — the
+ * host-side `estimateCostUsd` path then handles cost from the SDK values.
+ */
+async function maybePatchAgentDone(
+  ev: BrokerToHost,
+  opts: {
+    openrouterMode: boolean;
+    responseIds: string[];
+    fetchFn?: typeof globalThis.fetch;
+  },
+): Promise<BrokerToHost> {
+  if (ev.type !== "agent.done") return ev;
+  if (!opts.openrouterMode) return ev;
+  if (opts.responseIds.length === 0) return ev;
+  const apiKey = process.env.OPENROUTER_API_KEY ?? "";
+  if (!apiKey) return ev;
+
+  const corrected = await fetchOpenRouterCosts(opts.responseIds, {
+    openrouterApiKey: apiKey,
+    ...(opts.fetchFn ? { fetch: opts.fetchFn } : {}),
+  });
+  if (corrected.succeeded === 0) return ev;
+  return {
+    ...ev,
+    costUsd: corrected.totalCost,
+    tokensIn: corrected.promptTokens,
+    tokensOut: corrected.completionTokens,
   };
 }
